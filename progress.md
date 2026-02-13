@@ -19,8 +19,10 @@
 - Fixed post-platform `WASD` direction drift by synchronizing input look angles with authoritative yaw while platform-carried and resetting `NetworkClient` yaw-delta baseline (`lastSentYaw`) when look is externally realigned.
 - Refined platform yaw handling: switched from per-ack absolute look snapping to additive authoritative platform yaw deltas + thresholded exit reconcile to reduce camera/input discontinuities.
 - Removed the client platform-CSP bypass: CSP now runs on-platform too, with LocalPhysicsWorld applying platform carry and grounded-platform attachment logic mirroring server behavior.
+- Added explicit client reconciliation smoothing for CSP: render-side correction offsets now preserve continuity on ack/replay corrections, decay over time, and hard-snap only above configurable position/yaw thresholds.
+- Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
 - Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
-- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:multiplayer`, `npm run test:smoke`, and `npm run test:tick` all pass.
+- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, and `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke` all pass.
 
 ## Session Close Notes (2026-02-13)
 
@@ -30,7 +32,7 @@
 
 ## Active TODO
 
-- Add explicit reconciliation/smoothing strategy for local player correction under latency.
+- Tune reconciliation smoothing/hard-snap thresholds using targeted `?csp=1` multiplayer validation and capture jitter metrics over longer movement/platform runs.
 - Add combat/state channel scaffolding for next gameplay systems.
 - Expand automated tests to include jump/sprint assertions and disconnect/reconnect scenarios.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.

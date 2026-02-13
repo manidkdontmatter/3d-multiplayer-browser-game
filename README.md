@@ -16,6 +16,7 @@ Authoritative server/browser-client scaffold using:
 - `npm run test:smoke` boots server+client, runs a Playwright smoke test, and writes artifacts to `output/smoke`.
   - Reuses existing local services on `9001`/`5173` if already running.
   - Cleans up spawned dev processes automatically on exit.
+  - Optional: override client URL with `E2E_CLIENT_URL` (example: `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke`).
 - `npm run test:multiplayer` validates two-client replication (client A movement must be visible on client B) and writes artifacts to `output/multiplayer`.
 
 ## Runtime

@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 
 const ROOT = process.cwd();
 const OUTPUT_DIR = path.join(ROOT, "output", "smoke");
-const CLIENT_URL = "http://127.0.0.1:5173";
+const CLIENT_URL = process.env.E2E_CLIENT_URL ?? "http://127.0.0.1:5173";
 const SERVER_URL = "ws://127.0.0.1:9001";
 
 function ensureDir(dir) {

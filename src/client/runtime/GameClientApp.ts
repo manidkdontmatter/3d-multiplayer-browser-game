@@ -8,6 +8,13 @@ import type { MovementInput, PlayerPose } from "./types";
 
 const FIXED_STEP = 1 / 60;
 const YAW_RECONCILE_EPSILON = 0.03;
+const RECONCILE_POSITION_SMOOTH_RATE = 14;
+const RECONCILE_ANGLE_SMOOTH_RATE = 18;
+const RECONCILE_POSITION_SNAP_THRESHOLD = 2.5;
+const RECONCILE_YAW_SNAP_THRESHOLD = Math.PI * 0.75;
+const RECONCILE_OFFSET_EPSILON = 0.0005;
+const RECONCILE_ANGLE_EPSILON = 0.0005;
+const LOOK_PITCH_LIMIT = 1.45;
 
 export class GameClientApp {
   private readonly input: InputController;
@@ -29,6 +36,15 @@ export class GameClientApp {
   private wasServerGroundedOnPlatform = false;
   private lastPlatformServerYaw: number | null = null;
   private testMovementOverride: MovementInput | null = null;
+  private reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
+  private reconciliationYawOffset = 0;
+  private reconciliationPitchOffset = 0;
+  private lastReconcilePositionError = 0;
+  private lastReconcileYawError = 0;
+  private lastReconcilePitchError = 0;
+  private lastReconcileReplayCount = 0;
+  private reconcileCorrectionCount = 0;
+  private reconcileHardSnapCount = 0;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -91,6 +107,7 @@ export class GameClientApp {
     }
     if (this.input.consumeCspToggle()) {
       this.cspEnabled = !this.cspEnabled;
+      this.resetReconciliationSmoothing();
     }
 
     this.accumulator += seconds;
@@ -114,8 +131,10 @@ export class GameClientApp {
     this.network.step(delta, movement, { yaw, pitch });
 
     const serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform();
+    let preReconciliationPose: PlayerPose | null = null;
     if (this.cspEnabled) {
       this.physics.step(delta, movement, yaw, pitch);
+      preReconciliationPose = this.physics.getPose();
     }
 
     const recon = this.network.consumeReconciliationFrame();
@@ -165,7 +184,20 @@ export class GameClientApp {
             pending.orientation.pitch
           );
         }
+
+        const postReconciliationPose = this.physics.getPose();
+        if (preReconciliationPose) {
+          this.updateReconciliationSmoothing(
+            preReconciliationPose,
+            postReconciliationPose,
+            recon.replay.length
+          );
+        }
       }
+    }
+
+    if (this.cspEnabled) {
+      this.decayReconciliationSmoothing(delta);
     }
 
     this.wasServerGroundedOnPlatform = serverGroundedOnPlatform;
@@ -178,8 +210,10 @@ export class GameClientApp {
 
     const pose = this.getRenderPose();
     const netState = this.network.getConnectionState();
+    const smoothingMagnitude = this.getReconciliationOffsetMagnitude();
+    const yawErrorDegrees = (this.lastReconcileYawError * 180) / Math.PI;
     this.statusNode.textContent =
-      `mode=${netState} | csp=${this.cspEnabled ? "on" : "off"} | cam=${this.freezeCamera ? "frozen" : "follow"} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${this.cspEnabled ? "on" : "off"} | cam=${this.freezeCamera ? "frozen" : "follow"} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -238,7 +272,25 @@ export class GameClientApp {
           z: p.z,
           yaw: p.yaw,
           pitch: p.pitch
-        }))
+        })),
+        reconciliation: {
+          lastError: {
+            position: this.lastReconcilePositionError,
+            yaw: this.lastReconcileYawError,
+            pitch: this.lastReconcilePitchError
+          },
+          smoothingOffset: {
+            x: this.reconciliationRenderOffset.x,
+            y: this.reconciliationRenderOffset.y,
+            z: this.reconciliationRenderOffset.z,
+            yaw: this.reconciliationYawOffset,
+            pitch: this.reconciliationPitchOffset,
+            positionMagnitude: this.getReconciliationOffsetMagnitude()
+          },
+          lastReplayCount: this.lastReconcileReplayCount,
+          totalCorrections: this.reconcileCorrectionCount,
+          hardSnapCorrections: this.reconcileHardSnapCount
+        }
       };
       return JSON.stringify(payload);
     };
@@ -273,7 +325,101 @@ export class GameClientApp {
         };
       }
     }
-    return this.physics.getPose();
+    const pose = this.physics.getPose();
+    return {
+      x: pose.x + this.reconciliationRenderOffset.x,
+      y: pose.y + this.reconciliationRenderOffset.y,
+      z: pose.z + this.reconciliationRenderOffset.z,
+      yaw: normalizeYaw(pose.yaw + this.reconciliationYawOffset),
+      pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, pose.pitch + this.reconciliationPitchOffset))
+    };
+  }
+
+  private updateReconciliationSmoothing(
+    preReconciliationPose: PlayerPose,
+    postReconciliationPose: PlayerPose,
+    replayCount: number
+  ): void {
+    const preRenderedPose = {
+      x: preReconciliationPose.x + this.reconciliationRenderOffset.x,
+      y: preReconciliationPose.y + this.reconciliationRenderOffset.y,
+      z: preReconciliationPose.z + this.reconciliationRenderOffset.z,
+      yaw: normalizeYaw(preReconciliationPose.yaw + this.reconciliationYawOffset),
+      pitch: preReconciliationPose.pitch + this.reconciliationPitchOffset
+    };
+
+    const positionError = Math.hypot(
+      preReconciliationPose.x - postReconciliationPose.x,
+      preReconciliationPose.y - postReconciliationPose.y,
+      preReconciliationPose.z - postReconciliationPose.z
+    );
+    const yawError = Math.abs(normalizeYaw(preReconciliationPose.yaw - postReconciliationPose.yaw));
+    const pitchError = Math.abs(preReconciliationPose.pitch - postReconciliationPose.pitch);
+    const shouldHardSnap =
+      positionError > RECONCILE_POSITION_SNAP_THRESHOLD || yawError > RECONCILE_YAW_SNAP_THRESHOLD;
+
+    this.lastReconcilePositionError = positionError;
+    this.lastReconcileYawError = yawError;
+    this.lastReconcilePitchError = pitchError;
+    this.lastReconcileReplayCount = replayCount;
+    this.reconcileCorrectionCount += 1;
+
+    if (shouldHardSnap) {
+      this.reconcileHardSnapCount += 1;
+      this.resetReconciliationSmoothing();
+      return;
+    }
+
+    this.reconciliationRenderOffset = {
+      x: preRenderedPose.x - postReconciliationPose.x,
+      y: preRenderedPose.y - postReconciliationPose.y,
+      z: preRenderedPose.z - postReconciliationPose.z
+    };
+    this.reconciliationYawOffset = normalizeYaw(preRenderedPose.yaw - postReconciliationPose.yaw);
+    this.reconciliationPitchOffset = preRenderedPose.pitch - postReconciliationPose.pitch;
+  }
+
+  private decayReconciliationSmoothing(delta: number): void {
+    const clampedDelta = Math.max(0, delta);
+    const positionDecay = Math.exp(-RECONCILE_POSITION_SMOOTH_RATE * clampedDelta);
+    const angleDecay = Math.exp(-RECONCILE_ANGLE_SMOOTH_RATE * clampedDelta);
+    this.reconciliationRenderOffset = {
+      x: this.reconciliationRenderOffset.x * positionDecay,
+      y: this.reconciliationRenderOffset.y * positionDecay,
+      z: this.reconciliationRenderOffset.z * positionDecay
+    };
+    this.reconciliationYawOffset = normalizeYaw(this.reconciliationYawOffset * angleDecay);
+    this.reconciliationPitchOffset *= angleDecay;
+
+    if (Math.abs(this.reconciliationRenderOffset.x) < RECONCILE_OFFSET_EPSILON) {
+      this.reconciliationRenderOffset.x = 0;
+    }
+    if (Math.abs(this.reconciliationRenderOffset.y) < RECONCILE_OFFSET_EPSILON) {
+      this.reconciliationRenderOffset.y = 0;
+    }
+    if (Math.abs(this.reconciliationRenderOffset.z) < RECONCILE_OFFSET_EPSILON) {
+      this.reconciliationRenderOffset.z = 0;
+    }
+    if (Math.abs(this.reconciliationYawOffset) < RECONCILE_ANGLE_EPSILON) {
+      this.reconciliationYawOffset = 0;
+    }
+    if (Math.abs(this.reconciliationPitchOffset) < RECONCILE_ANGLE_EPSILON) {
+      this.reconciliationPitchOffset = 0;
+    }
+  }
+
+  private resetReconciliationSmoothing(): void {
+    this.reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
+    this.reconciliationYawOffset = 0;
+    this.reconciliationPitchOffset = 0;
+  }
+
+  private getReconciliationOffsetMagnitude(): number {
+    return Math.hypot(
+      this.reconciliationRenderOffset.x,
+      this.reconciliationRenderOffset.y,
+      this.reconciliationRenderOffset.z
+    );
   }
 
   private readonly onResize = (): void => {
