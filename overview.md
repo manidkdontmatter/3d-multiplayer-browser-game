@@ -64,6 +64,7 @@ Key runtime modules:
 - `npm run typecheck`: run TS checks
 - `npm run test:smoke`: Playwright smoke validation
 - `npm run test:multiplayer`: two-client replication validation
+- `npm run test:multiplayer:csp`: multiplayer validation in CSP-enabled mode
 
 ## Directory Guide
 

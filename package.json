@@ -17,6 +17,7 @@
     "test:smoke": "node scripts/smoke-e2e.js",
     "test:smoke:fast": "node scripts/smoke-fast.js",
     "test:multiplayer": "node scripts/multiplayer-e2e.js",
+    "test:multiplayer:csp": "node --input-type=module -e \"process.env.E2E_CSP='1'; await import('./scripts/multiplayer-e2e.js');\"",
     "test:tick": "tsx scripts/tick-consistency.ts"
   },
   "engines": {

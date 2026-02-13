@@ -21,10 +21,12 @@
 - Removed the client platform-CSP bypass: CSP now runs on-platform too, with LocalPhysicsWorld applying platform carry and grounded-platform attachment logic mirroring server behavior.
 - Added explicit client reconciliation smoothing for CSP: render-side correction offsets now preserve continuity on ack/replay corrections, decay over time, and hard-snap only above configurable position/yaw thresholds.
 - Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
-- Added project-scoped Codex config at `.codex/config.toml` with balanced defaults (`workspace-write` + `on-request`), live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
+- Added project-scoped Codex config at `.codex/config.toml` with workspace-write sandbox defaults, live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
 - Updated project-scoped Codex config defaults for higher throughput: `approval_policy = "never"` with `sandbox_mode = "workspace-write"`, plus a `profiles.yolo` alias for explicit danger-full-access runs.
+- Expanded `test:multiplayer` assertions: sprint movement, jump height gain, and disconnect/reconnect remote reappearance are now validated and recorded in `output/multiplayer/state.json`.
+- Added `test:multiplayer:csp` command and validated the multiplayer suite under `E2E_CSP=1`.
 - Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
-- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, and `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke` all pass.
+- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, `npm run test:multiplayer:csp`, and `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke` all pass.
 
 ## Session Close Notes (2026-02-13)
 
@@ -36,5 +38,5 @@
 
 - Tune reconciliation smoothing/hard-snap thresholds using targeted `?csp=1` multiplayer validation and capture jitter metrics over longer movement/platform runs.
 - Add combat/state channel scaffolding for next gameplay systems.
-- Expand automated tests to include jump/sprint assertions and disconnect/reconnect scenarios.
+- Expand automated tests further with combat-state assertions and longer-duration stability checks.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.

@@ -14,6 +14,14 @@ const MIN_SPAWN_SEPARATION = 0.9;
 const MOVEMENT_POLL_MS = 120;
 const LOCAL_MOVEMENT_TIMEOUT_MS = 15000;
 const REMOTE_MOVEMENT_TIMEOUT_MS = 15000;
+const E2E_CSP_ENABLED = process.env.E2E_CSP === "1";
+const CLIENT_CSP_QUERY = E2E_CSP_ENABLED ? "1" : "0";
+const MIN_REQUIRED_SPRINT_MOVEMENT = 1.4;
+const SPRINT_MOVEMENT_TIMEOUT_MS = 9000;
+const MIN_JUMP_HEIGHT = 0.55;
+const JUMP_TIMEOUT_MS = 9000;
+const DISCONNECT_RECONNECT_TIMEOUT_MS = 12000;
+const PAGE_RECONNECT_COOLDOWN_MS = 2200;
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -197,6 +205,29 @@ async function waitForRemotePresence(page, targetNid, timeoutMs = 10000) {
   return null;
 }
 
+async function waitForJumpHeight(page, baselineY, minDelta, timeoutMs) {
+  const start = Date.now();
+  let latestState = null;
+  let maxDelta = 0;
+  const floor = typeof baselineY === "number" ? baselineY : 0;
+
+  while (Date.now() - start < timeoutMs) {
+    latestState = await readState(page);
+    if (latestState?.player) {
+      const delta = (latestState.player.y ?? 0) - floor;
+      if (delta > maxDelta) {
+        maxDelta = delta;
+      }
+      if (delta >= minDelta) {
+        return { state: latestState, delta };
+      }
+    }
+    await delay(MOVEMENT_POLL_MS);
+  }
+
+  return { state: latestState, delta: maxDelta };
+}
+
 async function main() {
   ensureDir(OUTPUT_DIR);
   if (!process.env.SERVER_TICK_LOG) {
@@ -205,7 +236,7 @@ async function main() {
   const managedProcesses = [];
   const serverPort = await getFreePort();
   const serverUrl = `ws://127.0.0.1:${serverPort}`;
-  const clientUrl = `${CLIENT_ORIGIN}?csp=0&server=${encodeURIComponent(serverUrl)}`;
+  const clientUrl = `${CLIENT_ORIGIN}?csp=${CLIENT_CSP_QUERY}&server=${encodeURIComponent(serverUrl)}`;
   const clientAlreadyRunning = await isPortOpen("127.0.0.1", 5173);
 
   const server = startProcess("server", "npm", ["run", "dev:server"], {
@@ -242,6 +273,11 @@ async function main() {
   let afterB = null;
   let movedDistanceA = null;
   let movedDistanceRemote = null;
+  let sprintDistance = null;
+  let jumpHeight = null;
+  let reconnectSeen = false;
+  let reconnectedBState = null;
+  let reconnectedRemoteState = null;
   let failureMessage = null;
   const logsA = [];
   const logsB = [];
@@ -349,6 +385,99 @@ async function main() {
     movedDistanceRemote = remoteMove.distance;
     afterB = remoteMove.state;
 
+    await pageA.bringToFront();
+    await pageA.mouse.click(640, 360);
+    await pageA.waitForTimeout(120);
+    const sprintBaseline = afterA?.player ?? beforeA?.player ?? { x: 0, z: 0 };
+    await pageA.evaluate(() => {
+      window.set_test_movement({ forward: 1, strafe: 0, jump: false, sprint: true });
+    });
+    const sprintResult = await waitForLocalMovement(
+      pageA,
+      sprintBaseline,
+      MIN_REQUIRED_SPRINT_MOVEMENT,
+      SPRINT_MOVEMENT_TIMEOUT_MS
+    );
+    await pageA.evaluate(() => {
+      window.set_test_movement(null);
+    });
+    sprintDistance = sprintResult.distance;
+    afterA = sprintResult.state ?? afterA;
+    if (sprintDistance === null || sprintDistance < MIN_REQUIRED_SPRINT_MOVEMENT) {
+      throw new Error(
+        `Sprint input failed to accelerate: expected >=${MIN_REQUIRED_SPRINT_MOVEMENT.toFixed(
+          2
+        )} units, got ${(sprintDistance ?? 0).toFixed(3)}`
+      );
+    }
+    await pageA.waitForTimeout(400);
+
+    await pageA.bringToFront();
+    await pageA.mouse.click(640, 360);
+    await pageA.waitForTimeout(120);
+    const jumpBaselineY = afterA?.player?.y ?? beforeA?.player?.y ?? 0;
+    await pageA.evaluate(() => {
+      window.set_test_movement({ forward: 0, strafe: 0, jump: true, sprint: false });
+    });
+    const jumpResult = await waitForJumpHeight(
+      pageA,
+      jumpBaselineY,
+      MIN_JUMP_HEIGHT,
+      JUMP_TIMEOUT_MS
+    );
+    await pageA.evaluate(() => {
+      window.set_test_movement(null);
+    });
+    jumpHeight = jumpResult.delta;
+    afterA = jumpResult.state ?? afterA;
+    if (jumpHeight === null || jumpHeight < MIN_JUMP_HEIGHT) {
+      throw new Error(
+        `Jump input failed to gain height: expected >=${MIN_JUMP_HEIGHT.toFixed(
+          2
+        )} units, got ${(jumpHeight ?? 0).toFixed(3)}`
+      );
+    }
+    await pageA.waitForTimeout(600);
+
+    if (pageB && !pageB.isClosed()) {
+      await pageB.close();
+      pageB = null;
+    }
+    await delay(PAGE_RECONNECT_COOLDOWN_MS);
+
+    pageB = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    pageB.on("console", (msg) => {
+      logsB.push({ type: msg.type(), text: msg.text() });
+    });
+    await pageB.goto(clientUrl, { waitUntil: "networkidle", timeout: 30000 });
+    await pageB.bringToFront();
+    await pageB.mouse.click(640, 360);
+    await pageB.waitForTimeout(1400);
+
+    reconnectedBState = await waitForConnectedState(pageB);
+    if (!reconnectedBState.player) {
+      throw new Error("Reconnected client B missing local player state.");
+    }
+    const rehookStatusB = await pageB.evaluate(() => ({
+      testMovement: typeof window.set_test_movement
+    }));
+    if (rehookStatusB.testMovement !== "function") {
+      throw new Error("Reconnected client B missing test movement hook.");
+    }
+
+    const reconnectedRemote = await waitForRemotePresence(
+      pageA,
+      reconnectedBState.player.nid,
+      DISCONNECT_RECONNECT_TIMEOUT_MS
+    );
+    if (!reconnectedRemote) {
+      throw new Error("Client A never saw client B after reconnect.");
+    }
+    reconnectSeen = true;
+    reconnectedRemoteState = reconnectedRemote.state;
+    afterA = reconnectedRemote.state ?? afterA;
+    afterB = reconnectedBState;
+
     if (!afterA) {
       afterA = await readState(pageA);
     }
@@ -373,7 +502,9 @@ async function main() {
     }
 
     console.log(
-      `[multi] PASS server=${serverUrl} movedA=${movedDistanceA.toFixed(2)} movedRemote=${movedDistanceRemote.toFixed(2)}`
+      `[multi] PASS server=${serverUrl} movedA=${movedDistanceA.toFixed(2)} movedRemote=${movedDistanceRemote.toFixed(
+        2
+      )} sprint=${(sprintDistance ?? 0).toFixed(2)} jump=${(jumpHeight ?? 0).toFixed(2)} reconnect=${reconnectSeen}`
     );
   } catch (error) {
     exitCode = 1;
@@ -407,6 +538,11 @@ async function main() {
       afterB,
       movedDistanceA,
       movedDistanceRemote,
+      sprintDistance,
+      jumpHeight,
+      reconnectSeen,
+      reconnectedBState,
+      reconnectedRemoteState,
       error: failureMessage
     };
     fs.writeFileSync(path.join(OUTPUT_DIR, "state.json"), JSON.stringify(summary, null, 2), "utf8");
