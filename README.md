@@ -44,3 +44,4 @@ Authoritative server/browser-client scaffold using:
 - `progress.md`: active status, TODOs, and handoff notes.
 - `AGENTS.md`: persistent agent operating instructions/memory.
 - `docs-map.md`: role/read-order map for project Markdown files.
+- `.codex/config.toml`: project Codex defaults/profiles (`default`: no approval prompts with workspace-write sandbox, `--profile yolo`: danger-full-access).

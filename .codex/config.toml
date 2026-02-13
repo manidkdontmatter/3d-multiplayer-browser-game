@@ -9,7 +9,7 @@ personality = "pragmatic"
 web_search = "live"
 
 # Balanced default: high initiative with a writable sandbox.
-approval_policy = "on-request"
+approval_policy = "never"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
@@ -24,6 +24,12 @@ tool_timeout_sec = 60
 
 # Opt-in profile for maximum autonomy in a trusted local environment.
 [profiles.full_auto]
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+web_search = "live"
+
+# Alias matching common CLI wording for maximum autonomy.
+[profiles.yolo]
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 web_search = "live"
