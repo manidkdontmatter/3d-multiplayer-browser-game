@@ -1,0 +1,56 @@
+{
+  "name": "vibe-coded-3d-browser-game",
+  "version": "0.1.0",
+  "description": "Authoritative first-person browser game scaffold (Three.js + Rapier + nengi 2.0)",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n CLIENT,SERVER -c cyan,green \"npm:dev:client\" \"npm:dev:server\"",
+    "dev:client": "vite",
+    "dev:server": "tsx watch src/server/main.ts",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "tsup src/server/main.ts --format esm --target node20 --sourcemap --out-dir dist/server",
+    "preview": "vite preview",
+    "typecheck": "npm run typecheck:client && npm run typecheck:server",
+    "typecheck:client": "tsc -p tsconfig.client.json --noEmit",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
+    "test:smoke": "node scripts/smoke-e2e.js",
+    "test:smoke:fast": "node scripts/smoke-fast.js",
+    "test:multiplayer": "node scripts/multiplayer-e2e.js",
+    "test:tick": "tsx scripts/tick-consistency.ts"
+  },
+  "engines": {
+    "node": ">=20.19.0",
+    "npm": ">=10.0.0"
+  },
+  "keywords": [
+    "threejs",
+    "rapier",
+    "nengi",
+    "authoritative-server",
+    "fps"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.19.3",
+    "nengi": "2.0.0-alpha.173",
+    "nengi-buffers": "0.5.0",
+    "nengi-dataviews": "0.4.0",
+    "nengi-uws-instance-adapter": "0.6.0",
+    "nengi-websocket-client-adapter": "0.7.0",
+    "three": "0.182.0",
+    "ws": "8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.2.3",
+    "@types/three": "0.182.0",
+    "@types/ws": "8.18.1",
+    "concurrently": "9.2.1",
+    "playwright": "1.58.2",
+    "tsup": "8.5.1",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.1"
+  }
+}

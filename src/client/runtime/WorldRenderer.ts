@@ -1,0 +1,191 @@
+import {
+  AmbientLight,
+  BoxGeometry,
+  CapsuleGeometry,
+  Color,
+  DirectionalLight,
+  Fog,
+  Group,
+  Mesh,
+  MeshStandardMaterial,
+  PerspectiveCamera,
+  Scene,
+  Vector3,
+  WebGLRenderer
+} from "three";
+import { PLAYER_EYE_HEIGHT, STATIC_WORLD_BLOCKS } from "../../shared/index";
+import type { PlayerPose, RemotePlayerState } from "./types";
+
+export class WorldRenderer {
+  private readonly renderer: WebGLRenderer;
+  private readonly scene: Scene;
+  private readonly camera: PerspectiveCamera;
+  private readonly remotePlayers = new Map<number, Group>();
+  private readonly platforms = new Map<number, Mesh>();
+  private readonly cameraForward = new Vector3(0, 0, -1);
+
+  public constructor(canvas: HTMLCanvasElement) {
+    this.renderer = new WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: "high-performance"
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+
+    this.scene = new Scene();
+    this.scene.background = new Color(0xb8e4ff);
+    this.scene.fog = new Fog(0xb8e4ff, 45, 220);
+
+    this.camera = new PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.01, 600);
+
+    this.initializeScene();
+  }
+
+  public resize(width: number, height: number): void {
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(width, height);
+  }
+
+  public syncRemotePlayers(players: RemotePlayerState[]): void {
+    const activeNids = new Set<number>();
+    for (const remotePlayer of players) {
+      activeNids.add(remotePlayer.nid);
+      let root = this.remotePlayers.get(remotePlayer.nid);
+      if (!root) {
+        root = this.createRemotePlayerMesh();
+        this.remotePlayers.set(remotePlayer.nid, root);
+        this.scene.add(root);
+      }
+
+      root.position.set(remotePlayer.x, remotePlayer.y - PLAYER_EYE_HEIGHT, remotePlayer.z);
+      root.rotation.y = remotePlayer.yaw;
+    }
+
+    for (const [nid, mesh] of this.remotePlayers) {
+      if (!activeNids.has(nid)) {
+        this.scene.remove(mesh);
+        this.remotePlayers.delete(nid);
+      }
+    }
+  }
+
+  public syncPlatforms(platformStates: Array<{
+    nid: number;
+    kind: number;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    halfX: number;
+    halfY: number;
+    halfZ: number;
+  }>): void {
+    const activeNids = new Set<number>();
+    for (const platform of platformStates) {
+      activeNids.add(platform.nid);
+      let mesh = this.platforms.get(platform.nid);
+      if (!mesh) {
+        mesh = new Mesh(
+          new BoxGeometry(platform.halfX * 2, platform.halfY * 2, platform.halfZ * 2),
+          new MeshStandardMaterial({
+            color: platform.kind === 2 ? 0x9ea7d8 : 0xd8b691,
+            roughness: 0.88,
+            metalness: 0.06
+          })
+        );
+        this.platforms.set(platform.nid, mesh);
+        this.scene.add(mesh);
+      }
+
+      mesh.position.set(platform.x, platform.y, platform.z);
+      mesh.rotation.y = platform.yaw;
+    }
+
+    for (const [nid, mesh] of this.platforms) {
+      if (!activeNids.has(nid)) {
+        this.scene.remove(mesh);
+        this.platforms.delete(nid);
+      }
+    }
+  }
+
+  public render(localPose: PlayerPose): void {
+    this.camera.position.set(localPose.x, localPose.y, localPose.z);
+    this.camera.rotation.order = "YXZ";
+    this.camera.rotation.y = localPose.yaw;
+    this.camera.rotation.x = localPose.pitch;
+
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  public getForwardDirection(): Vector3 {
+    return this.cameraForward.set(0, 0, -1).applyEuler(this.camera.rotation).normalize();
+  }
+
+  private initializeScene(): void {
+    const ambient = new AmbientLight(0xffffff, 0.52);
+    this.scene.add(ambient);
+
+    const sun = new DirectionalLight(0xfff6d0, 1.15);
+    sun.position.set(80, 120, 40);
+    this.scene.add(sun);
+
+    const groundMaterial = new MeshStandardMaterial({
+      color: 0x6ea768,
+      roughness: 0.95,
+      metalness: 0.02
+    });
+    const ground = new Mesh(new BoxGeometry(256, 1, 256), groundMaterial);
+    ground.position.y = -0.5;
+    ground.receiveShadow = false;
+    this.scene.add(ground);
+
+    const propMaterial = new MeshStandardMaterial({
+      color: 0x8ea8ba,
+      roughness: 0.82,
+      metalness: 0.05
+    });
+    for (const worldBlock of STATIC_WORLD_BLOCKS) {
+      const block = new Mesh(
+        new BoxGeometry(worldBlock.halfX * 2, worldBlock.halfY * 2, worldBlock.halfZ * 2),
+        propMaterial
+      );
+      block.position.set(worldBlock.x, worldBlock.y, worldBlock.z);
+      this.scene.add(block);
+    }
+  }
+
+  private createRemotePlayerMesh(): Group {
+    const root = new Group();
+
+    const capsuleRadius = 0.38;
+    const capsuleLength = 1.0;
+    const capsuleHeight = capsuleLength + capsuleRadius * 2;
+    const body = new Mesh(
+      new CapsuleGeometry(capsuleRadius, capsuleLength, 3, 6),
+      new MeshStandardMaterial({
+        color: 0xf4d8b5,
+        roughness: 0.94,
+        metalness: 0.01
+      })
+    );
+    body.position.y = capsuleHeight * 0.5;
+    root.add(body);
+
+    const visorSize = capsuleHeight * 0.2;
+    const visor = new Mesh(
+      new BoxGeometry(visorSize, visorSize, visorSize),
+      new MeshStandardMaterial({
+        color: 0x1b1e2e,
+        roughness: 0.35,
+        metalness: 0.15
+      })
+    );
+    visor.position.set(0, capsuleHeight * 0.75, -(capsuleRadius + visorSize * 0.5));
+    root.add(visor);
+
+    return root;
+  }
+}
