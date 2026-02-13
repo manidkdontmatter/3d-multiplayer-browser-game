@@ -5,10 +5,11 @@ This file defines the role of each top-level Markdown file so context stays clea
 ## Read Order (Session Start)
 
 1. `AGENTS.md` (operating instructions + durable memory rules)
-2. `progress.md` (active status/TODO/handoff)
-3. `overview.md` (canonical system/architecture summary)
-4. `vision.md` (product/game direction)
-5. `docs/` (local technical reference docs; recurse per AGENTS rules)
+2. `docs-map.md` (this file; role/read-order and conflict policy)
+3. `progress.md` (active status/TODO/handoff)
+4. `overview.md` (canonical system/architecture summary)
+5. `vision.md` (product/game direction)
+6. `docs/` (local technical reference docs; recurse per AGENTS rules)
 
 ## File Responsibilities
 
@@ -43,3 +44,14 @@ This file defines the role of each top-level Markdown file so context stays clea
 - If goals/game direction materially change, update `vision.md`.
 - If operating behavior or memory policy changes, update `AGENTS.md`.
 - If a file starts accumulating content that belongs elsewhere, move it and leave a pointer.
+
+## Conflict Resolution
+
+If two docs disagree, resolve in this order:
+1. Safety and production-grade engineering constraints.
+2. `AGENTS.md` for agent operating behavior/memory policy.
+3. `overview.md` for architecture and system behavior.
+4. `vision.md` for product direction.
+5. `progress.md` for latest status/TODO context.
+
+After deciding, update the conflicting files so the contradiction is removed instead of carried forward.

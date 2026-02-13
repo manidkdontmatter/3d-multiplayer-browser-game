@@ -11,10 +11,10 @@
 
 - At the beginning of each new session:
   - read `AGENTS.md` first
+  - read `docs-map.md` (if it exists)
   - if `progress.md` exists, read it before plans/code changes
   - read `overview.md` (if it exists)
   - read `vision.md` (if it exists)
-  - read `docs-map.md` (if it exists)
   - read every file in `docs/` recursively for local nengi/threejs/rapier reference context
 
 ## Workflow and Tooling
@@ -39,16 +39,18 @@
   - strict client/server separation
   - anti-cheat-friendly trust boundaries
 - Client-side prediction movement/collision must mirror the server authoritative solver and step order as closely as possible; avoid divergent physics models.
-- The game should preserve deterministic module loading with a single entry-point hierarchy and ESM modules.
+- The game should preserve deterministic module loading with ESM modules and a clear top-down entry hierarchy per runtime (`src/client/main.ts` and `src/server/main.ts`).
 
 ## Decision and Quality Heuristics
 
 - Keep the overarching objective in mind: a full-fledged, high-quality, production-grade 3D first-person multiplayer browser game following best practices.
 - Infer likely user intent beyond literal phrasing when ambiguity exists; surface assumptions/risks early.
+- Thinking note: do not execute requests in an overly literal way when broader project goals imply a better path; infer intent and choose the most technically sound option.
 - Sanity-check architecture periodically to avoid drift or avoidable technical debt.
 - Prefer existing high-quality solutions (often packages) over rolling custom systems, but validate quality/currentness before adoption.
 - Check for latest package/tool versions before installing/upgrading.
 - Challenge weak assumptions and propose better technical approaches directly.
+- Contradiction note: proactively detect and resolve contradictions across instruction/memory docs; when conflicts appear, choose the interpretation that best serves production quality and consistency, then update files to remove ambiguity.
 
 ## Memory and Documentation Rules
 
