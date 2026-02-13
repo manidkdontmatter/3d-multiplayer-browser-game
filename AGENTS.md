@@ -2,6 +2,7 @@ we are developing this project on windows, not linux, as of writing this.
 
 this project is a 3d browser game made in typescript using nodejs and npm, using nengi 2.0 for netcode. always read every file in the docs folder (recursively) at the beginning of each new session to understand how to use nengi 2.0, threejs, and rapier. do not confuse nengi 1.0 with nengi 2.0, the manner of using them is vastly different. we use threejs for 3d rendering. rapier for physics. make the game have top tier netcode that is highly performant.
 workflow note: at the beginning of each new session, if `progress.md` exists, read it before making plans or code changes.
+git workflow note: after meaningful, verified changes (for example passing relevant tests or completing a logical task), commit and push to GitHub without waiting for an extra prompt.
 network note: internet speed is around 3 mbps, so dependency/tool downloads can be slow. use longer command timeouts, retry failed downloads, and avoid unnecessary reinstall/download work.
 testing note: use playwright for browser automation/testing when relevant (including develop-web-game workflow if that skill is available).
 runtime note: use node 20.x for this project (currently pinned to 20.19.0 via nvm). run `nvm use 20.19.0` before development/testing so `nengi-uws-instance-adapter` can use `uWebSockets.js` correctly.
