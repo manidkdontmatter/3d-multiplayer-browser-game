@@ -35,3 +35,11 @@ Authoritative server/browser-client scaffold using:
   - Preferred: `uWebSockets` (`nengi-uws-instance-adapter`) for high-performance hosting.
   - Automatic fallback: `ws` adapter on unsupported Node versions.
   - Force fallback manually: set `NENGI_TRANSPORT=ws`.
+
+## Project Docs
+
+- `overview.md`: canonical summary of what the project is and how it works.
+- `vision.md`: product/gameplay/aesthetic direction and long-range goals.
+- `progress.md`: active status, TODOs, and handoff notes.
+- `AGENTS.md`: persistent agent operating instructions/memory.
+- `docs-map.md`: role/read-order map for project Markdown files.

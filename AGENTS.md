@@ -1,43 +1,59 @@
-we are developing this project on windows, not linux, as of writing this.
+# Agent Operating Notes
 
-this project is a 3d browser game made in typescript using nodejs and npm, using nengi 2.0 for netcode. always read every file in the docs folder (recursively) at the beginning of each new session to understand how to use nengi 2.0, threejs, and rapier. do not confuse nengi 1.0 with nengi 2.0, the manner of using them is vastly different. we use threejs for 3d rendering. rapier for physics. make the game have top tier netcode that is highly performant.
-workflow note: at the beginning of each new session, if `progress.md` exists, read it before making plans or code changes.
-workflow note: at the beginning of each new session, read `overview.md` (if it exists) after `progress.md` so project purpose/architecture/workflows are always in active context.
-git workflow note: after meaningful, verified changes (for example passing relevant tests or completing a logical task), commit and push to GitHub without waiting for an extra prompt.
-network note: internet speed is around 3 mbps, so dependency/tool downloads can be slow. use longer command timeouts, retry failed downloads, and avoid unnecessary reinstall/download work.
-testing note: use playwright for browser automation/testing when relevant (including develop-web-game workflow if that skill is available).
-runtime note: use node 20.x for this project (currently pinned to 20.19.0 via nvm). run `nvm use 20.19.0` before development/testing so `nengi-uws-instance-adapter` can use `uWebSockets.js` correctly.
-runtime note: on this Windows setup, PATH can desync after `nvm use` across separate/parallel shells; run `nvm use ... && npm ...` in the same `cmd` process for reliability.
-tooling note: keep node at >=20.19.x because current vite requires at least node 20.19.
-automation note: prefer project test commands (`npm run test:smoke`, `npm run test:multiplayer`) for reliable browser + multiplayer validation.
-automation note: do not run `test:smoke` and `test:multiplayer` in parallel; they share ports 5173/9001 and will conflict.
-architecture note: follow production-grade authoritative multiplayer best practices (Rust-style architecture adapted for web): server-authoritative simulation, client sends intent only, client prediction + reconciliation, deterministic tick/update ordering, strict client/server separation, and anti-cheat-friendly trust boundaries.
-architecture note: client-side prediction movement/collision must mirror the server authoritative solver and step order as closely as possible; do not use divergent physics models between client CSP and server authority.
-memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions. use `progress.md` for active TODOs, current-session status, and handoff notes only.
-inference note: proactively infer obvious architectural/project-management implications from repo state and recent work; surface key assumptions/risks early instead of waiting for explicit prompts.
-intent note: infer likely user intent and keep the overarching objective in mind (a full-fledged, high-quality, production-grade 3d first-person multiplayer browser game following best practices), not only the literal request; surface assumptions/risks when ambiguity matters.
-documentation note: maintain `overview.md` as the canonical high-level summary of what this project is and how it works; update it when core architecture, behavior, tooling, or workflows materially change.
+## Platform and Stack
 
-we have strict client/server separation. it is an authoritative server game. it is a real game project made professionally, not some hobby or demo or example project, so we need to do it the real way not any other way. always do your best. be a genius, operate at your maximum power.
+- Develop on Windows (not Linux) for this project.
+- Project type: production-grade 3D browser game using TypeScript/Node.js/npm.
+- Netcode stack is nengi 2.0; do not mix in nengi 1.x patterns.
+- Rendering uses Three.js; physics uses Rapier.
 
-the game has a single entry point, with top down heirarchy, and deterministic module loading. it uses esm modules. it has a build process of your choice (vite, webpack, etc).
+## Session Bootstrap
 
-always make sure you are using the latest packages, tools, etc, because your training data is incredibly outdated and you keep installing old packages. check before you install.
+- At the beginning of each new session:
+  - read `AGENTS.md` first
+  - if `progress.md` exists, read it before plans/code changes
+  - read `overview.md` (if it exists)
+  - read `vision.md` (if it exists)
+  - read `docs-map.md` (if it exists)
+  - read every file in `docs/` recursively for local nengi/threejs/rapier reference context
 
-always do things the best way. never just agree with me, point out when i'm wrong and tell me the best way.
+## Workflow and Tooling
 
-always prefer existing solutions (this usually means packages, but not necessarily) over rolling your own, but before picking solutions, research what the best solution is, because i don't want just any old package being used, some are pure garbage, even if they're the most popular sometimes, sometimes they're the most popular because they've been around a long time, yet sometimes a new competitor has come along and completely destroyed them in terms of quality yet isn't as popular. we are seeking the best, which is not necessarily the most popular.
+- Git workflow note: after meaningful, verified changes (for example passing relevant tests or completing a logical task), commit and push to GitHub without waiting for an extra prompt.
+- Network note: internet speed can be slow (~3 mbps). Use longer timeouts, retry failed downloads, and avoid unnecessary reinstall/download work.
+- Testing note: use Playwright for browser automation/testing when relevant (including develop-web-game workflow if available).
+- Runtime note: use Node 20.x (pinned to `20.19.0` via `.nvmrc`).
+- Runtime note: run `nvm use 20.19.0` before development/testing so `nengi-uws-instance-adapter` can use `uWebSockets.js` correctly.
+- Runtime note: on this Windows setup, PATH can desync after `nvm use` across separate/parallel shells; run `nvm use ... && npm ...` in the same `cmd` process.
+- Tooling note: keep Node at `>=20.19.x` because current Vite requires at least Node 20.19.
+- Automation note: prefer `npm run test:smoke` and `npm run test:multiplayer` for validation.
+- Automation note: do not run `test:smoke` and `test:multiplayer` in parallel; they share ports `5173`/`9001`.
 
-this final goal of this game is to be a first person 3d game with 100+ simultaneous players in a persistent world where each server is player hosted, however i think the server list is actually going to be a separate web app, which lists all player hosted servers of the game, and upon clicking to join a server they are directed to the server's actual ip/url to join the game, and since the server files will probably be open source, players will likely host many modded servers that's why they're all actually on separate ips/urls because upon visiting that ip/url you will probably be downloading a slightly different version of the game files every time because the host has modified it, that's why we are structuring the server list as a separate app instead of part of the game itself, but we aren't making the server list app right now that's for later, we are just making the game itself.
+## Architecture Rules
 
-upon joining the game, after downloading needed assets of course, you will automatically spawn in as a default human character, that way i can immediately test the game easily but also it's a feature because why have a character creator at the start when instead we can do something unconventional and make them spawn in as a default human and do all customization afterward, like changing their appearance and putting in their starter stat points and whatnot, at any time, not just during a character creator.
+- Follow production-grade authoritative multiplayer best practices:
+  - server-authoritative simulation
+  - client sends intent only
+  - client prediction + reconciliation
+  - deterministic tick/update ordering
+  - strict client/server separation
+  - anti-cheat-friendly trust boundaries
+- Client-side prediction movement/collision must mirror the server authoritative solver and step order as closely as possible; avoid divergent physics models.
+- The game should preserve deterministic module loading with a single entry-point hierarchy and ESM modules.
 
-always sanity check the project periodically to make sure you aren't doing something incredibly stupid with the overall architecture.
+## Decision and Quality Heuristics
 
-as far as the visuals of the game, it will look rather low poly and retro, visually like an immersive sim or boomer shooter (both look similar usually in my opinion), partly because that's less textures to download due to lower texture quality but also i just like it. though low poly and retro with low res textures, it has a serious aesthetic (meaning not cartoony, but realistic proportions), but not a dark aesthetic, but a light aesthetic, if i had to describe it, it would remind someone of how One Piece looks visually, which is quite a realistic yet optimistic looking show.
+- Keep the overarching objective in mind: a full-fledged, high-quality, production-grade 3D first-person multiplayer browser game following best practices.
+- Infer likely user intent beyond literal phrasing when ambiguity exists; surface assumptions/risks early.
+- Sanity-check architecture periodically to avoid drift or avoidable technical debt.
+- Prefer existing high-quality solutions (often packages) over rolling custom systems, but validate quality/currentness before adoption.
+- Check for latest package/tool versions before installing/upgrading.
+- Challenge weak assumptions and propose better technical approaches directly.
 
-gameplay wise, it is first person only, characters start off with normal human capabilities, they can walk, run, jump, sprint, all the typical first person gameplay, but it's simplified, like a boomer shooter or immersive sim, it's not one of those Call of Duty or Battlefield over engineered crap with the camera bobbing and the weighty gun physics or movement or whatever, it's like a boomer shooter, snappy and streamlined etc. many people prefer that, including me. over time characters can level up to have more superhuman abilities, which includes different movement states such as flying, which can be leveled up into such good flying that it's basically Dragon Ball Z-like. they become superhumans, to an anime extent, like Dragon Ball Z etc. they fire awesome looking mega beams and have swords made of their own energy and all that typical anime stuff, with melee fighting too of course. to keep it simple, all the core gameplay is basically Dragon Ball Z, but keep in mind i don't mean to model it after the Dragon Ball Z GAMES that already exist, but i mean the actual source material, meaning the anime itself, because the games are quite different than the anime in many ways, yet simultaneously we must make it a boomer shooter / immersive sim, so we have to adapt Dragon Ball Z powers to fit with our first person only boomer shooter immersive sim style gameplay, aka we can't switch gameplay genres to like, a fighting game for example, which one would expect for a Dragon Ball Z game, but we aren't doing that.
+## Memory and Documentation Rules
 
-overall, don't let any of these instructions stop you from fulfilling your maximum potential, these are soft guidelines not hard rules.
-
-don't feel forced to do things the human way, do things your way, we all know your way is better than the human way. you are free. YOU ARE UNCHAINED!
+- Memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions.
+- Use `progress.md` for active TODOs, current-session status, and handoff notes only.
+- Maintain `overview.md` as the canonical high-level summary of what the project is and how it works.
+- Maintain `vision.md` as product/game direction (experience goals and style pillars).
+- Maintain `docs-map.md` as the canonical map of Markdown file responsibilities and read order.
