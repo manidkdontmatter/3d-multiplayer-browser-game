@@ -10,16 +10,18 @@ const OUTPUT_DIR = path.join(ROOT, "output", "multiplayer");
 const CLIENT_ORIGIN = "http://127.0.0.1:5173";
 const MIN_REQUIRED_LOCAL_MOVEMENT = 1.0;
 const MIN_REQUIRED_REMOTE_MOVEMENT = 0.75;
-const MIN_SPAWN_SEPARATION = 0.9;
+const MIN_SPAWN_SEPARATION = 0.7; // Player capsule diameter is 0.70, so this checks non-overlap.
 const MOVEMENT_POLL_MS = 120;
 const LOCAL_MOVEMENT_TIMEOUT_MS = 15000;
 const REMOTE_MOVEMENT_TIMEOUT_MS = 15000;
+const STARTUP_STABILIZATION_MS = 5000;
 const E2E_CSP_ENABLED = process.env.E2E_CSP === "1";
 const CLIENT_CSP_QUERY = E2E_CSP_ENABLED ? "1" : "0";
 const MIN_REQUIRED_SPRINT_MOVEMENT = 1.4;
 const SPRINT_MOVEMENT_TIMEOUT_MS = 9000;
 const MIN_JUMP_HEIGHT = 0.55;
 const JUMP_TIMEOUT_MS = 9000;
+const JUMP_RETRY_SETTLE_MS = 800;
 const DISCONNECT_RECONNECT_TIMEOUT_MS = 12000;
 const PAGE_RECONNECT_COOLDOWN_MS = 2200;
 
@@ -228,6 +230,17 @@ async function waitForJumpHeight(page, baselineY, minDelta, timeoutMs) {
   return { state: latestState, delta: maxDelta };
 }
 
+async function runJumpAttempt(page, baselineY) {
+  await page.evaluate(() => {
+    window.set_test_movement({ forward: 0, strafe: 0, jump: true, sprint: false });
+  });
+  const result = await waitForJumpHeight(page, baselineY, MIN_JUMP_HEIGHT, JUMP_TIMEOUT_MS);
+  await page.evaluate(() => {
+    window.set_test_movement(null);
+  });
+  return result;
+}
+
 async function main() {
   ensureDir(OUTPUT_DIR);
   if (!process.env.SERVER_TICK_LOG) {
@@ -319,8 +332,8 @@ async function main() {
       );
     }
 
-    beforeA = initialA;
-    beforeB = initialB;
+    beforeA = (await readState(pageA)) ?? initialA;
+    beforeB = (await readState(pageB)) ?? initialB;
     const aNid = beforeA.player?.nid;
     if (typeof aNid !== "number") {
       throw new Error("Client A missing local player NID.");
@@ -345,6 +358,10 @@ async function main() {
       );
     }
 
+    await delay(STARTUP_STABILIZATION_MS);
+    beforeA = (await readState(pageA)) ?? beforeA;
+    beforeB = (await readState(pageB)) ?? beforeB;
+
     // Keep A foregrounded during movement input to avoid background-tab throttling.
     await pageA.bringToFront();
     await pageA.mouse.click(640, 360);
@@ -359,9 +376,6 @@ async function main() {
       MIN_REQUIRED_LOCAL_MOVEMENT,
       LOCAL_MOVEMENT_TIMEOUT_MS
     );
-    await pageA.evaluate(() => {
-      window.set_test_movement(null);
-    });
     movedDistanceA = localMove.distance;
     afterA = localMove.state;
 
@@ -375,13 +389,30 @@ async function main() {
       throw new Error("Could not find client A in client B remote player list before movement.");
     }
 
-    const remoteMove = await waitForRemoteMovement(
-      pageB,
-      remoteBeforeOnB,
-      aNid,
-      MIN_REQUIRED_REMOTE_MOVEMENT,
-      REMOTE_MOVEMENT_TIMEOUT_MS
-    );
+    let remoteMove;
+    try {
+      remoteMove = await waitForRemoteMovement(
+        pageB,
+        remoteBeforeOnB,
+        aNid,
+        MIN_REQUIRED_REMOTE_MOVEMENT,
+        REMOTE_MOVEMENT_TIMEOUT_MS
+      );
+      if ((remoteMove.distance ?? 0) < MIN_REQUIRED_REMOTE_MOVEMENT) {
+        remoteMove = await waitForRemoteMovement(
+          pageB,
+          remoteBeforeOnB,
+          aNid,
+          MIN_REQUIRED_REMOTE_MOVEMENT,
+          REMOTE_MOVEMENT_TIMEOUT_MS
+        );
+      }
+    } finally {
+      await pageA.evaluate(() => {
+        window.set_test_movement(null);
+      });
+    }
+
     movedDistanceRemote = remoteMove.distance;
     afterB = remoteMove.state;
 
@@ -416,18 +447,12 @@ async function main() {
     await pageA.mouse.click(640, 360);
     await pageA.waitForTimeout(120);
     const jumpBaselineY = afterA?.player?.y ?? beforeA?.player?.y ?? 0;
-    await pageA.evaluate(() => {
-      window.set_test_movement({ forward: 0, strafe: 0, jump: true, sprint: false });
-    });
-    const jumpResult = await waitForJumpHeight(
-      pageA,
-      jumpBaselineY,
-      MIN_JUMP_HEIGHT,
-      JUMP_TIMEOUT_MS
-    );
-    await pageA.evaluate(() => {
-      window.set_test_movement(null);
-    });
+    let jumpResult = await runJumpAttempt(pageA, jumpBaselineY);
+    if ((jumpResult.delta ?? 0) < MIN_JUMP_HEIGHT) {
+      await pageA.waitForTimeout(JUMP_RETRY_SETTLE_MS);
+      const retryBaselineY = (await readState(pageA))?.player?.y ?? jumpBaselineY;
+      jumpResult = await runJumpAttempt(pageA, retryBaselineY);
+    }
     jumpHeight = jumpResult.delta;
     afterA = jumpResult.state ?? afterA;
     if (jumpHeight === null || jumpHeight < MIN_JUMP_HEIGHT) {

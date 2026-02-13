@@ -13,20 +13,22 @@
 - Server per-second tick summary logging can now be disabled with `SERVER_TICK_LOG=0` (test scripts set this by default).
 - Multiplayer test now always writes debug artifacts (`state.json`, `client-a.png`, `client-b.png`, `console-a.json`, `console-b.json`) even on failure.
 - Join spawn is now occupancy-based, so newly connecting players do not spawn inside existing player capsules.
-- Multiplayer test now enforces spawn separation directly (old "move player B away from overlap" workaround removed).
+- Multiplayer test now enforces spawn non-overlap directly using the player capsule diameter threshold (old "move player B away from overlap" workaround removed).
 - Client CSP prediction now uses Rapier KCC (kinematic collider + `computeColliderMovement`) to mirror server collision path and reduce reconciliation jitter against static geometry.
 - Server moving-platform carry regression fixed after KCC refactor: platform attachment no longer drops during upward motion, and rotating-platform yaw carry remains stable.
 - Fixed post-platform `WASD` direction drift by synchronizing input look angles with authoritative yaw while platform-carried and resetting `NetworkClient` yaw-delta baseline (`lastSentYaw`) when look is externally realigned.
 - Refined platform yaw handling: switched from per-ack absolute look snapping to additive authoritative platform yaw deltas + thresholded exit reconcile to reduce camera/input discontinuities.
 - Removed the client platform-CSP bypass: CSP now runs on-platform too, with LocalPhysicsWorld applying platform carry and grounded-platform attachment logic mirroring server behavior.
-- Added explicit client reconciliation smoothing for CSP: render-side correction offsets now preserve continuity on ack/replay corrections, decay over time, and hard-snap only above configurable position/yaw thresholds.
+- CSP reconciliation now preserves camera/input alignment by shifting queued replay input yaw when external yaw corrections are applied (platform carry + dismount reconcile).
+- CSP reconciliation smoothing is now position-only (no render yaw/pitch offsets), while still tracking yaw/pitch error metrics and hard-snap thresholds.
 - Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
 - Added project-scoped Codex config at `.codex/config.toml` with workspace-write sandbox defaults, live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
 - Updated project-scoped Codex config defaults for higher throughput: `approval_policy = "never"` with `sandbox_mode = "workspace-write"`, plus a `profiles.yolo` alias for explicit danger-full-access runs.
 - Expanded `test:multiplayer` assertions: sprint movement, jump height gain, and disconnect/reconnect remote reappearance are now validated and recorded in `output/multiplayer/state.json`.
 - Added `test:multiplayer:csp` command and validated the multiplayer suite under `E2E_CSP=1`.
+- Multiplayer automation now includes a post-connect warmup window and bounded retry windows for remote movement/jump checks to reduce startup/throttling false negatives.
 - Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
-- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, `npm run test:multiplayer:csp`, and `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke` all pass.
+- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:multiplayer`, and `npm run test:multiplayer:csp` all pass after CSP yaw/replay and multiplayer test-stability updates.
 
 ## Session Close Notes (2026-02-13)
 

@@ -9,11 +9,9 @@ import type { MovementInput, PlayerPose } from "./types";
 const FIXED_STEP = 1 / 60;
 const YAW_RECONCILE_EPSILON = 0.03;
 const RECONCILE_POSITION_SMOOTH_RATE = 14;
-const RECONCILE_ANGLE_SMOOTH_RATE = 18;
 const RECONCILE_POSITION_SNAP_THRESHOLD = 2.5;
 const RECONCILE_YAW_SNAP_THRESHOLD = Math.PI * 0.75;
 const RECONCILE_OFFSET_EPSILON = 0.0005;
-const RECONCILE_ANGLE_EPSILON = 0.0005;
 const LOOK_PITCH_LIMIT = 1.45;
 
 export class GameClientApp {
@@ -37,8 +35,6 @@ export class GameClientApp {
   private lastPlatformServerYaw: number | null = null;
   private testMovementOverride: MovementInput | null = null;
   private reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
-  private reconciliationYawOffset = 0;
-  private reconciliationPitchOffset = 0;
   private lastReconcilePositionError = 0;
   private lastReconcileYawError = 0;
   private lastReconcilePitchError = 0;
@@ -145,6 +141,7 @@ export class GameClientApp {
           const platformYawDelta = normalizeYaw(recon.ack.yaw - this.lastPlatformServerYaw);
           if (Math.abs(platformYawDelta) > 1e-6) {
             this.input.applyYawDelta(platformYawDelta);
+            this.network.shiftPendingInputYaw(platformYawDelta);
           }
         }
         this.lastPlatformServerYaw = recon.ack.yaw;
@@ -154,6 +151,7 @@ export class GameClientApp {
         const yawError = normalizeYaw(recon.ack.yaw - this.input.getYaw());
         if (Math.abs(yawError) > YAW_RECONCILE_EPSILON) {
           this.input.applyYawDelta(yawError);
+          this.network.shiftPendingInputYaw(yawError);
         }
         this.network.syncSentYaw(this.input.getYaw());
         this.lastPlatformServerYaw = null;
@@ -283,8 +281,8 @@ export class GameClientApp {
             x: this.reconciliationRenderOffset.x,
             y: this.reconciliationRenderOffset.y,
             z: this.reconciliationRenderOffset.z,
-            yaw: this.reconciliationYawOffset,
-            pitch: this.reconciliationPitchOffset,
+            yaw: 0,
+            pitch: 0,
             positionMagnitude: this.getReconciliationOffsetMagnitude()
           },
           lastReplayCount: this.lastReconcileReplayCount,
@@ -330,8 +328,8 @@ export class GameClientApp {
       x: pose.x + this.reconciliationRenderOffset.x,
       y: pose.y + this.reconciliationRenderOffset.y,
       z: pose.z + this.reconciliationRenderOffset.z,
-      yaw: normalizeYaw(pose.yaw + this.reconciliationYawOffset),
-      pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, pose.pitch + this.reconciliationPitchOffset))
+      yaw: pose.yaw,
+      pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, pose.pitch))
     };
   }
 
@@ -343,9 +341,7 @@ export class GameClientApp {
     const preRenderedPose = {
       x: preReconciliationPose.x + this.reconciliationRenderOffset.x,
       y: preReconciliationPose.y + this.reconciliationRenderOffset.y,
-      z: preReconciliationPose.z + this.reconciliationRenderOffset.z,
-      yaw: normalizeYaw(preReconciliationPose.yaw + this.reconciliationYawOffset),
-      pitch: preReconciliationPose.pitch + this.reconciliationPitchOffset
+      z: preReconciliationPose.z + this.reconciliationRenderOffset.z
     };
 
     const positionError = Math.hypot(
@@ -375,21 +371,16 @@ export class GameClientApp {
       y: preRenderedPose.y - postReconciliationPose.y,
       z: preRenderedPose.z - postReconciliationPose.z
     };
-    this.reconciliationYawOffset = normalizeYaw(preRenderedPose.yaw - postReconciliationPose.yaw);
-    this.reconciliationPitchOffset = preRenderedPose.pitch - postReconciliationPose.pitch;
   }
 
   private decayReconciliationSmoothing(delta: number): void {
     const clampedDelta = Math.max(0, delta);
     const positionDecay = Math.exp(-RECONCILE_POSITION_SMOOTH_RATE * clampedDelta);
-    const angleDecay = Math.exp(-RECONCILE_ANGLE_SMOOTH_RATE * clampedDelta);
     this.reconciliationRenderOffset = {
       x: this.reconciliationRenderOffset.x * positionDecay,
       y: this.reconciliationRenderOffset.y * positionDecay,
       z: this.reconciliationRenderOffset.z * positionDecay
     };
-    this.reconciliationYawOffset = normalizeYaw(this.reconciliationYawOffset * angleDecay);
-    this.reconciliationPitchOffset *= angleDecay;
 
     if (Math.abs(this.reconciliationRenderOffset.x) < RECONCILE_OFFSET_EPSILON) {
       this.reconciliationRenderOffset.x = 0;
@@ -400,18 +391,10 @@ export class GameClientApp {
     if (Math.abs(this.reconciliationRenderOffset.z) < RECONCILE_OFFSET_EPSILON) {
       this.reconciliationRenderOffset.z = 0;
     }
-    if (Math.abs(this.reconciliationYawOffset) < RECONCILE_ANGLE_EPSILON) {
-      this.reconciliationYawOffset = 0;
-    }
-    if (Math.abs(this.reconciliationPitchOffset) < RECONCILE_ANGLE_EPSILON) {
-      this.reconciliationPitchOffset = 0;
-    }
   }
 
   private resetReconciliationSmoothing(): void {
     this.reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
-    this.reconciliationYawOffset = 0;
-    this.reconciliationPitchOffset = 0;
   }
 
   private getReconciliationOffsetMagnitude(): number {

@@ -179,6 +179,15 @@ export class NetworkClient {
     this.hasSentYaw = true;
   }
 
+  public shiftPendingInputYaw(deltaYaw: number): void {
+    if (!Number.isFinite(deltaYaw) || Math.abs(deltaYaw) <= 1e-6) {
+      return;
+    }
+    for (const entry of this.pendingInputs) {
+      entry.orientation.yaw = normalizeYaw(entry.orientation.yaw + deltaYaw);
+    }
+  }
+
   public consumeReconciliationFrame(): ReconciliationFrame | null {
     if (!this.latestAck) {
       return null;

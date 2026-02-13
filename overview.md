@@ -52,7 +52,7 @@ Key runtime modules:
 
 - CSP is currently default OFF at runtime due to remaining on-platform jitter under real play.
 - CSP can be toggled at runtime with `C` for testing.
-- When CSP is enabled, client reconciliation now uses a render-side smoothing layer with correction-offset decay and hard-snap thresholds for large divergences.
+- When CSP is enabled, client reconciliation uses a position-only render-side smoothing layer with correction-offset decay; yaw/pitch stay authoritative to keep camera-forward input alignment stable.
 - Reconciliation metrics are exposed in runtime status text and `window.render_game_to_text` for diagnostics and automated artifact review.
 - Core verification commands currently passing are recorded in `progress.md`.
 
