@@ -1,0 +1,35 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Project-scoped Codex defaults for this repo.
+# These settings load when running Codex from this workspace.
+
+model = "gpt-5.3-codex"
+model_reasoning_effort = "xhigh"
+personality = "pragmatic"
+web_search = "live"
+
+# Balanced default: high initiative with a writable sandbox.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+# Official docs MCP server for up-to-date product/documentation lookups.
+[mcp_servers.openai_docs]
+url = "https://developers.openai.com/mcp"
+required = false
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+
+# Opt-in profile for maximum autonomy in a trusted local environment.
+[profiles.full_auto]
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+web_search = "live"
+
+# Opt-in profile for cautious reviews.
+[profiles.safe_audit]
+approval_policy = "untrusted"
+sandbox_mode = "read-only"
+web_search = "cached"

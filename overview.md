@@ -74,6 +74,7 @@ Key runtime modules:
 - `docs`: local reference docs for nengi 2.0, Three.js, Rapier
 - `progress.md`: active status, TODOs, and session handoff notes
 - `AGENTS.md`: persistent agent instructions and memory rules
+- `.codex/config.toml`: project-scoped Codex CLI defaults/profiles for this workspace
 - `vision.md`: long-range product/gameplay/aesthetic direction
 - `docs-map.md`: markdown file responsibilities and session read order
 

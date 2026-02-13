@@ -21,6 +21,7 @@
 - Removed the client platform-CSP bypass: CSP now runs on-platform too, with LocalPhysicsWorld applying platform carry and grounded-platform attachment logic mirroring server behavior.
 - Added explicit client reconciliation smoothing for CSP: render-side correction offsets now preserve continuity on ack/replay corrections, decay over time, and hard-snap only above configurable position/yaw thresholds.
 - Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
+- Added project-scoped Codex config at `.codex/config.toml` with balanced defaults (`workspace-write` + `on-request`), live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
 - Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
 - Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, and `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke` all pass.
 
