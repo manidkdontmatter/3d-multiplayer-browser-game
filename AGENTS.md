@@ -2,6 +2,7 @@ we are developing this project on windows, not linux, as of writing this.
 
 this project is a 3d browser game made in typescript using nodejs and npm, using nengi 2.0 for netcode. always read every file in the docs folder (recursively) at the beginning of each new session to understand how to use nengi 2.0, threejs, and rapier. do not confuse nengi 1.0 with nengi 2.0, the manner of using them is vastly different. we use threejs for 3d rendering. rapier for physics. make the game have top tier netcode that is highly performant.
 workflow note: at the beginning of each new session, if `progress.md` exists, read it before making plans or code changes.
+workflow note: at the beginning of each new session, read `overview.md` (if it exists) after `progress.md` so project purpose/architecture/workflows are always in active context.
 git workflow note: after meaningful, verified changes (for example passing relevant tests or completing a logical task), commit and push to GitHub without waiting for an extra prompt.
 network note: internet speed is around 3 mbps, so dependency/tool downloads can be slow. use longer command timeouts, retry failed downloads, and avoid unnecessary reinstall/download work.
 testing note: use playwright for browser automation/testing when relevant (including develop-web-game workflow if that skill is available).
@@ -15,6 +16,7 @@ architecture note: client-side prediction movement/collision must mirror the ser
 memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions. use `progress.md` for active TODOs, current-session status, and handoff notes only.
 inference note: proactively infer obvious architectural/project-management implications from repo state and recent work; surface key assumptions/risks early instead of waiting for explicit prompts.
 intent note: infer likely user intent and keep the overarching objective in mind (a full-fledged, high-quality, production-grade 3d first-person multiplayer browser game following best practices), not only the literal request; surface assumptions/risks when ambiguity matters.
+documentation note: maintain `overview.md` as the canonical high-level summary of what this project is and how it works; update it when core architecture, behavior, tooling, or workflows materially change.
 
 we have strict client/server separation. it is an authoritative server game. it is a real game project made professionally, not some hobby or demo or example project, so we need to do it the real way not any other way. always do your best. be a genius, operate at your maximum power.
 
