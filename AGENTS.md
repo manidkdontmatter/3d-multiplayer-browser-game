@@ -12,8 +12,9 @@ automation note: prefer project test commands (`npm run test:smoke`, `npm run te
 automation note: do not run `test:smoke` and `test:multiplayer` in parallel; they share ports 5173/9001 and will conflict.
 architecture note: follow production-grade authoritative multiplayer best practices (Rust-style architecture adapted for web): server-authoritative simulation, client sends intent only, client prediction + reconciliation, deterministic tick/update ordering, strict client/server separation, and anti-cheat-friendly trust boundaries.
 architecture note: client-side prediction movement/collision must mirror the server authoritative solver and step order as closely as possible; do not use divergent physics models between client CSP and server authority.
-memory note: when the user says to "remember" something across sessions, persist it in `AGENTS.md`. use `progress.md` for active TODOs, current-session status, and handoff notes only.
+memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions. use `progress.md` for active TODOs, current-session status, and handoff notes only.
 inference note: proactively infer obvious architectural/project-management implications from repo state and recent work; surface key assumptions/risks early instead of waiting for explicit prompts.
+intent note: infer likely user intent and keep the overarching objective in mind (a full-fledged, high-quality, production-grade 3d first-person multiplayer browser game following best practices), not only the literal request; surface assumptions/risks when ambiguity matters.
 
 we have strict client/server separation. it is an authoritative server game. it is a real game project made professionally, not some hobby or demo or example project, so we need to do it the real way not any other way. always do your best. be a genius, operate at your maximum power.
 
