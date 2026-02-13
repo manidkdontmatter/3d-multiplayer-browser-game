@@ -26,6 +26,7 @@ export interface ReconciliationFrame {
     vz: number;
     grounded: boolean;
     groundedPlatformPid: number;
+    platformYawDelta: number;
   };
   replay: PendingInput[];
 }
@@ -223,6 +224,19 @@ export class NetworkClient {
           continue;
         }
         this.lastAckSequence = message.sequence;
+        const platformYawDelta = Number.isFinite(message.platformYawDelta)
+          ? message.platformYawDelta
+          : 0;
+        let accumulatedPlatformYawDelta = platformYawDelta;
+        if (
+          this.latestAck &&
+          this.latestAck.groundedPlatformPid >= 0 &&
+          this.latestAck.groundedPlatformPid === message.groundedPlatformPid
+        ) {
+          accumulatedPlatformYawDelta = normalizeYaw(
+            this.latestAck.platformYawDelta + platformYawDelta
+          );
+        }
         this.latestAck = {
           sequence: message.sequence,
           serverTick: message.serverTick,
@@ -235,7 +249,8 @@ export class NetworkClient {
           vy: message.vy,
           vz: message.vz,
           grounded: message.grounded,
-          groundedPlatformPid: message.groundedPlatformPid
+          groundedPlatformPid: message.groundedPlatformPid,
+          platformYawDelta: accumulatedPlatformYawDelta
         };
         this.serverGroundedPlatformPid = message.groundedPlatformPid;
         this.trimPendingInputs(message.sequence);

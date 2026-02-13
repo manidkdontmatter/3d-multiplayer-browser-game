@@ -282,7 +282,7 @@ export class GameSimulation {
       player.z = moved.z;
 
       this.syncUserView(userId, player);
-      this.queueInputAck(userId, player);
+      this.queueInputAck(userId, player, carry.yaw);
     }
 
     this.world.step();
@@ -437,7 +437,7 @@ export class GameSimulation {
     return selectedPid;
   }
 
-  private queueInputAck(userId: number, player: PlayerEntity): void {
+  private queueInputAck(userId: number, player: PlayerEntity, platformYawDelta: number): void {
     const user = this.usersById.get(userId);
     if (!user) {
       return;
@@ -455,7 +455,8 @@ export class GameSimulation {
       vy: player.vy,
       vz: player.vz,
       grounded: player.grounded,
-      groundedPlatformPid: player.groundedPlatformPid ?? -1
+      groundedPlatformPid: player.groundedPlatformPid ?? -1,
+      platformYawDelta
     });
   }
 

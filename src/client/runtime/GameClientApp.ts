@@ -32,7 +32,6 @@ export class GameClientApp {
   private frozenCameraPose: PlayerPose | null = null;
   private cspEnabled: boolean;
   private wasServerGroundedOnPlatform = false;
-  private lastPlatformServerYaw: number | null = null;
   private testMovementOverride: MovementInput | null = null;
   private reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
   private lastReconcilePositionError = 0;
@@ -136,15 +135,11 @@ export class GameClientApp {
     const recon = this.network.consumeReconciliationFrame();
     if (recon) {
       if (recon.ack.groundedPlatformPid >= 0) {
-        // While platform-carried, compose only authoritative platform yaw delta into look yaw.
-        if (this.lastPlatformServerYaw !== null) {
-          const platformYawDelta = normalizeYaw(recon.ack.yaw - this.lastPlatformServerYaw);
-          if (Math.abs(platformYawDelta) > 1e-6) {
-            this.input.applyYawDelta(platformYawDelta);
-            this.network.shiftPendingInputYaw(platformYawDelta);
-          }
+        const platformYawDelta = recon.ack.platformYawDelta;
+        if (Math.abs(platformYawDelta) > 1e-6) {
+          this.input.applyYawDelta(platformYawDelta);
+          this.network.shiftPendingInputYaw(platformYawDelta);
         }
-        this.lastPlatformServerYaw = recon.ack.yaw;
         // Keep delta baseline aligned after external yaw adjustment to avoid double-applying carry.
         this.network.syncSentYaw(this.input.getYaw());
       } else if (this.wasServerGroundedOnPlatform) {
@@ -154,9 +149,6 @@ export class GameClientApp {
           this.network.shiftPendingInputYaw(yawError);
         }
         this.network.syncSentYaw(this.input.getYaw());
-        this.lastPlatformServerYaw = null;
-      } else {
-        this.lastPlatformServerYaw = null;
       }
 
       if (this.cspEnabled) {

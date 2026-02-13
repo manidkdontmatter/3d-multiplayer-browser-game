@@ -43,7 +43,8 @@ export const inputAckMessageSchema = defineSchema({
   vy: Binary.Float32,
   vz: Binary.Float32,
   grounded: Binary.Boolean,
-  groundedPlatformPid: Binary.Int16
+  groundedPlatformPid: Binary.Int16,
+  platformYawDelta: Binary.Float32
 });
 
 export const platformEntitySchema = defineSchema({
@@ -106,6 +107,7 @@ export interface InputAckMessage {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
+  platformYawDelta: number;
 }
 
 export interface PlatformEntity {
