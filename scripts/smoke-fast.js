@@ -5,6 +5,11 @@ import { chromium } from "playwright";
 const CLIENT_URL = "http://127.0.0.1:5173";
 const SERVER_PORT = 9001;
 const CLIENT_PORT = 5173;
+const CONNECT_TIMEOUT_MS = 9000;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function isPortOpen(host, port, timeoutMs = 500) {
   return new Promise((resolve) => {
@@ -19,6 +24,32 @@ function isPortOpen(host, port, timeoutMs = 500) {
     socket.once("error", () => finish(false));
     socket.connect(port, host);
   });
+}
+
+async function readState(page) {
+  return page.evaluate(() => {
+    const text = window.render_game_to_text?.();
+    if (!text) {
+      return null;
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  });
+}
+
+async function waitForConnectedState(page, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const state = await readState(page);
+    if (state?.mode === "connected") {
+      return state;
+    }
+    await delay(120);
+  }
+  throw new Error("Timed out waiting for connected state.");
 }
 
 async function main() {
@@ -40,23 +71,9 @@ async function main() {
       logs.push({ type: msg.type(), text: msg.text() });
     });
 
-    await page.goto(CLIENT_URL, { waitUntil: "networkidle", timeout: 12000 });
+    await page.goto(CLIENT_URL, { waitUntil: "domcontentloaded", timeout: 12000 });
     await page.mouse.click(640, 360);
-    await page.waitForTimeout(900);
-
-    const stateText = await page.evaluate(() => {
-      return typeof window.render_game_to_text === "function"
-        ? window.render_game_to_text()
-        : "missing render_game_to_text";
-    });
-    if (stateText === "missing render_game_to_text") {
-      throw new Error("Client did not expose window.render_game_to_text");
-    }
-
-    const parsed = JSON.parse(stateText);
-    if (parsed.mode !== "connected") {
-      throw new Error(`Expected connected mode, got ${parsed.mode}`);
-    }
+    await waitForConnectedState(page, CONNECT_TIMEOUT_MS);
 
     const hasFatalConsoleError = logs.some(
       (entry) =>

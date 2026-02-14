@@ -11,7 +11,7 @@
 - Client netcode inbound processing is now FIFO, and input-ack trimming is wrap-safe for UInt16 sequence rollover.
 - Server tick interval metrics sampling is now bounded (ring buffer) to avoid unbounded long-run memory growth.
 - Server per-second tick summary logging can now be disabled with `SERVER_TICK_LOG=0` (test scripts set this by default).
-- Multiplayer test now always writes debug artifacts (`state.json`, `client-a.png`, `client-b.png`, `console-a.json`, `console-b.json`) even on failure.
+- Smoke/multiplayer e2e artifact policy is now speed-oriented by default: write artifacts on failure, optional on pass via `E2E_ARTIFACTS_ON_PASS=1`.
 - Join spawn is now occupancy-based, so newly connecting players do not spawn inside existing player capsules.
 - Multiplayer test now enforces spawn non-overlap directly using the player capsule diameter threshold (old "move player B away from overlap" workaround removed).
 - Client CSP prediction now uses Rapier KCC (kinematic collider + `computeColliderMovement`) to mirror server collision path and reduce reconciliation jitter against static geometry.
@@ -41,6 +41,13 @@
 - Client boot now has a staged loading overlay with progress bar (`#boot-overlay`) that tracks manifest preload and startup phases (physics -> network -> ready).
 - Asset pipeline now uses Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`) through `src/client/assets/assetLoader.ts`, with a runtime cache for preloaded assets.
 - Latest verification (2026-02-13, asset-loading pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after boot overlay + asset preloader integration.
+- Validation loop optimized for faster iteration:
+  - Typecheck now uses incremental TS build info caching (`tsconfig.client.tsbuildinfo`, `tsconfig.server.tsbuildinfo`).
+  - `smoke-e2e` and `multiplayer-e2e` now wait on actual port readiness instead of fixed startup sleeps.
+  - `smoke-fast` now waits for connected state instead of fixed client-side timeout.
+  - Added `verify:quick`, `verify:quick:standalone`, and `test:multiplayer:quick` scripts.
+  - Multiplayer script now supports skipping sprint/jump/reconnect checks for quick passes via env flags.
+- Latest verification (2026-02-14, test-optimization pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, `npm run test:multiplayer`, and `npm run verify:quick:standalone` all pass.
 
 ## Session Close Notes (2026-02-13)
 

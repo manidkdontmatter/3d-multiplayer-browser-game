@@ -73,8 +73,10 @@ Key runtime modules:
 - `npm run dev:server`: start server only
 - `npm run dev:client`: start client only
 - `npm run typecheck`: run TS checks
+- `npm run verify:quick`: fast local loop (`typecheck:client` + `test:smoke:fast`, expects running services)
 - `npm run test:smoke`: Playwright smoke validation
 - `npm run test:multiplayer`: two-client replication validation
+- `npm run test:multiplayer:quick`: faster replication sanity run (core movement checks only)
 - `npm run test:multiplayer:csp`: multiplayer validation in CSP-enabled mode
 - `npm run test:multiplayer:chaos`: CSP multiplayer validation under simulated ack drop/reorder jitter
 

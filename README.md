@@ -12,13 +12,18 @@ Authoritative server/browser-client scaffold using:
 - `npm run dev:client` starts only the browser client.
 - `npm run dev:server` starts only the authoritative server.
 - `npm run typecheck` runs separate client/server TS checks.
+- `npm run typecheck:client` and `npm run typecheck:server` run targeted TS checks for faster iteration.
+- `npm run verify:quick` runs `typecheck:client` + `test:smoke:fast` (expects server/client already running).
+- `npm run verify:quick:standalone` runs `typecheck:client` + `test:smoke` (spawns missing services automatically).
 - `npm run build` builds client and server artifacts.
-- `npm run test:smoke` boots server+client, runs a Playwright smoke test, and writes artifacts to `output/smoke`.
+- `npm run test:smoke` boots server+client, runs a Playwright smoke test.
   - Reuses existing local services on `9001`/`5173` if already running.
   - Cleans up spawned dev processes automatically on exit.
+  - Writes artifacts by default only on failure (`E2E_ARTIFACTS_ON_PASS=1` to always write).
   - Optional: override client URL with `E2E_CLIENT_URL` (example: `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke`).
-- `npm run test:multiplayer` validates two-client replication (client A movement must be visible on client B) and writes artifacts to `output/multiplayer`.
+- `npm run test:multiplayer` validates two-client replication (client A movement must be visible on client B).
   - Also asserts sprint, jump, and disconnect/reconnect behavior.
+- `npm run test:multiplayer:quick` runs a faster multiplayer pass (core movement/replication only; sprint/jump/reconnect skipped).
 - `npm run test:multiplayer:csp` runs the same multiplayer suite with `E2E_CSP=1` (CSP-enabled client mode).
 
 ## Runtime

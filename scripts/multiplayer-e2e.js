@@ -9,6 +9,11 @@ const ROOT = process.cwd();
 const OUTPUT_DIR = path.join(ROOT, "output", "multiplayer");
 const CLIENT_ORIGIN = "http://127.0.0.1:5173";
 const E2E_NETSIM_ENABLED = process.env.E2E_NETSIM === "1";
+const E2E_ENABLE_SPRINT_TEST = process.env.E2E_ENABLE_SPRINT_TEST !== "0";
+const E2E_ENABLE_JUMP_TEST = process.env.E2E_ENABLE_JUMP_TEST !== "0";
+const E2E_ENABLE_RECONNECT_TEST = process.env.E2E_ENABLE_RECONNECT_TEST !== "0";
+const ARTIFACTS_ON_PASS = process.env.E2E_ARTIFACTS_ON_PASS === "1";
+const ARTIFACTS_ON_FAIL = process.env.E2E_ARTIFACTS_ON_FAIL !== "0";
 const MIN_REQUIRED_LOCAL_MOVEMENT = readEnvNumber("E2E_MIN_LOCAL_MOVEMENT", 1.0);
 const MIN_REQUIRED_REMOTE_MOVEMENT = readEnvNumber("E2E_MIN_REMOTE_MOVEMENT", 0.75);
 const MIN_SPAWN_SEPARATION = readEnvNumber("E2E_MIN_SPAWN_SEPARATION", 0.7); // Player capsule diameter is 0.70, so this checks non-overlap.
@@ -16,6 +21,8 @@ const MOVEMENT_POLL_MS = 120;
 const LOCAL_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_LOCAL_MOVEMENT_TIMEOUT_MS", 15000);
 const REMOTE_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_REMOTE_MOVEMENT_TIMEOUT_MS", 15000);
 const STARTUP_STABILIZATION_MS = readEnvNumber("E2E_STARTUP_STABILIZATION_MS", 5000);
+const SERVER_START_TIMEOUT_MS = readEnvNumber("E2E_SERVER_START_TIMEOUT_MS", 20000);
+const CLIENT_START_TIMEOUT_MS = readEnvNumber("E2E_CLIENT_START_TIMEOUT_MS", 24000);
 const E2E_CSP_ENABLED = process.env.E2E_CSP === "1";
 const CLIENT_CSP_QUERY = E2E_CSP_ENABLED ? "1" : "0";
 const MIN_REQUIRED_SPRINT_MOVEMENT = readEnvNumber("E2E_MIN_SPRINT_MOVEMENT", 1.4);
@@ -59,6 +66,17 @@ function isPortOpen(host, port, timeoutMs = 700) {
     socket.once("error", () => finish(false));
     socket.connect(port, host);
   });
+}
+
+async function waitForPortOpen(host, port, timeoutMs, label) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isPortOpen(host, port, 500)) {
+      return;
+    }
+    await delay(150);
+  }
+  throw new Error(`Timed out waiting for ${label} on ${host}:${port}`);
 }
 
 async function getFreePort() {
@@ -280,7 +298,7 @@ async function main() {
     SERVER_TICK_LOG: process.env.SERVER_TICK_LOG ?? "0"
   });
   managedProcesses.push(server);
-  await delay(3500);
+  await waitForPortOpen("127.0.0.1", serverPort, SERVER_START_TIMEOUT_MS, "server");
 
   if (!clientAlreadyRunning) {
     const client = startProcess("client", "npm", [
@@ -293,10 +311,10 @@ async function main() {
       "5173"
     ]);
     managedProcesses.push(client);
-    await delay(6000);
+    await waitForPortOpen("127.0.0.1", 5173, CLIENT_START_TIMEOUT_MS, "client");
   } else {
     console.log(`[multi] using existing client at ${CLIENT_ORIGIN}`);
-    await delay(1000);
+    await delay(150);
   }
 
   let browser;
@@ -329,12 +347,12 @@ async function main() {
       logsB.push({ type: msg.type(), text: msg.text() });
     });
 
-    await pageA.goto(clientUrl, { waitUntil: "networkidle", timeout: 30000 });
-    await pageB.goto(clientUrl, { waitUntil: "networkidle", timeout: 30000 });
+    await pageA.goto(clientUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await pageB.goto(clientUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await pageA.mouse.click(640, 360);
     await pageB.mouse.click(640, 360);
-    await pageA.waitForTimeout(1400);
-    await pageB.waitForTimeout(1400);
+    await pageA.waitForTimeout(350);
+    await pageB.waitForTimeout(350);
 
     const initialA = await waitForConnectedState(pageA);
     const initialB = await waitForConnectedState(pageB);
@@ -381,7 +399,9 @@ async function main() {
       );
     }
 
-    await delay(STARTUP_STABILIZATION_MS);
+    if (STARTUP_STABILIZATION_MS > 0) {
+      await delay(STARTUP_STABILIZATION_MS);
+    }
     beforeA = (await readState(pageA)) ?? beforeA;
     beforeB = (await readState(pageB)) ?? beforeB;
 
@@ -439,92 +459,98 @@ async function main() {
     movedDistanceRemote = remoteMove.distance;
     afterB = remoteMove.state;
 
-    await pageA.bringToFront();
-    await pageA.mouse.click(640, 360);
-    await pageA.waitForTimeout(120);
-    const sprintBaseline = afterA?.player ?? beforeA?.player ?? { x: 0, z: 0 };
-    await pageA.evaluate(() => {
-      window.set_test_movement({ forward: 1, strafe: 0, jump: false, sprint: true });
-    });
-    const sprintResult = await waitForLocalMovement(
-      pageA,
-      sprintBaseline,
-      MIN_REQUIRED_SPRINT_MOVEMENT,
-      SPRINT_MOVEMENT_TIMEOUT_MS
-    );
-    await pageA.evaluate(() => {
-      window.set_test_movement(null);
-    });
-    sprintDistance = sprintResult.distance;
-    afterA = sprintResult.state ?? afterA;
-    if (sprintDistance === null || sprintDistance < MIN_REQUIRED_SPRINT_MOVEMENT) {
-      throw new Error(
-        `Sprint input failed to accelerate: expected >=${MIN_REQUIRED_SPRINT_MOVEMENT.toFixed(
-          2
-        )} units, got ${(sprintDistance ?? 0).toFixed(3)}`
+    if (E2E_ENABLE_SPRINT_TEST) {
+      await pageA.bringToFront();
+      await pageA.mouse.click(640, 360);
+      await pageA.waitForTimeout(120);
+      const sprintBaseline = afterA?.player ?? beforeA?.player ?? { x: 0, z: 0 };
+      await pageA.evaluate(() => {
+        window.set_test_movement({ forward: 1, strafe: 0, jump: false, sprint: true });
+      });
+      const sprintResult = await waitForLocalMovement(
+        pageA,
+        sprintBaseline,
+        MIN_REQUIRED_SPRINT_MOVEMENT,
+        SPRINT_MOVEMENT_TIMEOUT_MS
       );
+      await pageA.evaluate(() => {
+        window.set_test_movement(null);
+      });
+      sprintDistance = sprintResult.distance;
+      afterA = sprintResult.state ?? afterA;
+      if (sprintDistance === null || sprintDistance < MIN_REQUIRED_SPRINT_MOVEMENT) {
+        throw new Error(
+          `Sprint input failed to accelerate: expected >=${MIN_REQUIRED_SPRINT_MOVEMENT.toFixed(
+            2
+          )} units, got ${(sprintDistance ?? 0).toFixed(3)}`
+        );
+      }
+      await pageA.waitForTimeout(400);
     }
-    await pageA.waitForTimeout(400);
 
-    await pageA.bringToFront();
-    await pageA.mouse.click(640, 360);
-    await pageA.waitForTimeout(120);
-    const jumpBaselineY = afterA?.player?.y ?? beforeA?.player?.y ?? 0;
-    let jumpResult = await runJumpAttempt(pageA, jumpBaselineY);
-    if ((jumpResult.delta ?? 0) < MIN_JUMP_HEIGHT) {
-      await pageA.waitForTimeout(JUMP_RETRY_SETTLE_MS);
-      const retryBaselineY = (await readState(pageA))?.player?.y ?? jumpBaselineY;
-      jumpResult = await runJumpAttempt(pageA, retryBaselineY);
+    if (E2E_ENABLE_JUMP_TEST) {
+      await pageA.bringToFront();
+      await pageA.mouse.click(640, 360);
+      await pageA.waitForTimeout(120);
+      const jumpBaselineY = afterA?.player?.y ?? beforeA?.player?.y ?? 0;
+      let jumpResult = await runJumpAttempt(pageA, jumpBaselineY);
+      if ((jumpResult.delta ?? 0) < MIN_JUMP_HEIGHT) {
+        await pageA.waitForTimeout(JUMP_RETRY_SETTLE_MS);
+        const retryBaselineY = (await readState(pageA))?.player?.y ?? jumpBaselineY;
+        jumpResult = await runJumpAttempt(pageA, retryBaselineY);
+      }
+      jumpHeight = jumpResult.delta;
+      afterA = jumpResult.state ?? afterA;
+      if (jumpHeight === null || jumpHeight < MIN_JUMP_HEIGHT) {
+        throw new Error(
+          `Jump input failed to gain height: expected >=${MIN_JUMP_HEIGHT.toFixed(
+            2
+          )} units, got ${(jumpHeight ?? 0).toFixed(3)}`
+        );
+      }
+      await pageA.waitForTimeout(600);
     }
-    jumpHeight = jumpResult.delta;
-    afterA = jumpResult.state ?? afterA;
-    if (jumpHeight === null || jumpHeight < MIN_JUMP_HEIGHT) {
-      throw new Error(
-        `Jump input failed to gain height: expected >=${MIN_JUMP_HEIGHT.toFixed(
-          2
-        )} units, got ${(jumpHeight ?? 0).toFixed(3)}`
+
+    if (E2E_ENABLE_RECONNECT_TEST) {
+      if (pageB && !pageB.isClosed()) {
+        await pageB.close();
+        pageB = null;
+      }
+      await delay(PAGE_RECONNECT_COOLDOWN_MS);
+
+      pageB = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+      pageB.on("console", (msg) => {
+        logsB.push({ type: msg.type(), text: msg.text() });
+      });
+      await pageB.goto(clientUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await pageB.bringToFront();
+      await pageB.mouse.click(640, 360);
+      await pageB.waitForTimeout(350);
+
+      reconnectedBState = await waitForConnectedState(pageB);
+      if (!reconnectedBState.player) {
+        throw new Error("Reconnected client B missing local player state.");
+      }
+      const rehookStatusB = await pageB.evaluate(() => ({
+        testMovement: typeof window.set_test_movement
+      }));
+      if (rehookStatusB.testMovement !== "function") {
+        throw new Error("Reconnected client B missing test movement hook.");
+      }
+
+      const reconnectedRemote = await waitForRemotePresence(
+        pageA,
+        reconnectedBState.player.nid,
+        DISCONNECT_RECONNECT_TIMEOUT_MS
       );
+      if (!reconnectedRemote) {
+        throw new Error("Client A never saw client B after reconnect.");
+      }
+      reconnectSeen = true;
+      reconnectedRemoteState = reconnectedRemote.state;
+      afterA = reconnectedRemote.state ?? afterA;
+      afterB = reconnectedBState;
     }
-    await pageA.waitForTimeout(600);
-
-    if (pageB && !pageB.isClosed()) {
-      await pageB.close();
-      pageB = null;
-    }
-    await delay(PAGE_RECONNECT_COOLDOWN_MS);
-
-    pageB = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-    pageB.on("console", (msg) => {
-      logsB.push({ type: msg.type(), text: msg.text() });
-    });
-    await pageB.goto(clientUrl, { waitUntil: "networkidle", timeout: 30000 });
-    await pageB.bringToFront();
-    await pageB.mouse.click(640, 360);
-    await pageB.waitForTimeout(1400);
-
-    reconnectedBState = await waitForConnectedState(pageB);
-    if (!reconnectedBState.player) {
-      throw new Error("Reconnected client B missing local player state.");
-    }
-    const rehookStatusB = await pageB.evaluate(() => ({
-      testMovement: typeof window.set_test_movement
-    }));
-    if (rehookStatusB.testMovement !== "function") {
-      throw new Error("Reconnected client B missing test movement hook.");
-    }
-
-    const reconnectedRemote = await waitForRemotePresence(
-      pageA,
-      reconnectedBState.player.nid,
-      DISCONNECT_RECONNECT_TIMEOUT_MS
-    );
-    if (!reconnectedRemote) {
-      throw new Error("Client A never saw client B after reconnect.");
-    }
-    reconnectSeen = true;
-    reconnectedRemoteState = reconnectedRemote.state;
-    afterA = reconnectedRemote.state ?? afterA;
-    afterB = reconnectedBState;
 
     if (!afterA) {
       afterA = await readState(pageA);
@@ -552,55 +578,67 @@ async function main() {
     console.log(
       `[multi] PASS server=${serverUrl} movedA=${movedDistanceA.toFixed(2)} movedRemote=${movedDistanceRemote.toFixed(
         2
-      )} sprint=${(sprintDistance ?? 0).toFixed(2)} jump=${(jumpHeight ?? 0).toFixed(2)} reconnect=${reconnectSeen}`
+      )} sprint=${E2E_ENABLE_SPRINT_TEST ? (sprintDistance ?? 0).toFixed(2) : "skipped"} jump=${
+        E2E_ENABLE_JUMP_TEST ? (jumpHeight ?? 0).toFixed(2) : "skipped"
+      } reconnect=${E2E_ENABLE_RECONNECT_TEST ? String(reconnectSeen) : "skipped"}`
     );
   } catch (error) {
     exitCode = 1;
     failureMessage = error instanceof Error ? error.message : String(error);
     console.error("[multi] FAIL", error);
   } finally {
+    const shouldWriteArtifacts = exitCode === 0 ? ARTIFACTS_ON_PASS : ARTIFACTS_ON_FAIL;
     if (browser) {
-      try {
-        if (pageA && !pageA.isClosed()) {
-          if (!afterA) {
-            afterA = await readState(pageA);
+      if (shouldWriteArtifacts) {
+        try {
+          if (pageA && !pageA.isClosed()) {
+            if (!afterA) {
+              afterA = await readState(pageA);
+            }
+            await pageA.screenshot({ path: path.join(OUTPUT_DIR, "client-a.png"), fullPage: true });
           }
-          await pageA.screenshot({ path: path.join(OUTPUT_DIR, "client-a.png"), fullPage: true });
-        }
-        if (pageB && !pageB.isClosed()) {
-          if (!afterB) {
-            afterB = await readState(pageB);
+          if (pageB && !pageB.isClosed()) {
+            if (!afterB) {
+              afterB = await readState(pageB);
+            }
+            await pageB.screenshot({ path: path.join(OUTPUT_DIR, "client-b.png"), fullPage: true });
           }
-          await pageB.screenshot({ path: path.join(OUTPUT_DIR, "client-b.png"), fullPage: true });
+        } catch (artifactError) {
+          console.warn("[multi] warning: failed to capture debug artifacts", artifactError);
         }
-      } catch (artifactError) {
-        console.warn("[multi] warning: failed to capture debug artifacts", artifactError);
       }
       await browser.close();
     }
 
-    const summary = {
-      beforeA,
-      beforeB,
-      afterA,
-      afterB,
-      movedDistanceA,
-      movedDistanceRemote,
-      sprintDistance,
-      jumpHeight,
-      reconnectSeen,
-      reconnectedBState,
-      reconnectedRemoteState,
-      error: failureMessage
-    };
-    fs.writeFileSync(path.join(OUTPUT_DIR, "state.json"), JSON.stringify(summary, null, 2), "utf8");
-    fs.writeFileSync(path.join(OUTPUT_DIR, "console-a.json"), JSON.stringify(logsA, null, 2), "utf8");
-    fs.writeFileSync(path.join(OUTPUT_DIR, "console-b.json"), JSON.stringify(logsB, null, 2), "utf8");
+    if (shouldWriteArtifacts) {
+      const summary = {
+        beforeA,
+        beforeB,
+        afterA,
+        afterB,
+        movedDistanceA,
+        movedDistanceRemote,
+        sprintDistance,
+        jumpHeight,
+        reconnectSeen,
+        reconnectedBState,
+        reconnectedRemoteState,
+        checks: {
+          sprintEnabled: E2E_ENABLE_SPRINT_TEST,
+          jumpEnabled: E2E_ENABLE_JUMP_TEST,
+          reconnectEnabled: E2E_ENABLE_RECONNECT_TEST
+        },
+        error: failureMessage
+      };
+      fs.writeFileSync(path.join(OUTPUT_DIR, "state.json"), JSON.stringify(summary, null, 2), "utf8");
+      fs.writeFileSync(path.join(OUTPUT_DIR, "console-a.json"), JSON.stringify(logsA, null, 2), "utf8");
+      fs.writeFileSync(path.join(OUTPUT_DIR, "console-b.json"), JSON.stringify(logsB, null, 2), "utf8");
+    }
 
     for (const child of managedProcesses) {
       await stopProcessTree(child);
     }
-    await delay(600);
+    await delay(250);
     process.exit(exitCode);
   }
 }

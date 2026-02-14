@@ -19,7 +19,7 @@
 
 ## Workflow and Tooling
 
-- Git workflow note: after meaningful, verified changes (for example passing relevant tests or completing a logical task), commit and push to GitHub without waiting for an extra prompt.
+- Git workflow note: commit locally after meaningful, verified changes, but push to GitHub at milestone boundaries (larger feature chunks, explicit handoff points, or when the user asks) to keep iteration speed high.
 - Dependency governance note: before installing, adding, or upgrading any library/package (npm or otherwise), ask the user for explicit approval first; do not proceed on package changes until approved.
 - Network note: internet speed can be slow (~3 mbps). Use longer timeouts, retry failed downloads, and avoid unnecessary reinstall/download work.
 - Testing note: use Playwright for browser automation/testing when relevant (including develop-web-game workflow if available).
@@ -29,6 +29,7 @@
 - Tooling note: keep Node at `>=20.19.x` because current Vite requires at least Node 20.19.
 - Automation note: prefer `npm run test:smoke` and `npm run test:multiplayer` for validation.
 - Automation note: do not run `test:smoke` and `test:multiplayer` in parallel; they share ports `5173`/`9001`.
+- Iteration note: during active development, prefer faster checks first (`typecheck:client`/`typecheck:server`, `test:smoke:fast`, `verify:quick`) and reserve full multiplayer suites for milestone gates.
 
 ## Architecture Rules
 

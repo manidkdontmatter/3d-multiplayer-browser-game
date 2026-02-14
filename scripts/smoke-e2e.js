@@ -10,6 +10,11 @@ const ROOT = process.cwd();
 const OUTPUT_DIR = path.join(ROOT, "output", "smoke");
 const CLIENT_URL = process.env.E2E_CLIENT_URL ?? "http://127.0.0.1:5173";
 const SERVER_URL = "ws://127.0.0.1:9001";
+const SERVER_START_TIMEOUT_MS = readEnvNumber("E2E_SERVER_START_TIMEOUT_MS", 18000);
+const CLIENT_START_TIMEOUT_MS = readEnvNumber("E2E_CLIENT_START_TIMEOUT_MS", 22000);
+const CONNECT_TIMEOUT_MS = readEnvNumber("E2E_CONNECT_TIMEOUT_MS", 12000);
+const ARTIFACTS_ON_PASS = process.env.E2E_ARTIFACTS_ON_PASS === "1";
+const ARTIFACTS_ON_FAIL = process.env.E2E_ARTIFACTS_ON_FAIL !== "0";
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -17,6 +22,15 @@ function ensureDir(dir) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readEnvNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function isPortOpen(host, port, timeoutMs = 700) {
@@ -32,6 +46,17 @@ function isPortOpen(host, port, timeoutMs = 700) {
     socket.once("error", () => finish(false));
     socket.connect(port, host);
   });
+}
+
+async function waitForPortOpen(host, port, timeoutMs, label) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isPortOpen(host, port, 500)) {
+      return;
+    }
+    await delay(150);
+  }
+  throw new Error(`Timed out waiting for ${label} on ${host}:${port}`);
 }
 
 function startProcess(name, command, args) {
@@ -73,6 +98,32 @@ function stopProcessTree(child) {
   });
 }
 
+async function readState(page) {
+  return page.evaluate(() => {
+    const text = window.render_game_to_text?.();
+    if (!text) {
+      return null;
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  });
+}
+
+async function waitForConnectedState(page, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const state = await readState(page);
+    if (state?.mode === "connected") {
+      return state;
+    }
+    await delay(200);
+  }
+  throw new Error("Timed out waiting for connected state.");
+}
+
 async function main() {
   ensureDir(OUTPUT_DIR);
   if (!process.env.SERVER_TICK_LOG) {
@@ -86,7 +137,7 @@ async function main() {
   if (!serverAlreadyRunning) {
     const server = startProcess("server", "npm", ["run", "dev:server"]);
     managedProcesses.push(server);
-    await delay(3500);
+    await waitForPortOpen("127.0.0.1", 9001, SERVER_START_TIMEOUT_MS, "server");
   } else {
     console.log(`[smoke] using existing server at ${SERVER_URL}`);
   }
@@ -102,47 +153,28 @@ async function main() {
       "5173"
     ]);
     managedProcesses.push(client);
-    await delay(6000);
+    await waitForPortOpen("127.0.0.1", 5173, CLIENT_START_TIMEOUT_MS, "client");
   } else {
     console.log(`[smoke] using existing client at ${CLIENT_URL}`);
-    await delay(1000);
   }
 
   let browser;
+  let page;
   let exitCode = 0;
+  let finalState = null;
   const logs = [];
 
   try {
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 
     page.on("console", (msg) => {
       logs.push({ type: msg.type(), text: msg.text() });
     });
 
-    await page.goto(CLIENT_URL, { waitUntil: "networkidle", timeout: 30000 });
+    await page.goto(CLIENT_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.mouse.click(640, 360);
-    await page.waitForTimeout(2000);
-
-    const stateText = await page.evaluate(() => {
-      return typeof window.render_game_to_text === "function"
-        ? window.render_game_to_text()
-        : "missing render_game_to_text";
-    });
-
-    await page.screenshot({ path: path.join(OUTPUT_DIR, "smoke.png"), fullPage: true });
-
-    fs.writeFileSync(path.join(OUTPUT_DIR, "state.json"), stateText, "utf8");
-    fs.writeFileSync(path.join(OUTPUT_DIR, "console.json"), JSON.stringify(logs, null, 2), "utf8");
-
-    if (stateText === "missing render_game_to_text") {
-      throw new Error("Client did not expose window.render_game_to_text");
-    }
-
-    const parsed = JSON.parse(stateText);
-    if (parsed.mode !== "connected") {
-      throw new Error(`Expected connected mode, got ${parsed.mode}`);
-    }
+    finalState = await waitForConnectedState(page, CONNECT_TIMEOUT_MS);
 
     const hasFatalConsoleError = logs.some(
       (entry) =>
@@ -159,13 +191,27 @@ async function main() {
     exitCode = 1;
     console.error("[smoke] FAIL", error);
   } finally {
+    const shouldWriteArtifacts = exitCode === 0 ? ARTIFACTS_ON_PASS : ARTIFACTS_ON_FAIL;
+    if (shouldWriteArtifacts && page) {
+      try {
+        if (!finalState) {
+          finalState = await readState(page);
+        }
+        await page.screenshot({ path: path.join(OUTPUT_DIR, "smoke.png"), fullPage: true });
+      } catch (artifactError) {
+        console.warn("[smoke] warning: failed to capture screenshot artifact", artifactError);
+      }
+      fs.writeFileSync(path.join(OUTPUT_DIR, "state.json"), JSON.stringify(finalState ?? null), "utf8");
+      fs.writeFileSync(path.join(OUTPUT_DIR, "console.json"), JSON.stringify(logs, null, 2), "utf8");
+    }
+
     if (browser) {
       await browser.close();
     }
     for (const child of managedProcesses) {
       await stopProcessTree(child);
     }
-    await delay(600);
+    await delay(250);
     process.exit(exitCode);
   }
 }
