@@ -213,6 +213,8 @@ body {
   padding: 12px;
   pointer-events: auto;
   transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
 .ability-panel-hidden {
   opacity: 0;
   visibility: hidden;
