@@ -190,6 +190,15 @@ async function main() {
     await page.mouse.click(640, 360);
     finalState = await waitForConnectedState(page, CONNECT_TIMEOUT_MS);
     await page.keyboard.press("KeyB");
+    await page.waitForSelector("#ability-loadout-panel.ability-panel-visible", {
+      state: "visible",
+      timeout: 3000
+    });
+    await page.waitForSelector("#ability-creator-panel.ability-panel-hidden", {
+      state: "attached",
+      timeout: 3000
+    });
+    await page.keyboard.press("KeyN");
     await page.waitForSelector(".ability-creator-input", { state: "visible", timeout: 3000 });
     await page.fill(".ability-creator-input", "Smoke Bolt");
     await page.click(".ability-creator-submit");

@@ -138,11 +138,17 @@ export class GameClientApp {
       this.cspEnabled = !this.cspEnabled;
       this.resetReconciliationSmoothing();
     }
-    if (this.input.consumeAbilityMenuToggle()) {
-      const menuOpen = this.abilityHud.toggleMenu();
-      if (menuOpen && document.pointerLockElement === this.canvas) {
-        void document.exitPointerLock();
-      }
+    let shouldReleasePointerLock = false;
+    if (this.input.consumeAbilityLoadoutToggle()) {
+      const loadoutOpen = this.abilityHud.toggleLoadoutPanel();
+      shouldReleasePointerLock = shouldReleasePointerLock || loadoutOpen;
+    }
+    if (this.input.consumeAbilityCreatorToggle()) {
+      const creatorOpen = this.abilityHud.toggleCreatorPanel();
+      shouldReleasePointerLock = shouldReleasePointerLock || creatorOpen;
+    }
+    if (shouldReleasePointerLock && document.pointerLockElement === this.canvas) {
+      void document.exitPointerLock();
     }
     this.abilityHud.setSelectedSlot(this.input.getSelectedHotbarSlot(), false);
 
@@ -393,6 +399,10 @@ export class GameClientApp {
           selectedSlot,
           selectedAbilityId,
           creatorStatus: this.lastAbilityCreateMessage,
+          ui: {
+            loadoutPanelOpen: this.abilityHud.isLoadoutPanelOpen(),
+            creatorPanelOpen: this.abilityHud.isCreatorPanelOpen()
+          },
           selectedAbilityName: this.resolveAbilityName(selectedAbilityId),
           hotbar: this.hotbarAbilityIds.map((abilityId, slot) => ({
             slot,

@@ -87,7 +87,7 @@ Original prompt: we will add animations next. where do you think i can source so
 - Added shared ability definitions (`src/shared/abilities.ts`) with category/points/attribute metadata and default hotbar/unlocked sets, aligned with the future ability-creator pipeline.
 - Added first-pass ability HUD (`src/client/ui/AbilityHud.ts`) with:
   - bottom hotbar UI (slots 1-5)
-  - `B`-toggle loadout panel
+  - `B`-toggle loadout panel and `N`-toggle creator panel
   - drag-and-drop and click-to-assign ability cards
   - right-click clear slot behavior
 - Client netcode now sends `selectedAbilityId` with `InputCommand` and clamps command payload values before serialization.
@@ -106,6 +106,12 @@ Original prompt: we will add animations next. where do you think i can source so
 - Latest verification (2026-02-14, creator-authority pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` all pass after ability-creator command/message integration.
 - Targeted creator verification (2026-02-14): headless Playwright flow opened creator UI, submitted a custom draft (`Nova Bolt`), and confirmed `render_game_to_text.localAbility.catalog` grew (`2`) with creator status `Created ability #1024`.
 - `scripts/smoke-e2e.js` now includes a creator regression check: opens creator UI, submits a draft (`Smoke Bolt`), and waits for authoritative creator success state before passing.
+- Ability UI architecture split into separate systems (2026-02-14):
+  - loadout/inventory panel (`B`) is independent from creator panel (`N`)
+  - shared one-menu flow removed; each panel has its own visibility state and controls
+  - `render_game_to_text.localAbility.ui` now reports `loadoutPanelOpen` + `creatorPanelOpen`
+  - smoke automation now sanity-checks panel separation before creator submit.
+- Latest verification (2026-02-14, ability-ui split pass): `npm run typecheck:client`, `npm run test:smoke`, and `npm run test:multiplayer:quick` pass after separating creator vs loadout UIs.
 
 ## Session Close Notes (2026-02-13)
 

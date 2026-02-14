@@ -56,7 +56,9 @@ const CREATOR_STAT_LABELS: Readonly<Record<CreatorStatKey, string>> = Object.fre
 
 export class AbilityHud {
   private readonly root: HTMLDivElement;
-  private readonly menu: HTMLDivElement;
+  private readonly loadoutPanel: HTMLDivElement;
+  private readonly creatorPanel: HTMLDivElement;
+  private readonly cardGrid: HTMLDivElement;
   private readonly creatorStatus: HTMLParagraphElement;
   private readonly creatorBudgetLabel: HTMLSpanElement;
   private readonly creatorNameInput: HTMLInputElement;
@@ -72,7 +74,8 @@ export class AbilityHud {
   };
   private readonly creatorAttributeToggles = new Map<AbilityAttributeKey, HTMLInputElement>();
   private selectedSlot = 0;
-  private menuOpen = false;
+  private loadoutPanelOpen = false;
+  private creatorPanelOpen = false;
 
   private constructor(
     private readonly options: AbilityHudOptions,
@@ -128,28 +131,46 @@ export class AbilityHud {
       this.slotElements.push({ button, nameLabel });
     }
 
-    this.menu = documentRef.createElement("div");
-    this.menu.id = "ability-menu";
-    this.menu.className = "ability-menu-hidden";
+    this.loadoutPanel = documentRef.createElement("div");
+    this.loadoutPanel.id = "ability-loadout-panel";
+    this.loadoutPanel.className = "ability-panel ability-panel-hidden";
 
-    const menuHeader = documentRef.createElement("p");
-    menuHeader.className = "ability-menu-title";
-    menuHeader.textContent = "Ability Creator + Loadout";
-    this.menu.append(menuHeader);
+    const loadoutHeader = documentRef.createElement("p");
+    loadoutHeader.className = "ability-panel-title";
+    loadoutHeader.textContent = "Ability Inventory + Loadout";
+    this.loadoutPanel.append(loadoutHeader);
 
-    const menuHint = documentRef.createElement("p");
-    menuHint.className = "ability-menu-hint";
-    menuHint.textContent =
-      "Press B to close. Drag ability cards to slots. Creator currently outputs projectile abilities.";
-    this.menu.append(menuHint);
+    const loadoutHint = documentRef.createElement("p");
+    loadoutHint.className = "ability-panel-hint";
+    loadoutHint.textContent = "Press B to close. Drag cards to hotbar slots or click to equip.";
+    this.loadoutPanel.append(loadoutHint);
 
-    const creatorPanel = documentRef.createElement("section");
-    creatorPanel.className = "ability-creator-panel";
+    this.cardGrid = documentRef.createElement("div");
+    this.cardGrid.className = "ability-card-grid";
+    this.loadoutPanel.append(this.cardGrid);
+
+    this.creatorPanel = documentRef.createElement("div");
+    this.creatorPanel.id = "ability-creator-panel";
+    this.creatorPanel.className = "ability-panel ability-panel-hidden";
+
+    const creatorHeader = documentRef.createElement("p");
+    creatorHeader.className = "ability-panel-title";
+    creatorHeader.textContent = "Ability Creator";
+    this.creatorPanel.append(creatorHeader);
+
+    const creatorHint = documentRef.createElement("p");
+    creatorHint.className = "ability-panel-hint";
+    creatorHint.textContent =
+      "Press N to close. Creator currently outputs projectile abilities.";
+    this.creatorPanel.append(creatorHint);
+
+    const creatorBody = documentRef.createElement("section");
+    creatorBody.className = "ability-creator-panel";
 
     const creatorTitle = documentRef.createElement("p");
     creatorTitle.className = "ability-creator-title";
     creatorTitle.textContent = "Create Ability";
-    creatorPanel.append(creatorTitle);
+    creatorBody.append(creatorTitle);
 
     const creatorRow = documentRef.createElement("div");
     creatorRow.className = "ability-creator-row";
@@ -163,7 +184,7 @@ export class AbilityHud {
     this.creatorNameInput.value = CREATOR_DEFAULT_NAME;
     nameLabel.append(this.creatorNameInput);
     creatorRow.append(nameLabel);
-    creatorPanel.append(creatorRow);
+    creatorBody.append(creatorRow);
 
     const statGrid = documentRef.createElement("div");
     statGrid.className = "ability-creator-stat-grid";
@@ -171,7 +192,7 @@ export class AbilityHud {
     for (const statKey of statKeys) {
       statGrid.append(this.createStatControl(documentRef, statKey));
     }
-    creatorPanel.append(statGrid);
+    creatorBody.append(statGrid);
 
     const attributeSection = documentRef.createElement("div");
     attributeSection.className = "ability-creator-attributes";
@@ -195,7 +216,7 @@ export class AbilityHud {
       wrapper.append(checkbox, text);
       attributeSection.append(wrapper);
     }
-    creatorPanel.append(attributeSection);
+    creatorBody.append(attributeSection);
 
     const creatorFooter = documentRef.createElement("div");
     creatorFooter.className = "ability-creator-footer";
@@ -211,19 +232,15 @@ export class AbilityHud {
       this.submitCreatorDraft();
     });
     creatorFooter.append(createButton);
-    creatorPanel.append(creatorFooter);
+    creatorBody.append(creatorFooter);
 
     this.creatorStatus = documentRef.createElement("p");
     this.creatorStatus.className = "ability-creator-status";
-    creatorPanel.append(this.creatorStatus);
+    creatorBody.append(this.creatorStatus);
 
-    this.menu.append(creatorPanel);
+    this.creatorPanel.append(creatorBody);
 
-    const cardGrid = documentRef.createElement("div");
-    cardGrid.className = "ability-card-grid";
-    this.menu.append(cardGrid);
-
-    this.root.append(this.menu);
+    this.root.append(this.loadoutPanel, this.creatorPanel);
     documentRef.body.append(this.root);
 
     this.abilityCatalog.set(ABILITY_ID_NONE, {
@@ -244,7 +261,7 @@ export class AbilityHud {
     for (const staticAbility of getAllAbilityDefinitions()) {
       this.upsertAbility(staticAbility);
     }
-    this.rebuildAbilityCards(documentRef, cardGrid);
+    this.rebuildAbilityCards(documentRef, this.cardGrid);
 
     this.setHotbarAssignments(this.options.initialHotbarAssignments);
     this.setSelectedSlot(this.options.initialSelectedSlot ?? 0, false);
@@ -256,19 +273,38 @@ export class AbilityHud {
     return new AbilityHud(options, documentRef);
   }
 
-  public toggleMenu(): boolean {
-    this.setMenuOpen(!this.menuOpen);
-    return this.menuOpen;
+  public toggleLoadoutPanel(): boolean {
+    this.setLoadoutPanelOpen(!this.loadoutPanelOpen);
+    return this.loadoutPanelOpen;
   }
 
-  public setMenuOpen(open: boolean): void {
-    this.menuOpen = open;
-    this.menu.classList.toggle("ability-menu-hidden", !open);
-    this.menu.classList.toggle("ability-menu-visible", open);
+  public setLoadoutPanelOpen(open: boolean): void {
+    this.loadoutPanelOpen = open;
+    this.loadoutPanel.classList.toggle("ability-panel-hidden", !open);
+    this.loadoutPanel.classList.toggle("ability-panel-visible", open);
   }
 
-  public isMenuOpen(): boolean {
-    return this.menuOpen;
+  public isLoadoutPanelOpen(): boolean {
+    return this.loadoutPanelOpen;
+  }
+
+  public toggleCreatorPanel(): boolean {
+    this.setCreatorPanelOpen(!this.creatorPanelOpen);
+    return this.creatorPanelOpen;
+  }
+
+  public setCreatorPanelOpen(open: boolean): void {
+    this.creatorPanelOpen = open;
+    this.creatorPanel.classList.toggle("ability-panel-hidden", !open);
+    this.creatorPanel.classList.toggle("ability-panel-visible", open);
+  }
+
+  public isCreatorPanelOpen(): boolean {
+    return this.creatorPanelOpen;
+  }
+
+  public isAnyPanelOpen(): boolean {
+    return this.loadoutPanelOpen || this.creatorPanelOpen;
   }
 
   public setSelectedSlot(slot: number, emitSelectionEvent: boolean): void {
@@ -296,11 +332,8 @@ export class AbilityHud {
     this.abilityCatalog.set(ability.id, ability);
     const card = this.abilityCards.get(ability.id);
     if (!card) {
-      const grid = this.menu.querySelector(".ability-card-grid");
-      if (grid instanceof HTMLDivElement) {
-        const newCard = this.createAbilityCard(this.root.ownerDocument, ability.id);
-        grid.append(newCard);
-      }
+      const newCard = this.createAbilityCard(this.root.ownerDocument, ability.id);
+      this.cardGrid.append(newCard);
       return;
     }
     this.renderAbilityCard(card, ability.id);
@@ -363,7 +396,7 @@ export class AbilityHud {
       return;
     }
     this.creatorPoints[statKey] = next;
-    const valueNode = this.menu.querySelector(`[data-stat="${statKey}"]`);
+    const valueNode = this.creatorPanel.querySelector(`[data-stat="${statKey}"]`);
     if (valueNode) {
       valueNode.textContent = String(next);
     }

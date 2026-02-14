@@ -6,7 +6,8 @@ export class InputController {
   private jumpQueued = false;
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
-  private abilityMenuToggleQueued = false;
+  private abilityLoadoutToggleQueued = false;
+  private abilityCreatorToggleQueued = false;
   private primaryActionHeld = false;
   private primaryActionQueued = false;
   private selectedHotbarSlot = 0;
@@ -98,9 +99,15 @@ export class InputController {
     return queued;
   }
 
-  public consumeAbilityMenuToggle(): boolean {
-    const queued = this.abilityMenuToggleQueued;
-    this.abilityMenuToggleQueued = false;
+  public consumeAbilityLoadoutToggle(): boolean {
+    const queued = this.abilityLoadoutToggleQueued;
+    this.abilityLoadoutToggleQueued = false;
+    return queued;
+  }
+
+  public consumeAbilityCreatorToggle(): boolean {
+    const queued = this.abilityCreatorToggleQueued;
+    this.abilityCreatorToggleQueued = false;
     return queued;
   }
 
@@ -130,7 +137,9 @@ export class InputController {
     } else if (event.code === "KeyC" && !event.repeat) {
       this.cspToggleQueued = true;
     } else if (event.code === "KeyB" && !event.repeat) {
-      this.abilityMenuToggleQueued = true;
+      this.abilityLoadoutToggleQueued = true;
+    } else if (event.code === "KeyN" && !event.repeat) {
+      this.abilityCreatorToggleQueued = true;
     } else if (!event.repeat) {
       const slot = this.mapDigitCodeToHotbarSlot(event.code);
       if (slot !== null) {

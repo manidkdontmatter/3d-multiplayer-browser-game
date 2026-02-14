@@ -67,11 +67,11 @@ Key runtime modules:
 - Procedural clips remain only as an internal fallback path if imported/retargeted clips are unavailable.
 - Root motion is disabled by default in animation policy so physics/netcode remain movement-authoritative; per-clip root-motion opt-in is supported for future specific clips.
 - Ability/shared gameplay scaffolding in `src/shared/abilities.ts` now includes creator draft validation + profile synthesis logic (category, stat-point budget, attributes, projectile profile synthesis, wire helpers).
-- Client now includes an in-game ability creator/loadout HUD (`src/client/ui/AbilityHud.ts`) with:
-  - hotbar slots (`1-5`), slot selection, and drag/drop assignment
-  - `B`-toggle creator panel
-  - stat-point steppers, attribute toggles, and create/equip submission
-  - server result status feedback
+- Client now includes separated in-game ability UIs (`src/client/ui/AbilityHud.ts`):
+  - persistent hotbar slots (`1-5`), slot selection, and drag/drop assignment
+  - inventory/loadout panel (`B`) for assigning equipped abilities
+  - creator panel (`N`) for stat-point allocation, attributes, and create/equip submission
+  - server result status feedback reflected in creator UI
 - Server now runs a basic authoritative projectile combat loop (spawn, travel, collision, damage, despawn, respawn) in `src/server/GameSimulation.ts`.
 - Ability creation is now server-authoritative: client submits drafts as `AbilityCreateCommand`; server validates/builds runtime abilities, then sends authoritative catalog/loadout/result messages back to the owning client.
 - Client startup now uses a staged boot pipeline:

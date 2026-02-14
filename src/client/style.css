@@ -200,11 +200,12 @@ body {
   font-weight: 700;
 }
 
-#ability-menu {
+.ability-panel {
   position: absolute;
-  left: 12px;
   bottom: 84px;
-  width: min(520px, calc(100vw - 24px));
+  width: min(460px, calc(100vw - 24px));
+  max-height: min(62vh, 480px);
+  overflow-y: auto;
   border-radius: 12px;
   border: 1px solid rgba(146, 202, 255, 0.55);
   background: rgba(7, 21, 38, 0.84);
@@ -212,29 +213,35 @@ body {
   padding: 12px;
   pointer-events: auto;
   transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
-}
-
-.ability-menu-hidden {
+.ability-panel-hidden {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transform: translateY(8px);
 }
 
-.ability-menu-visible {
+.ability-panel-visible {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
 }
 
-.ability-menu-title {
+#ability-loadout-panel {
+  left: 12px;
+}
+
+#ability-creator-panel {
+  right: 12px;
+}
+
+.ability-panel-title {
   margin: 0;
   color: #8ff4cb;
   font-size: 14px;
   font-weight: 700;
 }
 
-.ability-menu-hint {
+.ability-panel-hint {
   margin: 3px 0 0;
   color: #d5e7ff;
   font-size: 11px;
@@ -420,4 +427,18 @@ body {
   font-size: 11px;
   line-height: 1.35;
   min-height: 16px;
+}
+
+@media (max-width: 980px) {
+  #ability-loadout-panel,
+  #ability-creator-panel {
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+
+  #ability-creator-panel {
+    top: 96px;
+    bottom: auto;
+  }
 }
