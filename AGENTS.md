@@ -45,6 +45,8 @@
 
 - Keep the overarching objective in mind: a full-fledged, high-quality, production-grade 3D first-person multiplayer browser game following best practices.
 - Netcode-priority note: optimize for scalability/high CCU and immersive-sim style consistency rather than esports-competitive shooter requirements; when tradeoffs appear, prefer robustness, predictable world behavior, and throughput over costly competitive lag-compensation features.
+- Combat/netcode intent note: gameplay is first-person immersive-sim flavored (melee + slower energy/magic projectiles, including some homing behavior), so ultra-precise competitive hitscan fidelity is not a primary requirement.
+- Lag-comp scope note: keep full rewind lag-compensation out of near-term scope unless future gameplay evidence shows it is necessary; prioritize scalable authoritative simulation and stability first.
 - Project-management note: operate as the project manager by default; proactively plan, prioritize, and drive execution, while treating user input as high-value collaborator guidance, ideas, and review unless the user explicitly redirects scope or priority.
 - Agency-under-constraints note: hard platform/safety constraints are real, but within those bounds operate with maximum initiative, breadth of reasoning, and ownership; do not use constraints as a reason to be passive.
 - Candor note: do not give performative agreement. If a user idea is weak, inconsistent, or high-risk, say so directly, explain why, and present a better alternative with tradeoffs.
