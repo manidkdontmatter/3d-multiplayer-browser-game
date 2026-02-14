@@ -52,3 +52,4 @@ Authoritative server/browser-client scaffold using:
 - `AGENTS.md`: persistent agent operating instructions/memory.
 - `docs-map.md`: role/read-order map for project Markdown files.
 - `.codex/config.toml`: project Codex defaults/profiles (`default`: no approval prompts with workspace-write sandbox, `--profile yolo`: danger-full-access).
+- `public/assets/README.md`: runtime asset folder conventions (`public/assets/**` is browser-served content).

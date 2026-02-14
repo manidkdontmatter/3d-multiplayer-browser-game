@@ -53,6 +53,8 @@ Key runtime modules:
 
 ## Current Behavioral Notes
 
+- Runtime character assets now live under `public/assets/models/characters/**` and are loaded via the manifest in `src/client/assets/assetManifest.ts`.
+- Remote player rendering now uses the preloaded male superhero GLTF rig by default, with capsule fallback if the asset is unavailable.
 - Client startup now uses a staged boot pipeline:
   - optional manifest-driven preload pass (`ASSET_MANIFEST`) through Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`)
   - physics/network initialization progress phases
@@ -84,6 +86,7 @@ Key runtime modules:
 
 - `src/client`: browser client runtime and rendering
 - `src/client/assets`: asset manifest and preload/cache utilities
+- `public/assets`: browser-served runtime assets (models/textures/audio)
 - `src/server`: authoritative simulation and network server
 - `src/shared`: shared schemas/config/gameplay helpers
 - `scripts`: test/automation scripts

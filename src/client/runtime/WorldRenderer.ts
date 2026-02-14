@@ -1,5 +1,6 @@
 import {
   AmbientLight,
+  Box3,
   BoxGeometry,
   CapsuleGeometry,
   Color,
@@ -8,13 +9,21 @@ import {
   Group,
   Mesh,
   MeshStandardMaterial,
+  Object3D,
   PerspectiveCamera,
   Scene,
   Vector3,
   WebGLRenderer
 } from "three";
+import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { CHARACTER_SUPERHERO_MALE_ASSET_ID } from "../assets/assetManifest";
+import { getLoadedAsset } from "../assets/assetLoader";
 import { PLAYER_EYE_HEIGHT, STATIC_WORLD_BLOCKS } from "../../shared/index";
 import type { PlayerPose, RemotePlayerState } from "./types";
+
+const REMOTE_CHARACTER_TARGET_HEIGHT = PLAYER_EYE_HEIGHT + 0.08;
+const MIN_MODEL_HEIGHT = 1e-4;
 
 export class WorldRenderer {
   private readonly renderer: WebGLRenderer;
@@ -23,6 +32,7 @@ export class WorldRenderer {
   private readonly remotePlayers = new Map<number, Group>();
   private readonly platforms = new Map<number, Mesh>();
   private readonly cameraForward = new Vector3(0, 0, -1);
+  private readonly remotePlayerTemplate: Group | null;
 
   public constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -40,6 +50,7 @@ export class WorldRenderer {
     this.camera = new PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.01, 600);
 
     this.initializeScene();
+    this.remotePlayerTemplate = this.createRemotePlayerTemplate();
   }
 
   public resize(width: number, height: number): void {
@@ -158,6 +169,10 @@ export class WorldRenderer {
   }
 
   private createRemotePlayerMesh(): Group {
+    if (this.remotePlayerTemplate) {
+      return cloneSkeleton(this.remotePlayerTemplate) as Group;
+    }
+
     const root = new Group();
 
     const capsuleRadius = 0.38;
@@ -187,5 +202,35 @@ export class WorldRenderer {
     root.add(visor);
 
     return root;
+  }
+
+  private createRemotePlayerTemplate(): Group | null {
+    const gltf = getLoadedAsset<GLTF>(CHARACTER_SUPERHERO_MALE_ASSET_ID);
+    if (!gltf?.scene) {
+      return null;
+    }
+
+    const root = new Group();
+    const model = cloneSkeleton(gltf.scene) as Object3D;
+    this.normalizeModelToGround(model, REMOTE_CHARACTER_TARGET_HEIGHT);
+    root.add(model);
+    return root;
+  }
+
+  private normalizeModelToGround(model: Object3D, targetHeight: number): void {
+    const initialBounds = new Box3().setFromObject(model);
+    const initialHeight = Math.max(
+      initialBounds.max.y - initialBounds.min.y,
+      MIN_MODEL_HEIGHT
+    );
+    const uniformScale = targetHeight / initialHeight;
+    model.scale.multiplyScalar(uniformScale);
+
+    const scaledBounds = new Box3().setFromObject(model);
+    const centerX = (scaledBounds.min.x + scaledBounds.max.x) * 0.5;
+    const centerZ = (scaledBounds.min.z + scaledBounds.max.z) * 0.5;
+    model.position.x -= centerX;
+    model.position.y -= scaledBounds.min.y;
+    model.position.z -= centerZ;
   }
 }

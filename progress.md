@@ -41,6 +41,13 @@
 - Client boot now has a staged loading overlay with progress bar (`#boot-overlay`) that tracks manifest preload and startup phases (physics -> network -> ready).
 - Asset pipeline now uses Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`) through `src/client/assets/assetLoader.ts`, with a runtime cache for preloaded assets.
 - Latest verification (2026-02-13, asset-loading pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after boot overlay + asset preloader integration.
+- Incoming root-level `3d-models/` pack was reorganized into `public/assets/models/characters/superhero/` so runtime URLs are stable and root stays clean.
+- Added a runtime asset structure note at `public/assets/README.md`.
+- `ASSET_MANIFEST` now registers only the active superhero male rig for preload/use.
+- Character texture budget was reduced to max `720x720` for browser suitability.
+- Safe color/albedo textures were converted from PNG to JPG; normal/roughness maps remained PNG to preserve data fidelity.
+- Remote players now render with the preloaded male GLTF rig (static T-pose for now) and fall back to capsule meshes if model load/template setup fails.
+- Cleaned model package references by updating glTF URIs to canonical texture names and removing unneeded filename-alias duplicates.
 - Validation loop optimized for faster iteration:
   - Typecheck now uses incremental TS build info caching (`tsconfig.client.tsbuildinfo`, `tsconfig.server.tsbuildinfo`).
   - `smoke-e2e` and `multiplayer-e2e` now wait on actual port readiness instead of fixed startup sleeps.
@@ -48,6 +55,7 @@
   - Added `verify:quick`, `verify:quick:standalone`, and `test:multiplayer:quick` scripts.
   - Multiplayer script now supports skipping sprint/jump/reconnect checks for quick passes via env flags.
 - Latest verification (2026-02-14, test-optimization pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, `npm run test:multiplayer`, and `npm run verify:quick:standalone` all pass.
+- Latest verification (2026-02-14, character-asset integration pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer:quick` pass after folder reorg + male GLTF remote rendering integration.
 
 ## Session Close Notes (2026-02-13)
 
@@ -61,4 +69,5 @@
 - Add combat/state channel scaffolding for next gameplay systems.
 - Expand automated tests further with combat-state assertions and longer-duration stability checks.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.
-- When character assets are selected, register them in `ASSET_MANIFEST` (with stable IDs/labels) and switch remote/local rendering from capsule placeholders to loaded GLTF rigs.
+- Add animation clips/state machine for humanoid rigs (idle, locomotion, jump) and blend between states for local + remote players.
+- Evaluate GLTF optimization pass (meshopt/texture compression and possible `.glb` packing) before adding more character/prop assets.
