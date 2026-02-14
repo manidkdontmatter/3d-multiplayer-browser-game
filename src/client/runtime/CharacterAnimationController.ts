@@ -28,6 +28,7 @@ export interface CharacterAnimationControllerOptions {
     jump: AnimationClip;
     upperCast: AnimationClip;
   }>;
+  crossfadeSeconds?: number;
   rootMotion?: {
     defaultEnabled?: boolean;
     perClip?: Record<string, boolean>;
@@ -38,6 +39,7 @@ type BoneOffsetTrack = Array<[x: number, y: number, z: number]>;
 
 const PRIMARY_UPPER_BODY_ACTION_ID = 1;
 const SPEED_SMOOTH_RATE = 10;
+const DEFAULT_ANIMATION_CROSSFADE_SECONDS = 0.1;
 const ROOT_MOTION_BONE_NAMES = new Set(["root", "armature", "pelvis", "mixamorig:hips"]);
 const UPPER_BODY_BONE_PREFIXES = [
   "spine_",
@@ -62,6 +64,7 @@ export class CharacterAnimationController {
   private readonly composedQuat = new Quaternion();
   private readonly rootMotionDefaultEnabled: boolean;
   private readonly rootMotionPerClip: Readonly<Record<string, boolean>>;
+  private readonly animationCrossfadeSeconds: number;
   private readonly locomotionActions: {
     idle: AnimationAction;
     walk: AnimationAction;
@@ -69,14 +72,25 @@ export class CharacterAnimationController {
     jump: AnimationAction;
   };
   private readonly upperBodyActions = new Map<number, AnimationAction>();
+  private readonly locomotionWeights = {
+    idle: 1,
+    walk: 0,
+    run: 0,
+    jump: 0
+  };
   private smoothedHorizontalSpeed = 0;
   private lastUpperBodyActionNonce = 0;
   private activeUpperBodyAction: AnimationAction | null = null;
+  private upperBodyFadeOutPending = false;
 
   public constructor(root: Object3D, options: CharacterAnimationControllerOptions = {}) {
     this.mixer = new AnimationMixer(root);
     this.rootMotionDefaultEnabled = options.rootMotion?.defaultEnabled ?? false;
     this.rootMotionPerClip = options.rootMotion?.perClip ?? {};
+    this.animationCrossfadeSeconds = Math.max(
+      1 / 240,
+      options.crossfadeSeconds ?? DEFAULT_ANIMATION_CROSSFADE_SECONDS
+    );
     this.captureBindPose(root);
 
     const clipOverrides = options.clips ?? {};
@@ -103,7 +117,7 @@ export class CharacterAnimationController {
 
     const castAction = this.mixer.clipAction(this.applyRootMotionPolicy(maskedCastClip, "upperCast"));
     castAction.setLoop(LoopOnce, 1);
-    castAction.clampWhenFinished = false;
+    castAction.clampWhenFinished = true;
     castAction.setEffectiveWeight(0);
     this.upperBodyActions.set(PRIMARY_UPPER_BODY_ACTION_ID, castAction);
   }
@@ -121,39 +135,63 @@ export class CharacterAnimationController {
     const speedSmoothing = 1 - Math.exp(-SPEED_SMOOTH_RATE * dt);
     this.smoothedHorizontalSpeed += (targetSpeed - this.smoothedHorizontalSpeed) * speedSmoothing;
 
-    if (!input.grounded) {
-      this.locomotionActions.idle.setEffectiveWeight(0);
-      this.locomotionActions.walk.setEffectiveWeight(0);
-      this.locomotionActions.run.setEffectiveWeight(0);
-      this.locomotionActions.jump.setEffectiveWeight(1);
-      this.locomotionActions.jump.setEffectiveTimeScale(input.verticalSpeed >= 0 ? 1.05 : 0.9);
-      return;
+    let targetIdleWeight = 0;
+    let targetWalkWeight = 0;
+    let targetRunWeight = 0;
+    let targetJumpWeight = 0;
+
+    if (input.grounded) {
+      const moveBlend = this.clamp(
+        (this.smoothedHorizontalSpeed - 0.15) / (PLAYER_WALK_SPEED - 0.15),
+        0,
+        1
+      );
+      const runBlend = this.clamp(
+        (this.smoothedHorizontalSpeed - PLAYER_WALK_SPEED * 0.85) /
+          (PLAYER_SPRINT_SPEED - PLAYER_WALK_SPEED * 0.85),
+        0,
+        1
+      );
+      targetIdleWeight = 1 - moveBlend;
+      targetWalkWeight = moveBlend * (1 - runBlend);
+      targetRunWeight = moveBlend * runBlend;
+    } else {
+      targetJumpWeight = 1;
     }
 
-    const moveBlend = this.clamp(
-      (this.smoothedHorizontalSpeed - 0.15) / (PLAYER_WALK_SPEED - 0.15),
-      0,
-      1
+    const maxBlendStep = dt / this.animationCrossfadeSeconds;
+    this.locomotionWeights.idle = this.moveToward(
+      this.locomotionWeights.idle,
+      targetIdleWeight,
+      maxBlendStep
     );
-    const runBlend = this.clamp(
-      (this.smoothedHorizontalSpeed - PLAYER_WALK_SPEED * 0.85) /
-        (PLAYER_SPRINT_SPEED - PLAYER_WALK_SPEED * 0.85),
-      0,
-      1
+    this.locomotionWeights.walk = this.moveToward(
+      this.locomotionWeights.walk,
+      targetWalkWeight,
+      maxBlendStep
     );
-    const idleWeight = 1 - moveBlend;
-    const walkWeight = moveBlend * (1 - runBlend);
-    const runWeight = moveBlend * runBlend;
+    this.locomotionWeights.run = this.moveToward(
+      this.locomotionWeights.run,
+      targetRunWeight,
+      maxBlendStep
+    );
+    this.locomotionWeights.jump = this.moveToward(
+      this.locomotionWeights.jump,
+      targetJumpWeight,
+      maxBlendStep
+    );
+    this.normalizeLocomotionWeights();
 
-    this.locomotionActions.idle.setEffectiveWeight(idleWeight);
-    this.locomotionActions.walk.setEffectiveWeight(walkWeight);
-    this.locomotionActions.run.setEffectiveWeight(runWeight);
-    this.locomotionActions.jump.setEffectiveWeight(0);
+    this.locomotionActions.idle.setEffectiveWeight(this.locomotionWeights.idle);
+    this.locomotionActions.walk.setEffectiveWeight(this.locomotionWeights.walk);
+    this.locomotionActions.run.setEffectiveWeight(this.locomotionWeights.run);
+    this.locomotionActions.jump.setEffectiveWeight(this.locomotionWeights.jump);
 
     const walkScale = this.clamp(this.smoothedHorizontalSpeed / PLAYER_WALK_SPEED, 0.72, 1.32);
     const runScale = this.clamp(this.smoothedHorizontalSpeed / PLAYER_SPRINT_SPEED, 0.85, 1.28);
     this.locomotionActions.walk.setEffectiveTimeScale(walkScale);
     this.locomotionActions.run.setEffectiveTimeScale(runScale);
+    this.locomotionActions.jump.setEffectiveTimeScale(input.verticalSpeed >= 0 ? 1.05 : 0.9);
   }
 
   private updateUpperBodyActions(input: CharacterAnimationUpdateInput): void {
@@ -170,14 +208,15 @@ export class CharacterAnimationController {
       return;
     }
     if (this.activeUpperBodyAction && this.activeUpperBodyAction !== action) {
-      this.activeUpperBodyAction.stop();
+      this.activeUpperBodyAction.fadeOut(this.animationCrossfadeSeconds);
     }
     action.reset();
     action.enabled = true;
-    action.setEffectiveWeight(1);
-    action.fadeIn(0.06);
+    action.setEffectiveWeight(0);
+    action.fadeIn(this.animationCrossfadeSeconds);
     action.play();
     this.activeUpperBodyAction = action;
+    this.upperBodyFadeOutPending = false;
   }
 
   private cleanupFinishedUpperBodyAction(): void {
@@ -187,9 +226,18 @@ export class CharacterAnimationController {
     if (this.activeUpperBodyAction.isRunning()) {
       return;
     }
-    this.activeUpperBodyAction.fadeOut(0.08);
+    if (!this.upperBodyFadeOutPending) {
+      this.activeUpperBodyAction.fadeOut(this.animationCrossfadeSeconds);
+      this.upperBodyFadeOutPending = true;
+      return;
+    }
+    if (this.activeUpperBodyAction.getEffectiveWeight() > 0.001) {
+      return;
+    }
     this.activeUpperBodyAction.stop();
+    this.activeUpperBodyAction.enabled = false;
     this.activeUpperBodyAction = null;
+    this.upperBodyFadeOutPending = false;
   }
 
   private configureLoopingAction(clip: AnimationClip, clipName: string): AnimationAction {
@@ -602,5 +650,35 @@ export class CharacterAnimationController {
 
   private clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
+  }
+
+  private moveToward(current: number, target: number, maxDelta: number): number {
+    if (maxDelta <= 0) {
+      return current;
+    }
+    const delta = target - current;
+    if (Math.abs(delta) <= maxDelta) {
+      return target;
+    }
+    return current + Math.sign(delta) * maxDelta;
+  }
+
+  private normalizeLocomotionWeights(): void {
+    const total =
+      this.locomotionWeights.idle +
+      this.locomotionWeights.walk +
+      this.locomotionWeights.run +
+      this.locomotionWeights.jump;
+    if (total <= 1e-5) {
+      this.locomotionWeights.idle = 1;
+      this.locomotionWeights.walk = 0;
+      this.locomotionWeights.run = 0;
+      this.locomotionWeights.jump = 0;
+      return;
+    }
+    this.locomotionWeights.idle /= total;
+    this.locomotionWeights.walk /= total;
+    this.locomotionWeights.run /= total;
+    this.locomotionWeights.jump /= total;
   }
 }
