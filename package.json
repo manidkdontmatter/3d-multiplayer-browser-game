@@ -18,6 +18,7 @@
     "test:smoke:fast": "node scripts/smoke-fast.js",
     "test:multiplayer": "node scripts/multiplayer-e2e.js",
     "test:multiplayer:csp": "node --input-type=module -e \"process.env.E2E_CSP='1'; await import('./scripts/multiplayer-e2e.js');\"",
+    "test:multiplayer:chaos": "node --input-type=module -e \"process.env.E2E_CSP='1'; process.env.E2E_NETSIM='1'; process.env.E2E_MIN_REMOTE_MOVEMENT='0.4'; process.env.E2E_REMOTE_MOVEMENT_TIMEOUT_MS='22000'; process.env.E2E_MIN_SPRINT_MOVEMENT='1.0'; process.env.E2E_MIN_JUMP_HEIGHT='0.35'; await import('./scripts/multiplayer-e2e.js');\"",
     "test:tick": "tsx scripts/tick-consistency.ts"
   },
   "engines": {

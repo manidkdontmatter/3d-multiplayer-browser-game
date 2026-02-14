@@ -24,7 +24,8 @@ export const playerEntitySchema = defineSchema({
   y: { type: Binary.Float32, interp: true },
   z: { type: Binary.Float32, interp: true },
   yaw: { type: Binary.Rotation32, interp: true },
-  pitch: { type: Binary.Rotation32, interp: true }
+  pitch: { type: Binary.Rotation32, interp: true },
+  serverTick: Binary.UInt32
 });
 
 export const identityMessageSchema = defineSchema({
@@ -54,6 +55,7 @@ export const platformEntitySchema = defineSchema({
   y: { type: Binary.Float32, interp: true },
   z: { type: Binary.Float32, interp: true },
   yaw: { type: Binary.Rotation32, interp: true },
+  serverTick: Binary.UInt32,
   halfX: Binary.Float32,
   halfY: Binary.Float32,
   halfZ: Binary.Float32
@@ -86,6 +88,7 @@ export interface PlayerEntity {
   z: number;
   yaw: number;
   pitch: number;
+  serverTick: number;
 }
 
 export interface IdentityMessage {
@@ -119,6 +122,7 @@ export interface PlatformEntity {
   y: number;
   z: number;
   yaw: number;
+  serverTick: number;
   halfX: number;
   halfY: number;
   halfZ: number;

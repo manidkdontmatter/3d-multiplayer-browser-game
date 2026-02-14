@@ -224,8 +224,10 @@ export class GameClientApp {
     const cspLabel = this.cspEnabled ? (cspActive ? "on" : "auto-off") : "off";
     const smoothingMagnitude = this.getReconciliationOffsetMagnitude();
     const yawErrorDegrees = (this.lastReconcileYawError * 180) / Math.PI;
+    const interpDelayMs = this.network.getInterpolationDelayMs();
+    const ackJitterMs = this.network.getAckJitterMs();
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -275,7 +277,8 @@ export class GameClientApp {
           x: p.x,
           y: p.y,
           z: p.z,
-          yaw: p.yaw
+          yaw: p.yaw,
+          serverTick: p.serverTick
         })),
         remotePlayers: this.network.getRemotePlayers().map((p) => ({
           nid: p.nid,
@@ -283,8 +286,13 @@ export class GameClientApp {
           y: p.y,
           z: p.z,
           yaw: p.yaw,
-          pitch: p.pitch
+          pitch: p.pitch,
+          serverTick: p.serverTick
         })),
+        netTiming: {
+          interpolationDelayMs: this.network.getInterpolationDelayMs(),
+          ackJitterMs: this.network.getAckJitterMs()
+        },
         reconciliation: {
           lastError: {
             position: this.lastReconcilePositionError,

@@ -34,6 +34,7 @@ type PlayerEntity = {
   z: number;
   yaw: number;
   pitch: number;
+  serverTick: number;
   vy: number;
   vx: number;
   vz: number;
@@ -53,6 +54,7 @@ type PlatformEntity = {
   y: number;
   z: number;
   yaw: number;
+  serverTick: number;
   halfX: number;
   halfY: number;
   halfZ: number;
@@ -128,6 +130,7 @@ export class GameSimulation {
       z: spawn.z,
       yaw: 0,
       pitch: 0,
+      serverTick: this.tickNumber,
       vy: 0,
       vx: 0,
       vz: 0,
@@ -306,6 +309,7 @@ export class GameSimulation {
       player.x = moved.x;
       player.y = moved.y + PLAYER_CAMERA_OFFSET_Y;
       player.z = moved.z;
+      player.serverTick = this.tickNumber;
 
       this.syncUserView(userId, player);
       this.queueInputAck(userId, player, carry.yaw);
@@ -353,6 +357,7 @@ export class GameSimulation {
         y: pose.y,
         z: pose.z,
         yaw: pose.yaw,
+        serverTick: this.tickNumber,
         halfX: definition.halfX,
         halfY: definition.halfY,
         halfZ: definition.halfZ,
@@ -381,6 +386,7 @@ export class GameSimulation {
       platform.y = currentPose.y;
       platform.z = currentPose.z;
       platform.yaw = currentPose.yaw;
+      platform.serverTick = this.tickNumber;
 
       platform.body.setTranslation({ x: platform.x, y: platform.y, z: platform.z }, true);
       platform.body.setRotation(

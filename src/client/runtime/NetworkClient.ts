@@ -33,17 +33,41 @@ export interface ReconciliationFrame {
 
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
+const SERVER_TICK_INTERVAL_MS = 1000 / SERVER_TICK_RATE;
+const INTERPOLATION_DELAY_MIN_MS = 60;
+const INTERPOLATION_DELAY_MAX_MS = 220;
+const INTERPOLATION_DELAY_BASE_TICKS = 2;
+const INTERPOLATION_DELAY_SMOOTHING = 0.15;
+const ACK_JITTER_SMOOTHING = 0.15;
+const ACK_SIMULATION_BUFFER_LIMIT = 64;
+
+interface NetSimulationConfig {
+  enabled: boolean;
+  ackDropRate: number;
+  ackDelayMs: number;
+  ackJitterMs: number;
+}
+
+interface BufferedAck {
+  readyAtMs: number;
+  message: InputAckMessage;
+}
 
 export class NetworkClient {
   private readonly client = new Client(ncontext, WebSocketClientAdapter, SERVER_TICK_RATE);
   private readonly interpolator = new Interpolator(this.client);
   private readonly entities = new Map<number, Record<string, unknown>>();
+  private readonly netSimulation = this.resolveNetSimulationConfig();
+  private readonly bufferedAcks: BufferedAck[] = [];
   private localPlayerNid: number | null = null;
   private connected = false;
   private nextCommandSequence = 0;
   private readonly pendingInputs: PendingInput[] = [];
   private latestAck: ReconciliationFrame["ack"] | null = null;
   private lastAckSequence: number | null = null;
+  private lastAckArrivalAtMs: number | null = null;
+  private ackJitterMs = 0;
+  private interpolationDelayMs = 100;
   private serverGroundedPlatformPid = -1;
   private lastSentYaw = 0;
   private hasSentYaw = false;
@@ -52,8 +76,12 @@ export class NetworkClient {
     this.client.setDisconnectHandler(() => {
       this.connected = false;
       this.pendingInputs.length = 0;
+      this.bufferedAcks.length = 0;
       this.latestAck = null;
       this.lastAckSequence = null;
+      this.lastAckArrivalAtMs = null;
+      this.ackJitterMs = 0;
+      this.interpolationDelayMs = 100;
       this.serverGroundedPlatformPid = -1;
       this.lastSentYaw = 0;
       this.hasSentYaw = false;
@@ -90,8 +118,8 @@ export class NetworkClient {
     }
 
     this.readMessages();
-
-    this.applyInterpolatedFrames(this.interpolator.getInterpolatedState(100));
+    this.updateInterpolationDelay();
+    this.applyInterpolatedFrames(this.interpolator.getInterpolatedState(this.interpolationDelayMs));
 
     this.nextCommandSequence = (this.nextCommandSequence + 1) & 0xffff;
     const sequence = this.nextCommandSequence;
@@ -175,6 +203,14 @@ export class NetworkClient {
     return this.serverGroundedPlatformPid >= 0;
   }
 
+  public getInterpolationDelayMs(): number {
+    return this.interpolationDelayMs;
+  }
+
+  public getAckJitterMs(): number {
+    return this.ackJitterMs;
+  }
+
   public syncSentYaw(yaw: number): void {
     this.lastSentYaw = yaw;
     this.hasSentYaw = true;
@@ -209,6 +245,7 @@ export class NetworkClient {
   private readMessages(): void {
     const messages = (this.client.network as { messages?: unknown[] }).messages;
     if (!messages || messages.length === 0) {
+      this.processBufferedAcks();
       return;
     }
 
@@ -220,48 +257,104 @@ export class NetworkClient {
         continue;
       }
       if (message?.ntype === NType.InputAckMessage) {
-        if (
-          this.lastAckSequence !== null &&
-          !this.isSequenceAheadOf(this.lastAckSequence, message.sequence)
-        ) {
-          continue;
-        }
-        this.lastAckSequence = message.sequence;
-        const platformYawDelta = Number.isFinite(message.platformYawDelta)
-          ? message.platformYawDelta
-          : 0;
-        let accumulatedPlatformYawDelta = platformYawDelta;
-        if (
-          this.latestAck &&
-          this.latestAck.groundedPlatformPid >= 0 &&
-          this.latestAck.groundedPlatformPid === message.groundedPlatformPid
-        ) {
-          accumulatedPlatformYawDelta = normalizeYaw(
-            this.latestAck.platformYawDelta + platformYawDelta
-          );
-        }
-        this.latestAck = {
-          sequence: message.sequence,
-          serverTick: message.serverTick,
-          x: message.x,
-          y: message.y,
-          z: message.z,
-          yaw: message.yaw,
-          pitch: message.pitch,
-          vx: message.vx,
-          vy: message.vy,
-          vz: message.vz,
-          grounded: message.grounded,
-          groundedPlatformPid: message.groundedPlatformPid,
-          platformYawDelta: accumulatedPlatformYawDelta
-        };
-        this.serverGroundedPlatformPid = message.groundedPlatformPid;
-        this.trimPendingInputs(message.sequence);
+        this.enqueueAckMessage(message);
       }
     }
 
     // Drain processed messages without allocating a new array in this hot path.
     messages.length = 0;
+    this.processBufferedAcks();
+  }
+
+  private enqueueAckMessage(message: InputAckMessage): void {
+    if (!this.netSimulation.enabled) {
+      this.applyAckMessage(message);
+      return;
+    }
+
+    if (Math.random() < this.netSimulation.ackDropRate) {
+      return;
+    }
+
+    const jitterOffset =
+      this.netSimulation.ackJitterMs > 0
+        ? (Math.random() * 2 - 1) * this.netSimulation.ackJitterMs
+        : 0;
+    const readyAtMs = performance.now() + Math.max(0, this.netSimulation.ackDelayMs + jitterOffset);
+    this.bufferedAcks.push({
+      readyAtMs,
+      message: { ...message }
+    });
+
+    if (this.bufferedAcks.length > ACK_SIMULATION_BUFFER_LIMIT) {
+      this.bufferedAcks.shift();
+    }
+  }
+
+  private processBufferedAcks(): void {
+    if (this.bufferedAcks.length === 0) {
+      return;
+    }
+
+    const now = performance.now();
+    const due: BufferedAck[] = [];
+    const pending: BufferedAck[] = [];
+    for (const buffered of this.bufferedAcks) {
+      if (buffered.readyAtMs <= now) {
+        due.push(buffered);
+      } else {
+        pending.push(buffered);
+      }
+    }
+    this.bufferedAcks.length = 0;
+    this.bufferedAcks.push(...pending);
+
+    due.sort((a, b) => a.readyAtMs - b.readyAtMs);
+    for (const buffered of due) {
+      this.applyAckMessage(buffered.message);
+    }
+  }
+
+  private applyAckMessage(message: InputAckMessage): void {
+    if (
+      this.lastAckSequence !== null &&
+      !this.isSequenceAheadOf(this.lastAckSequence, message.sequence)
+    ) {
+      return;
+    }
+    this.lastAckSequence = message.sequence;
+    this.observeAckArrival();
+
+    const platformYawDelta = Number.isFinite(message.platformYawDelta)
+      ? message.platformYawDelta
+      : 0;
+    let accumulatedPlatformYawDelta = platformYawDelta;
+    if (
+      this.latestAck &&
+      this.latestAck.groundedPlatformPid >= 0 &&
+      this.latestAck.groundedPlatformPid === message.groundedPlatformPid
+    ) {
+      accumulatedPlatformYawDelta = normalizeYaw(
+        this.latestAck.platformYawDelta + platformYawDelta
+      );
+    }
+    this.latestAck = {
+      sequence: message.sequence,
+      serverTick: message.serverTick,
+      x: message.x,
+      y: message.y,
+      z: message.z,
+      yaw: message.yaw,
+      pitch: message.pitch,
+      vx: message.vx,
+      vy: message.vy,
+      vz: message.vz,
+      grounded: message.grounded,
+      groundedPlatformPid: message.groundedPlatformPid,
+      platformYawDelta: accumulatedPlatformYawDelta
+    };
+    this.serverGroundedPlatformPid = message.groundedPlatformPid;
+    this.trimPendingInputs(message.sequence);
   }
 
   private trimPendingInputs(ackedSequence: number): void {
@@ -286,6 +379,71 @@ export class NetworkClient {
   private isSequenceAheadOf(lastSequence: number, candidateSequence: number): boolean {
     const delta = (candidateSequence - lastSequence + INPUT_SEQUENCE_MODULO) % INPUT_SEQUENCE_MODULO;
     return delta > 0 && delta < INPUT_SEQUENCE_HALF_RANGE;
+  }
+
+  private observeAckArrival(): void {
+    const now = performance.now();
+    if (this.lastAckArrivalAtMs === null) {
+      this.lastAckArrivalAtMs = now;
+      return;
+    }
+
+    const intervalMs = now - this.lastAckArrivalAtMs;
+    const jitterSample = Math.abs(intervalMs - SERVER_TICK_INTERVAL_MS);
+    this.ackJitterMs =
+      this.ackJitterMs === 0
+        ? jitterSample
+        : this.ackJitterMs * (1 - ACK_JITTER_SMOOTHING) + jitterSample * ACK_JITTER_SMOOTHING;
+    this.lastAckArrivalAtMs = now;
+  }
+
+  private updateInterpolationDelay(): void {
+    const rawLatency = (this.client.network as { latency?: unknown }).latency;
+    const latencyMs = typeof rawLatency === "number" && Number.isFinite(rawLatency) ? rawLatency : 0;
+    const baseDelayMs = SERVER_TICK_INTERVAL_MS * INTERPOLATION_DELAY_BASE_TICKS;
+    const jitterBudgetMs = Math.min(this.ackJitterMs * 2.2, 110);
+    const latencyBudgetMs = Math.min(Math.max(latencyMs * 0.1, 0), 45);
+    const targetDelayMs = this.clampNumber(
+      baseDelayMs + jitterBudgetMs + latencyBudgetMs,
+      INTERPOLATION_DELAY_MIN_MS,
+      INTERPOLATION_DELAY_MAX_MS
+    );
+    this.interpolationDelayMs =
+      this.interpolationDelayMs * (1 - INTERPOLATION_DELAY_SMOOTHING) +
+      targetDelayMs * INTERPOLATION_DELAY_SMOOTHING;
+  }
+
+  private resolveNetSimulationConfig(): NetSimulationConfig {
+    const params = new URLSearchParams(window.location.search);
+    const hasNetSimToggle =
+      params.get("netsim") === "1" ||
+      params.get("netsim") === "true" ||
+      params.has("ackDrop") ||
+      params.has("ackDelayMs") ||
+      params.has("ackJitterMs");
+    const ackDropRate = this.clampNumber(this.readQueryNumber(params, "ackDrop", 0), 0, 0.95);
+    const ackDelayMs = this.clampNumber(this.readQueryNumber(params, "ackDelayMs", 0), 0, 1000);
+    const ackJitterMs = this.clampNumber(this.readQueryNumber(params, "ackJitterMs", 0), 0, 1000);
+    const enabled = hasNetSimToggle && (ackDropRate > 0 || ackDelayMs > 0 || ackJitterMs > 0);
+    return {
+      enabled,
+      ackDropRate,
+      ackDelayMs,
+      ackJitterMs
+    };
+  }
+
+  private readQueryNumber(params: URLSearchParams, key: string, fallback: number): number {
+    const raw = params.get(key);
+    if (raw === null) {
+      return fallback;
+    }
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  private clampNumber(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
   }
 
   private applyInterpolatedFrames(rawFrames: unknown): void {
@@ -340,6 +498,7 @@ export class NetworkClient {
     const z = raw.z;
     const yaw = raw.yaw;
     const pitch = raw.pitch;
+    const serverTick = raw.serverTick;
 
     if (
       typeof nid !== "number" ||
@@ -347,7 +506,8 @@ export class NetworkClient {
       typeof y !== "number" ||
       typeof z !== "number" ||
       typeof yaw !== "number" ||
-      typeof pitch !== "number"
+      typeof pitch !== "number" ||
+      typeof serverTick !== "number"
     ) {
       return null;
     }
@@ -358,7 +518,8 @@ export class NetworkClient {
       y,
       z,
       yaw,
-      pitch
+      pitch,
+      serverTick
     };
   }
 
@@ -370,6 +531,7 @@ export class NetworkClient {
     const y = raw.y;
     const z = raw.z;
     const yaw = raw.yaw;
+    const serverTick = raw.serverTick;
     const halfX = raw.halfX;
     const halfY = raw.halfY;
     const halfZ = raw.halfZ;
@@ -382,6 +544,7 @@ export class NetworkClient {
       typeof y !== "number" ||
       typeof z !== "number" ||
       typeof yaw !== "number" ||
+      typeof serverTick !== "number" ||
       typeof halfX !== "number" ||
       typeof halfY !== "number" ||
       typeof halfZ !== "number"
@@ -397,6 +560,7 @@ export class NetworkClient {
       y,
       z,
       yaw,
+      serverTick,
       halfX,
       halfY,
       halfZ

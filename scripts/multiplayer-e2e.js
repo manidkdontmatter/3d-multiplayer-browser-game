@@ -8,22 +8,26 @@ import { chromium } from "playwright";
 const ROOT = process.cwd();
 const OUTPUT_DIR = path.join(ROOT, "output", "multiplayer");
 const CLIENT_ORIGIN = "http://127.0.0.1:5173";
-const MIN_REQUIRED_LOCAL_MOVEMENT = 1.0;
-const MIN_REQUIRED_REMOTE_MOVEMENT = 0.75;
-const MIN_SPAWN_SEPARATION = 0.7; // Player capsule diameter is 0.70, so this checks non-overlap.
+const E2E_NETSIM_ENABLED = process.env.E2E_NETSIM === "1";
+const MIN_REQUIRED_LOCAL_MOVEMENT = readEnvNumber("E2E_MIN_LOCAL_MOVEMENT", 1.0);
+const MIN_REQUIRED_REMOTE_MOVEMENT = readEnvNumber("E2E_MIN_REMOTE_MOVEMENT", 0.75);
+const MIN_SPAWN_SEPARATION = readEnvNumber("E2E_MIN_SPAWN_SEPARATION", 0.7); // Player capsule diameter is 0.70, so this checks non-overlap.
 const MOVEMENT_POLL_MS = 120;
-const LOCAL_MOVEMENT_TIMEOUT_MS = 15000;
-const REMOTE_MOVEMENT_TIMEOUT_MS = 15000;
-const STARTUP_STABILIZATION_MS = 5000;
+const LOCAL_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_LOCAL_MOVEMENT_TIMEOUT_MS", 15000);
+const REMOTE_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_REMOTE_MOVEMENT_TIMEOUT_MS", 15000);
+const STARTUP_STABILIZATION_MS = readEnvNumber("E2E_STARTUP_STABILIZATION_MS", 5000);
 const E2E_CSP_ENABLED = process.env.E2E_CSP === "1";
 const CLIENT_CSP_QUERY = E2E_CSP_ENABLED ? "1" : "0";
-const MIN_REQUIRED_SPRINT_MOVEMENT = 1.4;
-const SPRINT_MOVEMENT_TIMEOUT_MS = 9000;
-const MIN_JUMP_HEIGHT = 0.55;
-const JUMP_TIMEOUT_MS = 9000;
+const MIN_REQUIRED_SPRINT_MOVEMENT = readEnvNumber("E2E_MIN_SPRINT_MOVEMENT", 1.4);
+const SPRINT_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_SPRINT_MOVEMENT_TIMEOUT_MS", 9000);
+const MIN_JUMP_HEIGHT = readEnvNumber("E2E_MIN_JUMP_HEIGHT", 0.55);
+const JUMP_TIMEOUT_MS = readEnvNumber("E2E_JUMP_TIMEOUT_MS", 9000);
 const JUMP_RETRY_SETTLE_MS = 800;
-const DISCONNECT_RECONNECT_TIMEOUT_MS = 12000;
+const DISCONNECT_RECONNECT_TIMEOUT_MS = readEnvNumber("E2E_RECONNECT_TIMEOUT_MS", 12000);
 const PAGE_RECONNECT_COOLDOWN_MS = 2200;
+const NETSIM_ACK_DROP = readEnvNumber("E2E_NETSIM_ACK_DROP", 0.15);
+const NETSIM_ACK_DELAY_MS = readEnvNumber("E2E_NETSIM_ACK_DELAY_MS", 60);
+const NETSIM_ACK_JITTER_MS = readEnvNumber("E2E_NETSIM_ACK_JITTER_MS", 90);
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -31,6 +35,15 @@ function ensureDir(dir) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readEnvNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function isPortOpen(host, port, timeoutMs = 700) {
@@ -249,7 +262,17 @@ async function main() {
   const managedProcesses = [];
   const serverPort = await getFreePort();
   const serverUrl = `ws://127.0.0.1:${serverPort}`;
-  const clientUrl = `${CLIENT_ORIGIN}?csp=${CLIENT_CSP_QUERY}&server=${encodeURIComponent(serverUrl)}`;
+  const clientParams = new URLSearchParams({
+    csp: CLIENT_CSP_QUERY,
+    server: serverUrl
+  });
+  if (E2E_NETSIM_ENABLED) {
+    clientParams.set("netsim", "1");
+    clientParams.set("ackDrop", String(NETSIM_ACK_DROP));
+    clientParams.set("ackDelayMs", String(NETSIM_ACK_DELAY_MS));
+    clientParams.set("ackJitterMs", String(NETSIM_ACK_JITTER_MS));
+  }
+  const clientUrl = `${CLIENT_ORIGIN}?${clientParams.toString()}`;
   const clientAlreadyRunning = await isPortOpen("127.0.0.1", 5173);
 
   const server = startProcess("server", "npm", ["run", "dev:server"], {

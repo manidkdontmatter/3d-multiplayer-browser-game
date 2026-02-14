@@ -26,6 +26,10 @@
 - Server authority hardening: `GameSimulation.applyCommands` now ignores client-provided `delta` for movement integration, merges only fresh command sequences, and integrates velocity updates using `SERVER_TICK_SECONDS`.
 - Client reconciliation hardening: `NetworkClient` now accepts only strictly newer ack sequences (wrap-safe), dropping stale/out-of-order acks that could rewind CSP state.
 - Runtime policy update: when CSP is user-enabled, it is now auto-suppressed while server-authoritatively platform-grounded (`csp=auto-off` in HUD), then automatically resumes after dismount.
+- Adaptive interpolation delay is now runtime-tuned from observed ack inter-arrival jitter + latency (replacing the fixed 100ms interpolation delay).
+- Snapshot tick stamping added to replicated `PlayerEntity` and `PlatformEntity` (`serverTick`) to improve frame-age visibility and interpolation diagnostics.
+- Added opt-in ack chaos simulation in client netcode (`?netsim=1&ackDrop=...&ackDelayMs=...&ackJitterMs=...`) for out-of-order/drop resilience testing.
+- Added `npm run test:multiplayer:chaos` for CSP multiplayer validation under simulated ack drop/reorder conditions.
 - Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
 - Added project-scoped Codex config at `.codex/config.toml` with workspace-write sandbox defaults, live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
 - Updated project-scoped Codex config defaults for higher throughput: `approval_policy = "never"` with `sandbox_mode = "workspace-write"`, plus a `profiles.yolo` alias for explicit danger-full-access runs.
@@ -33,7 +37,7 @@
 - Added `test:multiplayer:csp` command and validated the multiplayer suite under `E2E_CSP=1`.
 - Multiplayer automation now includes a post-connect warmup window and bounded retry windows for remote movement/jump checks to reduce startup/throttling false negatives.
 - Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
-- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `E2E_CLIENT_URL=http://127.0.0.1:5173/?csp=1 npm run test:smoke`, `npm run test:multiplayer`, and `npm run test:multiplayer:csp` all pass after CSP auto-suppression on platform-grounded states + command/ack monotonicity hardening.
+- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, `npm run test:multiplayer:csp`, and `npm run test:multiplayer:chaos` all pass after adaptive interpolation + snapshot tick stamping + chaos-net simulation updates.
 
 ## Session Close Notes (2026-02-13)
 

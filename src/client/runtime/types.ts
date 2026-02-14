@@ -20,6 +20,7 @@ export interface RemotePlayerState {
   z: number;
   yaw: number;
   pitch: number;
+  serverTick: number;
 }
 
 export interface PlatformState {
@@ -30,6 +31,7 @@ export interface PlatformState {
   y: number;
   z: number;
   yaw: number;
+  serverTick: number;
   halfX: number;
   halfY: number;
   halfZ: number;

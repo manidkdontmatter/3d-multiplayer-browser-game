@@ -44,7 +44,7 @@ Key runtime modules:
 
 - Fixed server tick cadence with deterministic ordering.
 - AOI/visibility via nengi spatial channels (`ChannelAABB3D` + per-user `AABB3D` views).
-- Snapshot replication from server to clients.
+- Snapshot replication from server to clients, including `serverTick` stamping on replicated player/platform entities.
 - Client input commands include rotation deltas and movement intent.
 - Server movement integration is tick-owned (`SERVER_TICK_SECONDS`) rather than client-timed.
 - Client-side prediction uses Rapier KCC path to mirror server movement/collision as closely as possible.
@@ -55,6 +55,7 @@ Key runtime modules:
 - CSP can be toggled at runtime with `C` for testing.
 - If CSP is user-enabled, it auto-suppresses while server reports platform-grounded state and resumes automatically after dismount.
 - When CSP is enabled, client reconciliation uses a position-only render-side smoothing layer with correction-offset decay; yaw/pitch stay authoritative to keep camera-forward input alignment stable.
+- Interpolation delay is adaptive at runtime (based on observed ack jitter + latency) rather than fixed at a single static value.
 - Platform carry yaw reconciliation is now explicit: server acks include `platformYawDelta` so client can compose platform rotation without conflating it with player mouse-look yaw.
 - Client CSP also predicts platform yaw carry each local step and applies only residual correction from acks, improving on-platform rotation smoothness.
 - Reconciliation metrics are exposed in runtime status text and `window.render_game_to_text` for diagnostics and automated artifact review.
@@ -69,6 +70,7 @@ Key runtime modules:
 - `npm run test:smoke`: Playwright smoke validation
 - `npm run test:multiplayer`: two-client replication validation
 - `npm run test:multiplayer:csp`: multiplayer validation in CSP-enabled mode
+- `npm run test:multiplayer:chaos`: CSP multiplayer validation under simulated ack drop/reorder jitter
 
 ## Directory Guide
 
