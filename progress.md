@@ -38,6 +38,9 @@
 - Multiplayer automation now includes a post-connect warmup window and bounded retry windows for remote movement/jump checks to reduce startup/throttling false negatives.
 - Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
 - Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, `npm run test:multiplayer:csp`, and `npm run test:multiplayer:chaos` all pass after adaptive interpolation + snapshot tick stamping + chaos-net simulation updates.
+- Client boot now has a staged loading overlay with progress bar (`#boot-overlay`) that tracks manifest preload and startup phases (physics -> network -> ready).
+- Asset pipeline now uses Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`) through `src/client/assets/assetLoader.ts`, with a runtime cache for preloaded assets.
+- Latest verification (2026-02-13, asset-loading pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after boot overlay + asset preloader integration.
 
 ## Session Close Notes (2026-02-13)
 
@@ -51,3 +54,4 @@
 - Add combat/state channel scaffolding for next gameplay systems.
 - Expand automated tests further with combat-state assertions and longer-duration stability checks.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.
+- When character assets are selected, register them in `ASSET_MANIFEST` (with stable IDs/labels) and switch remote/local rendering from capsule placeholders to loaded GLTF rigs.

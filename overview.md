@@ -36,9 +36,11 @@ Entry points:
 Key runtime modules:
 - `src/server/GameServer.ts`: server lifecycle and networking setup.
 - `src/server/GameSimulation.ts`: authoritative simulation/tick behavior.
+- `src/client/bootstrap.ts`: staged startup orchestration (asset preload + subsystem init).
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
 - `src/client/runtime/WorldRenderer.ts`: Three.js scene/render integration.
+- `src/client/assets/assetLoader.ts`: Three.js loader-based manifest preloading and runtime asset cache.
 
 ## Netcode Model
 
@@ -51,6 +53,10 @@ Key runtime modules:
 
 ## Current Behavioral Notes
 
+- Client startup now uses a staged boot pipeline:
+  - optional manifest-driven preload pass (`ASSET_MANIFEST`) through Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`)
+  - physics/network initialization progress phases
+  - boot overlay/progress bar hidden once gameplay loop starts
 - CSP is currently default OFF at runtime due to remaining on-platform jitter under real play.
 - CSP can be toggled at runtime with `C` for testing.
 - If CSP is user-enabled, it auto-suppresses while server reports platform-grounded state and resumes automatically after dismount.
@@ -75,6 +81,7 @@ Key runtime modules:
 ## Directory Guide
 
 - `src/client`: browser client runtime and rendering
+- `src/client/assets`: asset manifest and preload/cache utilities
 - `src/server`: authoritative simulation and network server
 - `src/shared`: shared schemas/config/gameplay helpers
 - `scripts`: test/automation scripts

@@ -6,6 +6,17 @@
     <title>Vibe Coded 3D Browser Game</title>
   </head>
   <body>
+    <div id="boot-overlay" role="status" aria-live="polite">
+      <div id="boot-card">
+        <h2>Loading World</h2>
+        <p id="boot-stage">Preparing startup</p>
+        <p id="boot-detail">Initializing...</p>
+        <div id="boot-progress-track">
+          <div id="boot-progress-fill"></div>
+        </div>
+        <p id="boot-progress-label">0%</p>
+      </div>
+    </div>
     <div id="hud">
       <h1>Vibe Coded 3D Browser Game</h1>
       <p>Click to lock cursor. Move: WASD | Jump: Space | Sprint: Shift</p>

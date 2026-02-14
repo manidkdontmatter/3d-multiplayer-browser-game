@@ -14,6 +14,8 @@ const RECONCILE_YAW_SNAP_THRESHOLD = Math.PI * 0.75;
 const RECONCILE_OFFSET_EPSILON = 0.0005;
 const LOOK_PITCH_LIMIT = 1.45;
 
+export type ClientCreatePhase = "physics" | "network" | "ready";
+
 export class GameClientApp {
   private readonly input: InputController;
   private readonly renderer: WorldRenderer;
@@ -57,11 +59,15 @@ export class GameClientApp {
 
   public static async create(
     canvas: HTMLCanvasElement,
-    statusNode: HTMLElement | null
+    statusNode: HTMLElement | null,
+    onCreatePhase?: (phase: ClientCreatePhase) => void
   ): Promise<GameClientApp> {
+    onCreatePhase?.("physics");
     const physics = await LocalPhysicsWorld.create();
     const app = new GameClientApp(canvas, statusNode, physics, GameClientApp.resolveCspEnabled());
+    onCreatePhase?.("network");
     await app.network.connect(GameClientApp.resolveServerUrl());
+    onCreatePhase?.("ready");
     app.updateStatus();
     app.registerTestingHooks();
     return app;
