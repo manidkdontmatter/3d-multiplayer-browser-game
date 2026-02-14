@@ -96,6 +96,16 @@ Original prompt: we will add animations next. where do you think i can source so
 - Fixed projectile max-range bookkeeping bug: range is now measured by traveled distance from spawn (`remainingRange`) instead of distance from world origin.
 - `render_game_to_text` now exposes local hotbar/selected ability state for deterministic automation assertions.
 - Latest verification (2026-02-14, ability-hud + projectile-authority pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, and `npm run test:multiplayer` all pass.
+- Ability creator is now server-authoritative end-to-end:
+  - client sends `AbilityCreateCommand` drafts (name/category/points/attributes/target slot)
+  - server validates and builds runtime abilities via shared draft-validation logic
+  - server returns authoritative `AbilityDefinitionMessage`, `LoadoutStateMessage`, and `AbilityCreateResultMessage`
+  - client HUD consumes those messages and updates creator status + available ability cards.
+- Netcode schema now includes creator/loadout message types (`AbilityCreateCommand`, `AbilityDefinitionMessage`, `LoadoutStateMessage`, `AbilityCreateResultMessage`).
+- Added runtime ability registry on server (`runtimeAbilitiesById`) with per-owner cleanup on disconnect and secure per-player unlock checks before cast.
+- Latest verification (2026-02-14, creator-authority pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` all pass after ability-creator command/message integration.
+- Targeted creator verification (2026-02-14): headless Playwright flow opened creator UI, submitted a custom draft (`Nova Bolt`), and confirmed `render_game_to_text.localAbility.catalog` grew (`2`) with creator status `Created ability #1024`.
+- `scripts/smoke-e2e.js` now includes a creator regression check: opens creator UI, submits a draft (`Smoke Bolt`), and waits for authoritative creator success state before passing.
 
 ## Session Close Notes (2026-02-13)
 
@@ -106,9 +116,9 @@ Original prompt: we will add animations next. where do you think i can source so
 ## Active TODO
 
 - Tune reconciliation smoothing/hard-snap thresholds using targeted `?csp=1` multiplayer validation and capture jitter metrics over longer movement/platform runs.
-- Add explicit server->client loadout replication message(s) so hotbar assignment state survives reconnects without relying on client-local defaults.
-- Build the first real ability inventory model (owned abilities, slot validation rules, server persistence boundary) as the foundation for the full ability creator.
-- Implement ability creator domain scaffolding (point budget validation + attribute constraints) with server-side canonical validation and lightweight client preview UI.
+- Persist runtime-created abilities/loadout across reconnect (file/db boundary) instead of current in-memory session scope.
+- Extend creator output beyond projectile templates (melee/passive runtime behavior paths and corresponding server-authoritative execution).
+- Add creator automation coverage in Playwright (create ability, verify replicated catalog/loadout state, confirm cast behavior).
 - Expand automated tests further with combat-state assertions and longer-duration stability checks.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.
 - Expand humanoid animation set beyond base locomotion/jump/upper-body action (strafe, backpedal, turn-in-place, land, hit-react) while preserving existing layer/mask architecture.

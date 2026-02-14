@@ -284,3 +284,140 @@ body {
   line-height: 1.2;
   opacity: 0.8;
 }
+
+.ability-creator-panel {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(146, 202, 255, 0.32);
+  border-radius: 9px;
+  background: rgba(8, 28, 44, 0.72);
+}
+
+.ability-creator-title {
+  margin: 0;
+  color: #b7ecff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ability-creator-row {
+  margin-top: 8px;
+}
+
+.ability-creator-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #cfe5ff;
+  font-size: 11px;
+}
+
+.ability-creator-input {
+  width: 100%;
+  border: 1px solid rgba(155, 207, 255, 0.4);
+  border-radius: 7px;
+  padding: 6px 7px;
+  background: rgba(10, 29, 48, 0.9);
+  color: #eaf5ff;
+  font-size: 12px;
+}
+
+.ability-creator-stat-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.ability-creator-stat-row {
+  display: grid;
+  grid-template-columns: 1fr 24px 26px 24px;
+  align-items: center;
+  gap: 4px;
+}
+
+.ability-creator-stat-label {
+  color: #dcecff;
+  font-size: 11px;
+}
+
+.ability-creator-stepper {
+  border: 1px solid rgba(150, 210, 255, 0.45);
+  border-radius: 6px;
+  background: rgba(18, 42, 64, 0.9);
+  color: #e0f3ff;
+  font-size: 13px;
+  line-height: 1;
+  height: 24px;
+  cursor: pointer;
+}
+
+.ability-creator-stepper:hover {
+  border-color: rgba(173, 231, 255, 0.9);
+}
+
+.ability-creator-stat-value {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #e4f4ff;
+}
+
+.ability-creator-attributes {
+  margin-top: 8px;
+}
+
+.ability-creator-subtitle {
+  margin: 0 0 4px;
+  color: #d8ebff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ability-creator-attribute-option {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: #d2e7ff;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.ability-creator-footer {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ability-creator-budget {
+  color: #cfe9ff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ability-creator-submit {
+  border: 1px solid rgba(143, 244, 203, 0.7);
+  border-radius: 7px;
+  background: rgba(25, 56, 73, 0.95);
+  color: #dffdf2;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ability-creator-submit:hover {
+  border-color: rgba(163, 255, 219, 0.95);
+}
+
+.ability-creator-status {
+  margin: 7px 0 0;
+  color: #cde4ff;
+  font-size: 11px;
+  line-height: 1.35;
+  min-height: 16px;
+}

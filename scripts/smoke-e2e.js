@@ -13,6 +13,7 @@ const SERVER_URL = "ws://127.0.0.1:9001";
 const SERVER_START_TIMEOUT_MS = readEnvNumber("E2E_SERVER_START_TIMEOUT_MS", 18000);
 const CLIENT_START_TIMEOUT_MS = readEnvNumber("E2E_CLIENT_START_TIMEOUT_MS", 22000);
 const CONNECT_TIMEOUT_MS = readEnvNumber("E2E_CONNECT_TIMEOUT_MS", 12000);
+const CREATOR_TEST_TIMEOUT_MS = readEnvNumber("E2E_CREATOR_TIMEOUT_MS", 6000);
 const ARTIFACTS_ON_PASS = process.env.E2E_ARTIFACTS_ON_PASS === "1";
 const ARTIFACTS_ON_FAIL = process.env.E2E_ARTIFACTS_ON_FAIL !== "0";
 
@@ -124,6 +125,19 @@ async function waitForConnectedState(page, timeoutMs) {
   throw new Error("Timed out waiting for connected state.");
 }
 
+async function waitForCreatorCreatedState(page, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const state = await readState(page);
+    const status = state?.localAbility?.creatorStatus;
+    if (typeof status === "string" && status.toLowerCase().includes("created ability #")) {
+      return state;
+    }
+    await delay(120);
+  }
+  throw new Error("Timed out waiting for ability creator success state.");
+}
+
 async function main() {
   ensureDir(OUTPUT_DIR);
   if (!process.env.SERVER_TICK_LOG) {
@@ -175,6 +189,11 @@ async function main() {
     await page.goto(CLIENT_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.mouse.click(640, 360);
     finalState = await waitForConnectedState(page, CONNECT_TIMEOUT_MS);
+    await page.keyboard.press("KeyB");
+    await page.waitForSelector(".ability-creator-input", { state: "visible", timeout: 3000 });
+    await page.fill(".ability-creator-input", "Smoke Bolt");
+    await page.click(".ability-creator-submit");
+    finalState = await waitForCreatorCreatedState(page, CREATOR_TEST_TIMEOUT_MS);
 
     const hasFatalConsoleError = logs.some(
       (entry) =>

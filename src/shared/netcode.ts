@@ -6,7 +6,11 @@ export enum NType {
   IdentityMessage = 3,
   PlatformEntity = 4,
   InputAckMessage = 5,
-  ProjectileEntity = 6
+  ProjectileEntity = 6,
+  AbilityCreateCommand = 7,
+  AbilityDefinitionMessage = 8,
+  LoadoutStateMessage = 9,
+  AbilityCreateResultMessage = 10
 }
 
 export const inputCommandSchema = defineSchema({
@@ -21,6 +25,18 @@ export const inputCommandSchema = defineSchema({
   yawDelta: Binary.Float32,
   pitch: Binary.Rotation32,
   delta: Binary.Float32
+});
+
+export const abilityCreateCommandSchema = defineSchema({
+  submitNonce: Binary.UInt16,
+  name: Binary.String,
+  category: Binary.UInt8,
+  pointsPower: Binary.UInt8,
+  pointsVelocity: Binary.UInt8,
+  pointsEfficiency: Binary.UInt8,
+  pointsControl: Binary.UInt8,
+  attributeMask: Binary.UInt16,
+  targetHotbarSlot: Binary.UInt8
 });
 
 export const playerEntitySchema = defineSchema({
@@ -78,13 +94,52 @@ export const projectileEntitySchema = defineSchema({
   serverTick: Binary.UInt32
 });
 
+export const abilityDefinitionMessageSchema = defineSchema({
+  abilityId: Binary.UInt16,
+  name: Binary.String,
+  category: Binary.UInt8,
+  pointsPower: Binary.UInt8,
+  pointsVelocity: Binary.UInt8,
+  pointsEfficiency: Binary.UInt8,
+  pointsControl: Binary.UInt8,
+  attributeMask: Binary.UInt16,
+  kind: Binary.UInt8,
+  speed: Binary.Float32,
+  damage: Binary.Float32,
+  radius: Binary.Float32,
+  cooldownSeconds: Binary.Float32,
+  lifetimeSeconds: Binary.Float32,
+  spawnForwardOffset: Binary.Float32,
+  spawnVerticalOffset: Binary.Float32
+});
+
+export const loadoutStateMessageSchema = defineSchema({
+  selectedHotbarSlot: Binary.UInt8,
+  slot0AbilityId: Binary.UInt16,
+  slot1AbilityId: Binary.UInt16,
+  slot2AbilityId: Binary.UInt16,
+  slot3AbilityId: Binary.UInt16,
+  slot4AbilityId: Binary.UInt16
+});
+
+export const abilityCreateResultMessageSchema = defineSchema({
+  submitNonce: Binary.UInt16,
+  success: Binary.Boolean,
+  createdAbilityId: Binary.UInt16,
+  message: Binary.String
+});
+
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
+ncontext.register(NType.AbilityCreateCommand, abilityCreateCommandSchema);
 ncontext.register(NType.PlayerEntity, playerEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
 ncontext.register(NType.PlatformEntity, platformEntitySchema);
 ncontext.register(NType.InputAckMessage, inputAckMessageSchema);
 ncontext.register(NType.ProjectileEntity, projectileEntitySchema);
+ncontext.register(NType.AbilityDefinitionMessage, abilityDefinitionMessageSchema);
+ncontext.register(NType.LoadoutStateMessage, loadoutStateMessageSchema);
+ncontext.register(NType.AbilityCreateResultMessage, abilityCreateResultMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -99,6 +154,19 @@ export interface InputCommand {
   yawDelta: number;
   pitch: number;
   delta: number;
+}
+
+export interface AbilityCreateCommand {
+  ntype: NType.AbilityCreateCommand;
+  submitNonce: number;
+  name: string;
+  category: number;
+  pointsPower: number;
+  pointsVelocity: number;
+  pointsEfficiency: number;
+  pointsControl: number;
+  attributeMask: number;
+  targetHotbarSlot: number;
 }
 
 export interface PlayerEntity {
@@ -162,4 +230,42 @@ export interface ProjectileEntity {
   y: number;
   z: number;
   serverTick: number;
+}
+
+export interface AbilityDefinitionMessage {
+  ntype: NType.AbilityDefinitionMessage;
+  abilityId: number;
+  name: string;
+  category: number;
+  pointsPower: number;
+  pointsVelocity: number;
+  pointsEfficiency: number;
+  pointsControl: number;
+  attributeMask: number;
+  kind: number;
+  speed: number;
+  damage: number;
+  radius: number;
+  cooldownSeconds: number;
+  lifetimeSeconds: number;
+  spawnForwardOffset: number;
+  spawnVerticalOffset: number;
+}
+
+export interface LoadoutStateMessage {
+  ntype: NType.LoadoutStateMessage;
+  selectedHotbarSlot: number;
+  slot0AbilityId: number;
+  slot1AbilityId: number;
+  slot2AbilityId: number;
+  slot3AbilityId: number;
+  slot4AbilityId: number;
+}
+
+export interface AbilityCreateResultMessage {
+  ntype: NType.AbilityCreateResultMessage;
+  submitNonce: number;
+  success: boolean;
+  createdAbilityId: number;
+  message: string;
 }

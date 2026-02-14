@@ -1,11 +1,17 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { AABB3D, Channel, ChannelAABB3D } from "nengi";
 import {
+  ABILITY_DYNAMIC_ID_START,
   ABILITY_ID_NONE,
+  abilityCategoryFromWireValue,
+  abilityCategoryToWireValue,
   applyPlatformCarry,
   clampHotbarSlotIndex,
+  createAbilityDefinitionFromDraft,
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
+  decodeAbilityAttributeMask,
+  encodeAbilityAttributeMask,
   GRAVITY,
   getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
@@ -26,6 +32,7 @@ import {
   toPlatformLocal,
   stepHorizontalMovement
 } from "../shared/index";
+import type { AbilityDefinition } from "../shared/index";
 
 type UserLike = {
   id: number;
@@ -54,7 +61,8 @@ type PlayerEntity = {
   upperBodyAction: number;
   upperBodyActionNonce: number;
   lastProcessedSequence: number;
-  unlockedAbilityIds: ReadonlySet<number>;
+  lastAbilitySubmitNonce: number;
+  unlockedAbilityIds: Set<number>;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 };
@@ -114,6 +122,24 @@ type InputCommand = {
   delta: number;
 };
 
+type AbilityCreateCommand = {
+  ntype: NType.AbilityCreateCommand;
+  submitNonce: number;
+  name: string;
+  category: number;
+  pointsPower: number;
+  pointsVelocity: number;
+  pointsEfficiency: number;
+  pointsControl: number;
+  attributeMask: number;
+  targetHotbarSlot: number;
+};
+
+type RuntimeAbilityEntry = {
+  ownerNid: number;
+  definition: AbilityDefinition;
+};
+
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
 const PROJECTILE_MAX_RANGE = 260;
@@ -123,10 +149,12 @@ export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
   private readonly platformsByPid = new Map<number, PlatformEntity>();
   private readonly projectilesByNid = new Map<number, ProjectileEntity>();
+  private readonly runtimeAbilitiesById = new Map<number, RuntimeAbilityEntry>();
   private readonly world: RAPIER.World;
   private readonly characterController: RAPIER.KinematicCharacterController;
   private elapsedSeconds = 0;
   private tickNumber = 0;
+  private nextRuntimeAbilityId = ABILITY_DYNAMIC_ID_START;
 
   public constructor(
     private readonly globalChannel: Channel,
@@ -180,6 +208,7 @@ export class GameSimulation {
       upperBodyAction: 0,
       upperBodyActionNonce: 0,
       lastProcessedSequence: 0,
+      lastAbilitySubmitNonce: 0,
       unlockedAbilityIds: new Set<number>(DEFAULT_UNLOCKED_ABILITY_IDS),
       body,
       collider
@@ -198,6 +227,7 @@ export class GameSimulation {
       ntype: NType.IdentityMessage,
       playerNid: player.nid
     });
+    this.sendInitialAbilityState(user, player);
   }
 
   public removeUser(user: UserLike): void {
@@ -210,6 +240,7 @@ export class GameSimulation {
     this.playersByUserId.delete(user.id);
     this.usersById.delete(user.id);
     this.removeProjectilesByOwner(player.nid);
+    this.removeRuntimeAbilitiesByOwner(player.nid);
     this.world.removeCollider(player.collider, true);
     this.world.removeRigidBody(player.body);
   }
@@ -227,16 +258,25 @@ export class GameSimulation {
     let mergedPitch = player.pitch;
     let mergedSprint = false;
     let mergedActiveHotbarSlot = this.sanitizeHotbarSlot(player.activeHotbarSlot, 0);
+    const previousActiveHotbarSlot = mergedActiveHotbarSlot;
+    const previousSelectedAbilityId = player.hotbarAbilityIds[mergedActiveHotbarSlot] ?? ABILITY_ID_NONE;
     let mergedSelectedAbilityId = this.sanitizeSelectedAbilityId(
       player.hotbarAbilityIds[mergedActiveHotbarSlot] ?? ABILITY_ID_NONE,
       ABILITY_ID_NONE,
       player
     );
+    let requiresLoadoutResync = false;
     let queuedUsePrimaryPressed = false;
     let queuedJump = false;
     let accumulatedYawDelta = 0;
 
     for (const rawCommand of commands) {
+      const ntype = (rawCommand as { ntype?: unknown })?.ntype;
+      if (ntype === NType.AbilityCreateCommand) {
+        this.processAbilityCreateCommand(user, player, rawCommand as Partial<AbilityCreateCommand>);
+        continue;
+      }
+
       const command = rawCommand as Partial<InputCommand>;
       if (command.ntype !== NType.InputCommand) {
         continue;
@@ -278,11 +318,19 @@ export class GameSimulation {
           player
         );
       }
-      mergedSelectedAbilityId = this.sanitizeSelectedAbilityId(
+      const requestedSelectedAbilityId =
+        typeof command.selectedAbilityId === "number" && Number.isFinite(command.selectedAbilityId)
+          ? Math.max(0, Math.floor(command.selectedAbilityId))
+          : null;
+      const nextSelectedAbilityId = this.sanitizeSelectedAbilityId(
         command.selectedAbilityId,
         mergedSelectedAbilityId,
         player
       );
+      if (requestedSelectedAbilityId !== null && requestedSelectedAbilityId !== nextSelectedAbilityId) {
+        requiresLoadoutResync = true;
+      }
+      mergedSelectedAbilityId = nextSelectedAbilityId;
       queuedUsePrimaryPressed = queuedUsePrimaryPressed || Boolean(command.usePrimaryPressed);
       queuedJump = queuedJump || Boolean(command.jump);
       accumulatedYawDelta = normalizeYaw(accumulatedYawDelta + yawDelta);
@@ -311,6 +359,12 @@ export class GameSimulation {
     player.pitch = Math.max(-1.45, Math.min(1.45, mergedPitch));
     player.activeHotbarSlot = mergedActiveHotbarSlot;
     player.hotbarAbilityIds[mergedActiveHotbarSlot] = mergedSelectedAbilityId;
+    const loadoutChanged =
+      player.activeHotbarSlot !== previousActiveHotbarSlot ||
+      player.hotbarAbilityIds[mergedActiveHotbarSlot] !== previousSelectedAbilityId;
+    if (loadoutChanged || requiresLoadoutResync) {
+      this.queueLoadoutStateMessage(user, player);
+    }
     if (queuedUsePrimaryPressed) {
       this.tryUsePrimaryAbility(player);
     }
@@ -545,6 +599,180 @@ export class GameSimulation {
     return selectedPid;
   }
 
+  private processAbilityCreateCommand(
+    user: UserLike,
+    player: PlayerEntity,
+    command: Partial<AbilityCreateCommand>
+  ): void {
+    if (typeof command.submitNonce !== "number") {
+      return;
+    }
+    const submitNonce = command.submitNonce & 0xffff;
+    if (!this.isSequenceAheadOf(player.lastAbilitySubmitNonce, submitNonce)) {
+      return;
+    }
+    player.lastAbilitySubmitNonce = submitNonce;
+
+    const category = abilityCategoryFromWireValue(command.category ?? 0);
+    if (!category) {
+      this.queueAbilityCreateResultMessage(user, submitNonce, false, ABILITY_ID_NONE, "Invalid category.");
+      return;
+    }
+
+    const abilityDefinition = createAbilityDefinitionFromDraft(this.allocateRuntimeAbilityId(), {
+      name: typeof command.name === "string" ? command.name : "",
+      category,
+      points: {
+        power: typeof command.pointsPower === "number" ? command.pointsPower : 0,
+        velocity: typeof command.pointsVelocity === "number" ? command.pointsVelocity : 0,
+        efficiency: typeof command.pointsEfficiency === "number" ? command.pointsEfficiency : 0,
+        control: typeof command.pointsControl === "number" ? command.pointsControl : 0
+      },
+      attributes: decodeAbilityAttributeMask(
+        typeof command.attributeMask === "number" ? command.attributeMask : 0
+      )
+    });
+
+    if (!abilityDefinition) {
+      this.queueAbilityCreateResultMessage(
+        user,
+        submitNonce,
+        false,
+        ABILITY_ID_NONE,
+        "Draft validation failed."
+      );
+      return;
+    }
+
+    this.runtimeAbilitiesById.set(abilityDefinition.id, {
+      ownerNid: player.nid,
+      definition: abilityDefinition
+    });
+    player.unlockedAbilityIds.add(abilityDefinition.id);
+
+    const targetSlot = this.sanitizeHotbarSlot(command.targetHotbarSlot, player.activeHotbarSlot);
+    player.hotbarAbilityIds[targetSlot] = abilityDefinition.id;
+    player.activeHotbarSlot = targetSlot;
+
+    this.queueAbilityDefinitionMessage(user, abilityDefinition);
+    this.queueLoadoutStateMessage(user, player);
+    this.queueAbilityCreateResultMessage(
+      user,
+      submitNonce,
+      true,
+      abilityDefinition.id,
+      `${abilityDefinition.name} created.`
+    );
+  }
+
+  private sendInitialAbilityState(user: UserLike, player: PlayerEntity): void {
+    for (const abilityId of player.unlockedAbilityIds) {
+      const ability = this.getAbilityDefinitionForPlayer(player, abilityId);
+      if (!ability) {
+        continue;
+      }
+      this.queueAbilityDefinitionMessage(user, ability);
+    }
+    this.queueLoadoutStateMessage(user, player);
+  }
+
+  private queueAbilityDefinitionMessage(user: UserLike, ability: AbilityDefinition): void {
+    const projectile = ability.projectile;
+    user.queueMessage({
+      ntype: NType.AbilityDefinitionMessage,
+      abilityId: ability.id,
+      name: ability.name,
+      category: abilityCategoryToWireValue(ability.category),
+      pointsPower: ability.points.power,
+      pointsVelocity: ability.points.velocity,
+      pointsEfficiency: ability.points.efficiency,
+      pointsControl: ability.points.control,
+      attributeMask: encodeAbilityAttributeMask(ability.attributes),
+      kind: projectile?.kind ?? 0,
+      speed: projectile?.speed ?? 0,
+      damage: projectile?.damage ?? 0,
+      radius: projectile?.radius ?? 0,
+      cooldownSeconds: projectile?.cooldownSeconds ?? 0,
+      lifetimeSeconds: projectile?.lifetimeSeconds ?? 0,
+      spawnForwardOffset: projectile?.spawnForwardOffset ?? 0,
+      spawnVerticalOffset: projectile?.spawnVerticalOffset ?? 0
+    });
+  }
+
+  private queueLoadoutStateMessage(user: UserLike, player: PlayerEntity): void {
+    user.queueMessage({
+      ntype: NType.LoadoutStateMessage,
+      selectedHotbarSlot: this.sanitizeHotbarSlot(player.activeHotbarSlot, 0),
+      slot0AbilityId: player.hotbarAbilityIds[0] ?? ABILITY_ID_NONE,
+      slot1AbilityId: player.hotbarAbilityIds[1] ?? ABILITY_ID_NONE,
+      slot2AbilityId: player.hotbarAbilityIds[2] ?? ABILITY_ID_NONE,
+      slot3AbilityId: player.hotbarAbilityIds[3] ?? ABILITY_ID_NONE,
+      slot4AbilityId: player.hotbarAbilityIds[4] ?? ABILITY_ID_NONE
+    });
+  }
+
+  private queueAbilityCreateResultMessage(
+    user: UserLike,
+    submitNonce: number,
+    success: boolean,
+    createdAbilityId: number,
+    message: string
+  ): void {
+    user.queueMessage({
+      ntype: NType.AbilityCreateResultMessage,
+      submitNonce: submitNonce & 0xffff,
+      success,
+      createdAbilityId: Math.max(0, Math.min(0xffff, Math.floor(createdAbilityId))),
+      message
+    });
+  }
+
+  private allocateRuntimeAbilityId(): number {
+    while (this.runtimeAbilitiesById.has(this.nextRuntimeAbilityId) || getAbilityDefinitionById(this.nextRuntimeAbilityId)) {
+      this.nextRuntimeAbilityId += 1;
+      if (this.nextRuntimeAbilityId > 0xffff) {
+        this.nextRuntimeAbilityId = ABILITY_DYNAMIC_ID_START;
+      }
+    }
+    const allocated = this.nextRuntimeAbilityId;
+    this.nextRuntimeAbilityId += 1;
+    if (this.nextRuntimeAbilityId > 0xffff) {
+      this.nextRuntimeAbilityId = ABILITY_DYNAMIC_ID_START;
+    }
+    return allocated;
+  }
+
+  private removeRuntimeAbilitiesByOwner(ownerNid: number): void {
+    for (const [abilityId, abilityEntry] of this.runtimeAbilitiesById) {
+      if (abilityEntry.ownerNid === ownerNid) {
+        this.runtimeAbilitiesById.delete(abilityId);
+      }
+    }
+  }
+
+  private getAbilityDefinitionForPlayer(
+    player: PlayerEntity,
+    abilityId: number
+  ): AbilityDefinition | null {
+    if (!player.unlockedAbilityIds.has(abilityId)) {
+      return null;
+    }
+
+    const staticAbility = getAbilityDefinitionById(abilityId);
+    if (staticAbility) {
+      return staticAbility;
+    }
+
+    const runtimeAbility = this.runtimeAbilitiesById.get(abilityId);
+    if (!runtimeAbility) {
+      return null;
+    }
+    if (runtimeAbility.ownerNid !== player.nid) {
+      return null;
+    }
+    return runtimeAbility.definition;
+  }
+
   private sanitizeHotbarSlot(rawSlot: unknown, fallbackSlot: number): number {
     if (typeof rawSlot !== "number" || !Number.isFinite(rawSlot)) {
       return fallbackSlot;
@@ -568,7 +796,7 @@ export class GameSimulation {
     if (!player.unlockedAbilityIds.has(normalized)) {
       return fallbackAbilityId;
     }
-    return getAbilityDefinitionById(normalized) ? normalized : fallbackAbilityId;
+    return this.getAbilityDefinitionForPlayer(player, normalized) ? normalized : fallbackAbilityId;
   }
 
   private createInitialHotbar(): number[] {
@@ -586,7 +814,7 @@ export class GameSimulation {
       ABILITY_ID_NONE,
       player
     );
-    const ability = getAbilityDefinitionById(abilityId);
+    const ability = this.getAbilityDefinitionForPlayer(player, abilityId);
     const projectileProfile = ability?.projectile;
     if (!projectileProfile) {
       return;

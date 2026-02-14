@@ -1,7 +1,23 @@
 import { Client, Interpolator } from "nengi";
 import { WebSocketClientAdapter } from "nengi-websocket-client-adapter";
-import { normalizeYaw } from "../../shared/index";
-import { NType, type IdentityMessage, type InputAckMessage, ncontext } from "../../shared/netcode";
+import {
+  DEFAULT_HOTBAR_ABILITY_IDS,
+  abilityCategoryFromWireValue,
+  clampHotbarSlotIndex,
+  decodeAbilityAttributeMask,
+  getAllAbilityDefinitions,
+  normalizeYaw,
+  type AbilityDefinition
+} from "../../shared/index";
+import {
+  NType,
+  type AbilityCreateResultMessage,
+  type AbilityDefinitionMessage,
+  type IdentityMessage,
+  type InputAckMessage,
+  type LoadoutStateMessage,
+  ncontext
+} from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
 import type { MovementInput, PlatformState, ProjectileState, RemotePlayerState } from "./types";
 
@@ -31,6 +47,35 @@ export interface ReconciliationFrame {
   replay: PendingInput[];
 }
 
+export interface AbilityCreateDraftCommandPayload {
+  name: string;
+  category: number;
+  pointsPower: number;
+  pointsVelocity: number;
+  pointsEfficiency: number;
+  pointsControl: number;
+  attributeMask: number;
+  targetHotbarSlot: number;
+}
+
+export interface AbilityCreateResult {
+  submitNonce: number;
+  success: boolean;
+  createdAbilityId: number;
+  message: string;
+}
+
+export interface LoadoutState {
+  selectedHotbarSlot: number;
+  abilityIds: number[];
+}
+
+export interface AbilityEventBatch {
+  definitions: AbilityDefinition[];
+  loadout: LoadoutState | null;
+  createResults: AbilityCreateResult[];
+}
+
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
 const SERVER_TICK_INTERVAL_MS = 1000 / SERVER_TICK_RATE;
@@ -53,15 +98,25 @@ interface BufferedAck {
   message: InputAckMessage;
 }
 
+interface QueuedAbilityCreateCommand extends AbilityCreateDraftCommandPayload {
+  submitNonce: number;
+}
+
 export class NetworkClient {
   private readonly client = new Client(ncontext, WebSocketClientAdapter, SERVER_TICK_RATE);
   private readonly interpolator = new Interpolator(this.client);
   private readonly entities = new Map<number, Record<string, unknown>>();
   private readonly netSimulation = this.resolveNetSimulationConfig();
   private readonly bufferedAcks: BufferedAck[] = [];
+  private readonly abilityDefinitions = new Map<number, AbilityDefinition>();
+  private readonly pendingAbilityDefinitions = new Map<number, AbilityDefinition>();
+  private readonly pendingAbilityCreateResults: AbilityCreateResult[] = [];
+  private pendingLoadoutState: LoadoutState | null = null;
+  private queuedAbilityCreateCommand: QueuedAbilityCreateCommand | null = null;
   private localPlayerNid: number | null = null;
   private connected = false;
   private nextCommandSequence = 0;
+  private nextAbilitySubmitNonce = 0;
   private readonly pendingInputs: PendingInput[] = [];
   private latestAck: ReconciliationFrame["ack"] | null = null;
   private lastAckSequence: number | null = null;
@@ -73,6 +128,9 @@ export class NetworkClient {
   private hasSentYaw = false;
 
   public constructor() {
+    for (const ability of getAllAbilityDefinitions()) {
+      this.abilityDefinitions.set(ability.id, ability);
+    }
     this.client.setDisconnectHandler(() => {
       this.connected = false;
       this.pendingInputs.length = 0;
@@ -85,6 +143,10 @@ export class NetworkClient {
       this.serverGroundedPlatformPid = -1;
       this.lastSentYaw = 0;
       this.hasSentYaw = false;
+      this.pendingAbilityCreateResults.length = 0;
+      this.pendingAbilityDefinitions.clear();
+      this.pendingLoadoutState = null;
+      this.queuedAbilityCreateCommand = null;
     });
     this.client.setWebsocketErrorHandler(() => {
       // Errors are expected when server is unavailable during local-only workflows.
@@ -150,7 +212,65 @@ export class NetworkClient {
       pitch: orientation.pitch,
       delta
     });
+
+    const abilityCommand = this.queuedAbilityCreateCommand;
+    if (abilityCommand) {
+      this.client.addCommand({
+        ntype: NType.AbilityCreateCommand,
+        submitNonce: this.clampUnsignedInt(abilityCommand.submitNonce, 0xffff),
+        name: abilityCommand.name.slice(0, 64),
+        category: this.clampUnsignedInt(abilityCommand.category, 0xff),
+        pointsPower: this.clampUnsignedInt(abilityCommand.pointsPower, 0xff),
+        pointsVelocity: this.clampUnsignedInt(abilityCommand.pointsVelocity, 0xff),
+        pointsEfficiency: this.clampUnsignedInt(abilityCommand.pointsEfficiency, 0xff),
+        pointsControl: this.clampUnsignedInt(abilityCommand.pointsControl, 0xff),
+        attributeMask: this.clampUnsignedInt(abilityCommand.attributeMask, 0xffff),
+        targetHotbarSlot: this.clampUnsignedInt(abilityCommand.targetHotbarSlot, 0xff)
+      });
+      this.queuedAbilityCreateCommand = null;
+    }
+
     this.client.flush();
+  }
+
+  public queueAbilityCreateDraft(payload: AbilityCreateDraftCommandPayload): number {
+    this.nextAbilitySubmitNonce = (this.nextAbilitySubmitNonce + 1) & 0xffff;
+    this.queuedAbilityCreateCommand = {
+      submitNonce: this.nextAbilitySubmitNonce,
+      ...payload
+    };
+    return this.nextAbilitySubmitNonce;
+  }
+
+  public consumeAbilityEvents(): AbilityEventBatch | null {
+    if (
+      this.pendingAbilityDefinitions.size === 0 &&
+      this.pendingAbilityCreateResults.length === 0 &&
+      this.pendingLoadoutState === null
+    ) {
+      return null;
+    }
+
+    const definitions = Array.from(this.pendingAbilityDefinitions.values()).sort((a, b) => a.id - b.id);
+    const loadout = this.pendingLoadoutState;
+    const createResults = [...this.pendingAbilityCreateResults];
+    this.pendingAbilityDefinitions.clear();
+    this.pendingAbilityCreateResults.length = 0;
+    this.pendingLoadoutState = null;
+
+    return {
+      definitions,
+      loadout,
+      createResults
+    };
+  }
+
+  public getAbilityCatalog(): AbilityDefinition[] {
+    return Array.from(this.abilityDefinitions.values()).sort((a, b) => a.id - b.id);
+  }
+
+  public getAbilityById(abilityId: number): AbilityDefinition | null {
+    return this.abilityDefinitions.get(abilityId) ?? null;
   }
 
   public getRemotePlayers(): RemotePlayerState[] {
@@ -272,19 +392,102 @@ export class NetworkClient {
 
     const messageCount = messages.length;
     for (let i = 0; i < messageCount; i++) {
-      const message = messages[i] as IdentityMessage | InputAckMessage | undefined;
+      const message = messages[i] as
+        | IdentityMessage
+        | InputAckMessage
+        | AbilityDefinitionMessage
+        | LoadoutStateMessage
+        | AbilityCreateResultMessage
+        | undefined;
       if (message?.ntype === NType.IdentityMessage) {
         this.localPlayerNid = message.playerNid;
         continue;
       }
       if (message?.ntype === NType.InputAckMessage) {
         this.enqueueAckMessage(message);
+        continue;
+      }
+      if (message?.ntype === NType.AbilityDefinitionMessage) {
+        const ability = this.toAbilityDefinition(message);
+        if (!ability) {
+          continue;
+        }
+        this.abilityDefinitions.set(ability.id, ability);
+        this.pendingAbilityDefinitions.set(ability.id, ability);
+        continue;
+      }
+      if (message?.ntype === NType.LoadoutStateMessage) {
+        this.pendingLoadoutState = this.toLoadoutState(message);
+        continue;
+      }
+      if (message?.ntype === NType.AbilityCreateResultMessage) {
+        this.pendingAbilityCreateResults.push({
+          submitNonce: message.submitNonce,
+          success: message.success,
+          createdAbilityId: message.createdAbilityId,
+          message: message.message
+        });
       }
     }
 
     // Drain processed messages without allocating a new array in this hot path.
     messages.length = 0;
     this.processBufferedAcks();
+  }
+
+  private toAbilityDefinition(message: AbilityDefinitionMessage): AbilityDefinition | null {
+    const category = abilityCategoryFromWireValue(message.category);
+    if (!category) {
+      return null;
+    }
+    const id = this.clampUnsignedInt(message.abilityId, 0xffff);
+    const points = {
+      power: this.clampUnsignedInt(message.pointsPower, 255),
+      velocity: this.clampUnsignedInt(message.pointsVelocity, 255),
+      efficiency: this.clampUnsignedInt(message.pointsEfficiency, 255),
+      control: this.clampUnsignedInt(message.pointsControl, 255)
+    };
+    const attributes = decodeAbilityAttributeMask(this.clampUnsignedInt(message.attributeMask, 0xffff));
+    const hasProjectile =
+      category === "projectile" &&
+      this.clampUnsignedInt(message.kind, 0xff) > 0 &&
+      message.speed > 0 &&
+      message.damage > 0;
+
+    return {
+      id,
+      key: `runtime-${id}`,
+      name: typeof message.name === "string" && message.name.trim() ? message.name.trim() : `Ability ${id}`,
+      description: `${category} | attrs: ${attributes.length > 0 ? attributes.join(", ") : "none"}`,
+      category,
+      points,
+      attributes,
+      projectile: hasProjectile
+        ? {
+            kind: this.clampUnsignedInt(message.kind, 0xff),
+            speed: message.speed,
+            damage: message.damage,
+            radius: message.radius,
+            cooldownSeconds: message.cooldownSeconds,
+            lifetimeSeconds: message.lifetimeSeconds,
+            spawnForwardOffset: message.spawnForwardOffset,
+            spawnVerticalOffset: message.spawnVerticalOffset
+          }
+        : undefined
+    };
+  }
+
+  private toLoadoutState(message: LoadoutStateMessage): LoadoutState {
+    return {
+      selectedHotbarSlot: clampHotbarSlotIndex(message.selectedHotbarSlot),
+      abilityIds: [
+        message.slot0AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[0],
+        message.slot1AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[1],
+        message.slot2AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[2],
+        message.slot3AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[3],
+        message.slot4AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[4]
+      ]
+    };
   }
 
   private enqueueAckMessage(message: InputAckMessage): void {

@@ -66,9 +66,14 @@ Key runtime modules:
 - Mixamo clips (`Idle`, `Walking`, `Running`, `Jump`, `Punching`) are now preloaded from `public/assets/animations/mixamo/` and retargeted at runtime onto the male rig skeleton before being fed into the animation controller.
 - Procedural clips remain only as an internal fallback path if imported/retargeted clips are unavailable.
 - Root motion is disabled by default in animation policy so physics/netcode remain movement-authoritative; per-clip root-motion opt-in is supported for future specific clips.
-- Ability/shared gameplay scaffolding now exists in `src/shared/abilities.ts` (categories, stat-point metadata, attributes, projectile profiles, default hotbar/unlocked sets) to support the upcoming ability creator flow.
-- Client now includes a first-pass ability HUD (`src/client/ui/AbilityHud.ts`) with hotbar slots, a `B`-toggle loadout panel, and drag/drop assignment.
+- Ability/shared gameplay scaffolding in `src/shared/abilities.ts` now includes creator draft validation + profile synthesis logic (category, stat-point budget, attributes, projectile profile synthesis, wire helpers).
+- Client now includes an in-game ability creator/loadout HUD (`src/client/ui/AbilityHud.ts`) with:
+  - hotbar slots (`1-5`), slot selection, and drag/drop assignment
+  - `B`-toggle creator panel
+  - stat-point steppers, attribute toggles, and create/equip submission
+  - server result status feedback
 - Server now runs a basic authoritative projectile combat loop (spawn, travel, collision, damage, despawn, respawn) in `src/server/GameSimulation.ts`.
+- Ability creation is now server-authoritative: client submits drafts as `AbilityCreateCommand`; server validates/builds runtime abilities, then sends authoritative catalog/loadout/result messages back to the owning client.
 - Client startup now uses a staged boot pipeline:
   - optional manifest-driven preload pass (`ASSET_MANIFEST`) through Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`)
   - physics/network initialization progress phases

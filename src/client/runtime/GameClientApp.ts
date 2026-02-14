@@ -3,7 +3,6 @@ import {
   ABILITY_ID_NONE,
   DEFAULT_HOTBAR_ABILITY_IDS,
   getAbilityDefinitionById,
-  getAllAbilityDefinitions,
   normalizeYaw,
   SERVER_TICK_SECONDS
 } from "../../shared/index";
@@ -52,7 +51,8 @@ export class GameClientApp {
   private lastReconcileReplayCount = 0;
   private reconcileCorrectionCount = 0;
   private reconcileHardSnapCount = 0;
-  private readonly hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
+  private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
+  private lastAbilityCreateMessage = "Ready.";
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -65,7 +65,6 @@ export class GameClientApp {
     this.cspEnabled = cspEnabled;
     this.input = new InputController(canvas);
     this.abilityHud = AbilityHud.mount(document, {
-      availableAbilities: getAllAbilityDefinitions(),
       initialHotbarAssignments: this.hotbarAbilityIds,
       initialSelectedSlot: this.input.getSelectedHotbarSlot(),
       onHotbarSlotSelected: (slot) => {
@@ -75,6 +74,11 @@ export class GameClientApp {
         this.hotbarAbilityIds[slot] = abilityId;
         this.input.setSelectedHotbarSlot(slot);
         this.abilityHud.setSelectedSlot(slot, false);
+      },
+      onCreateAbilityRequested: (draft) => {
+        const submitNonce = this.network.queueAbilityCreateDraft(draft);
+        this.lastAbilityCreateMessage = `Create request #${submitNonce} queued`;
+        this.abilityHud.setCreatorStatus(this.lastAbilityCreateMessage);
       }
     });
     this.renderer = new WorldRenderer(canvas);
@@ -147,6 +151,7 @@ export class GameClientApp {
       this.stepFixed(FIXED_STEP);
       this.accumulator -= FIXED_STEP;
     }
+    this.applyAbilityEvents();
 
     const pose = this.getRenderPose();
     this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
@@ -261,6 +266,31 @@ export class GameClientApp {
     this.wasServerGroundedOnPlatform = serverGroundedOnPlatform;
   }
 
+  private applyAbilityEvents(): void {
+    const events = this.network.consumeAbilityEvents();
+    if (!events) {
+      return;
+    }
+
+    for (const definition of events.definitions) {
+      this.abilityHud.upsertAbility(definition);
+    }
+
+    if (events.loadout) {
+      this.hotbarAbilityIds = [...events.loadout.abilityIds];
+      this.input.setSelectedHotbarSlot(events.loadout.selectedHotbarSlot);
+      this.abilityHud.setHotbarAssignments(this.hotbarAbilityIds);
+      this.abilityHud.setSelectedSlot(events.loadout.selectedHotbarSlot, false);
+    }
+
+    for (const result of events.createResults) {
+      this.lastAbilityCreateMessage = result.success
+        ? `Created ability #${result.createdAbilityId}`
+        : `Create failed: ${result.message}`;
+      this.abilityHud.setCreatorStatus(this.lastAbilityCreateMessage);
+    }
+  }
+
   private updateStatus(): void {
     if (!this.statusNode) {
       return;
@@ -278,9 +308,9 @@ export class GameClientApp {
     const projectileCount = this.network.getProjectiles().length;
     const activeSlot = this.input.getSelectedHotbarSlot() + 1;
     const selectedAbilityId = this.hotbarAbilityIds[activeSlot - 1] ?? ABILITY_ID_NONE;
-    const activeAbilityName = getAbilityDefinitionById(selectedAbilityId)?.name ?? "Empty";
+    const activeAbilityName = this.resolveAbilityName(selectedAbilityId);
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | creator=${this.lastAbilityCreateMessage} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -307,6 +337,7 @@ export class GameClientApp {
       for (let i = 0; i < steps; i++) {
         this.stepFixed(FIXED_STEP);
       }
+      this.applyAbilityEvents();
       this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
       this.renderer.syncPlatforms(this.network.getPlatforms());
       this.renderer.syncProjectiles(this.network.getProjectiles());
@@ -361,11 +392,18 @@ export class GameClientApp {
         localAbility: {
           selectedSlot,
           selectedAbilityId,
-          selectedAbilityName: getAbilityDefinitionById(selectedAbilityId)?.name ?? "Empty",
+          creatorStatus: this.lastAbilityCreateMessage,
+          selectedAbilityName: this.resolveAbilityName(selectedAbilityId),
           hotbar: this.hotbarAbilityIds.map((abilityId, slot) => ({
             slot,
             abilityId,
-            abilityName: getAbilityDefinitionById(abilityId)?.name ?? "Empty"
+            abilityName: this.resolveAbilityName(abilityId)
+          })),
+          catalog: this.network.getAbilityCatalog().map((ability) => ({
+            id: ability.id,
+            name: ability.name,
+            category: ability.category,
+            hasProjectile: Boolean(ability.projectile)
           }))
         },
         netTiming: {
@@ -510,6 +548,12 @@ export class GameClientApp {
   private readonly onResize = (): void => {
     this.renderer.resize(window.innerWidth, window.innerHeight);
   };
+
+  private resolveAbilityName(abilityId: number): string {
+    return (
+      this.network.getAbilityById(abilityId)?.name ?? getAbilityDefinitionById(abilityId)?.name ?? "Empty"
+    );
+  }
 
   private static resolveServerUrl(): string {
     const params = new URLSearchParams(window.location.search);

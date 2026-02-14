@@ -119,6 +119,9 @@ export class InputController {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (this.isTypingTarget(event.target)) {
+      return;
+    }
     this.heldKeys.add(event.code);
     if (event.code === "Space") {
       this.jumpQueued = true;
@@ -189,5 +192,16 @@ export class InputController {
       default:
         return null;
     }
+  }
+
+  private isTypingTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+      return true;
+    }
+    return target.isContentEditable;
   }
 }
