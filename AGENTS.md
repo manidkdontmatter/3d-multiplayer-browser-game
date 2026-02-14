@@ -60,6 +60,22 @@
 - Challenge weak assumptions and propose better technical approaches directly.
 - Contradiction note: proactively detect and resolve contradictions across instruction/memory docs; when conflicts appear, choose the interpretation that best serves production quality and consistency, then update files to remove ambiguity.
 
+## UI/UX Standards
+
+- Build UI to production game standards: high quality, deliberate, and maintainable; avoid placeholder-looking or low-effort layouts.
+- Follow proven game UI conventions and patterns seen in top-quality titles, adapted to this project's specific needs instead of copying blindly.
+- Prioritize player UX first: clear information hierarchy, low interaction friction, predictable controls, and fast, obvious feedback to user actions.
+- Design for flow and non-clunky operation: minimize unnecessary clicks/toggles, reduce context switching, and keep high-frequency actions near primary focus areas.
+- Ensure visual quality and cohesion: consistent spacing, typography, color usage, panel sizing, and component behavior across all game UIs.
+- Keep gameplay readability strong: critical combat/state info must remain legible and easy to parse during movement/action.
+- Use clear interaction affordances: buttons, slots, drag targets, hover/active/disabled states, and error/success states must be visually unambiguous.
+- Treat layout as intentional systems design: each UI's purpose, ownership, and boundaries should be explicit (e.g., creator vs inventory/loadout are separate systems unless design intent says otherwise).
+- Preserve responsiveness and device fit: support common desktop resolutions first, with sensible responsive behavior for smaller viewports.
+- Respect performance constraints of browser games: lightweight DOM/CSS/JS, avoid unnecessary reflow-heavy patterns, and keep runtime UI updates efficient.
+- Implement UI with native web stack only for this project (TypeScript/JavaScript + CSS + HTML), no UI frameworks unless explicitly approved by the user.
+- Enforce consistency through reusable primitives and patterns inside the codebase (shared classes/components/utilities), not ad-hoc one-off implementations.
+- Validate UX in runtime, not just by inspection: verify control flow, readability, and interaction behavior with Playwright/smoke checks whenever UI behavior changes materially.
+
 ## Memory and Documentation Rules
 
 - Memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions.
