@@ -63,6 +63,7 @@
 ## Memory and Documentation Rules
 
 - Memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions.
+- Memory hygiene note: periodically sanity-check agent memory docs (`AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, `progress.md`) to remove stale/contradictory/false guidance and keep behavior coherent over time.
 - Ownership note: treat `AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, and `progress.md` as agent-managed working memory docs; freely restructure/edit them whenever that improves clarity, execution quality, or progress toward the production game goal, even if the user originally authored parts of them.
 - Use `progress.md` for active TODOs, current-session status, and handoff notes only.
 - Maintain `overview.md` as the canonical high-level summary of what the project is and how it works.
