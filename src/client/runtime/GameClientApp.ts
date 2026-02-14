@@ -119,7 +119,7 @@ export class GameClientApp {
     }
 
     const pose = this.getRenderPose();
-    this.renderer.syncRemotePlayers(this.network.getRemotePlayers());
+    this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
     this.renderer.syncPlatforms(this.network.getPlatforms());
     this.renderer.render(pose);
     this.updateStatus();
@@ -130,7 +130,12 @@ export class GameClientApp {
     let yaw = this.input.getYaw();
     const pitch = this.input.getPitch();
 
-    this.network.step(delta, movement, { yaw, pitch });
+    this.network.step(
+      delta,
+      movement,
+      { yaw, pitch },
+      { usePrimary: this.input.isPrimaryActionHeld() }
+    );
 
     const serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform();
     const cspActive = this.isCspActive(serverGroundedOnPlatform);
@@ -260,7 +265,7 @@ export class GameClientApp {
       for (let i = 0; i < steps; i++) {
         this.stepFixed(FIXED_STEP);
       }
-      this.renderer.syncRemotePlayers(this.network.getRemotePlayers());
+      this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
       this.renderer.syncPlatforms(this.network.getPlatforms());
       this.renderer.render(this.getRenderPose());
       this.updateStatus();
@@ -293,7 +298,10 @@ export class GameClientApp {
           z: p.z,
           yaw: p.yaw,
           pitch: p.pitch,
-          serverTick: p.serverTick
+          serverTick: p.serverTick,
+          grounded: p.grounded,
+          upperBodyAction: p.upperBodyAction,
+          upperBodyActionNonce: p.upperBodyActionNonce
         })),
         netTiming: {
           interpolationDelayMs: this.network.getInterpolationDelayMs(),

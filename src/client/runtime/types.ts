@@ -21,6 +21,9 @@ export interface RemotePlayerState {
   yaw: number;
   pitch: number;
   serverTick: number;
+  grounded: boolean;
+  upperBodyAction: number;
+  upperBodyActionNonce: number;
 }
 
 export interface PlatformState {

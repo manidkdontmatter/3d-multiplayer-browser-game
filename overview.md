@@ -40,6 +40,7 @@ Key runtime modules:
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
 - `src/client/runtime/WorldRenderer.ts`: Three.js scene/render integration.
+- `src/client/runtime/CharacterAnimationController.ts`: layered humanoid animation blending/masking runtime.
 - `src/client/assets/assetLoader.ts`: Three.js loader-based manifest preloading and runtime asset cache.
 
 ## Netcode Model
@@ -48,6 +49,7 @@ Key runtime modules:
 - AOI/visibility via nengi spatial channels (`ChannelAABB3D` + per-user `AABB3D` views).
 - Snapshot replication from server to clients, including `serverTick` stamping on replicated player/platform entities.
 - Client input commands include rotation deltas and movement intent.
+- Client input commands also carry primary-action intent (`usePrimary`) for replicated upper-body action triggering.
 - Server movement integration is tick-owned (`SERVER_TICK_SECONDS`) rather than client-timed.
 - Client-side prediction uses Rapier KCC path to mirror server movement/collision as closely as possible.
 
@@ -55,6 +57,11 @@ Key runtime modules:
 
 - Runtime character assets now live under `public/assets/models/characters/**` and are loaded via the manifest in `src/client/assets/assetManifest.ts`.
 - Remote player rendering now uses the preloaded male superhero GLTF rig by default, with capsule fallback if the asset is unavailable.
+- Remote player animation now uses a layered runtime controller:
+  - base locomotion blends idle/walk/run from measured speed
+  - jump pose activates while server-replicated grounded state is false
+  - upper-body overlay action is independently triggered from replicated action nonce/events
+- Root motion is disabled by default in animation policy so physics/netcode remain movement-authoritative; per-clip root-motion opt-in is supported for future specific clips.
 - Client startup now uses a staged boot pipeline:
   - optional manifest-driven preload pass (`ASSET_MANIFEST`) through Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`)
   - physics/network initialization progress phases

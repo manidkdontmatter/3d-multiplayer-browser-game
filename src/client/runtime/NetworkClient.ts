@@ -111,7 +111,8 @@ export class NetworkClient {
   public step(
     delta: number,
     movement: MovementInput,
-    orientation: { yaw: number; pitch: number }
+    orientation: { yaw: number; pitch: number },
+    actions: { usePrimary: boolean }
   ): void {
     if (!this.connected) {
       return;
@@ -140,6 +141,7 @@ export class NetworkClient {
       strafe: movement.strafe,
       jump: movement.jump,
       sprint: movement.sprint,
+      usePrimary: actions.usePrimary,
       yawDelta,
       pitch: orientation.pitch,
       delta
@@ -499,6 +501,9 @@ export class NetworkClient {
     const yaw = raw.yaw;
     const pitch = raw.pitch;
     const serverTick = raw.serverTick;
+    const grounded = raw.grounded;
+    const upperBodyAction = raw.upperBodyAction;
+    const upperBodyActionNonce = raw.upperBodyActionNonce;
 
     if (
       typeof nid !== "number" ||
@@ -519,7 +524,10 @@ export class NetworkClient {
       z,
       yaw,
       pitch,
-      serverTick
+      serverTick,
+      grounded: typeof grounded === "boolean" ? grounded : true,
+      upperBodyAction: typeof upperBodyAction === "number" ? upperBodyAction : 0,
+      upperBodyActionNonce: typeof upperBodyActionNonce === "number" ? upperBodyActionNonce : 0
     };
   }
 

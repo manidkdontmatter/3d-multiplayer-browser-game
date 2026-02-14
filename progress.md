@@ -1,3 +1,5 @@
+Original prompt: we will add animations next. where do you think i can source some? you can't generate animations can you?
+
 ## Current Status
 
 - Core stack is running: authoritative nengi server + three.js client + Rapier physics.
@@ -48,6 +50,18 @@
 - Safe color/albedo textures were converted from PNG to JPG; normal/roughness maps remained PNG to preserve data fidelity.
 - Remote players now render with the preloaded male GLTF rig (static T-pose for now) and fall back to capsule meshes if model load/template setup fails.
 - Applied a fixed `Math.PI` model yaw offset in renderer template setup so character facing aligns with gameplay yaw (model no longer appears backward).
+- Added a runtime layered animation controller for humanoid remote players (`CharacterAnimationController`) with:
+  - locomotion blending (`idle` <-> `walk` <-> `run`) driven by measured movement speed
+  - airborne jump pose gating driven by replicated grounded state
+  - masked upper-body overlay action channel (`upperCast`) independent of lower-body locomotion
+- Wired upper-body action intent through netcode:
+  - client input now sends `usePrimary` (LMB hold state)
+  - server detects rising-edge primary intent and increments replicated `upperBodyActionNonce`
+  - clients trigger upper-body one-shot overlay from `upperBodyAction` + `upperBodyActionNonce`
+- Root motion policy is now explicit in the animation system:
+  - default is OFF (physics/netcode authoritative movement remains source of truth)
+  - per-clip root-motion opt-in is supported via clip policy map (currently empty)
+- Fixed Three.js animation binding errors by using direct bone-name quaternion tracks (instead of `.bones[...]` binding paths at group root).
 - Cleaned model package references by updating glTF URIs to canonical texture names and removing unneeded filename-alias duplicates.
 - Validation loop optimized for faster iteration:
   - Typecheck now uses incremental TS build info caching (`tsconfig.client.tsbuildinfo`, `tsconfig.server.tsbuildinfo`).
@@ -57,6 +71,7 @@
   - Multiplayer script now supports skipping sprint/jump/reconnect checks for quick passes via env flags.
 - Latest verification (2026-02-14, test-optimization pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, `npm run test:multiplayer`, and `npm run verify:quick:standalone` all pass.
 - Latest verification (2026-02-14, character-asset integration pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer:quick` pass after folder reorg + male GLTF remote rendering integration.
+- Latest verification (2026-02-14, animation layering pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, and `npm run test:multiplayer` pass after layered animation integration.
 
 ## Session Close Notes (2026-02-13)
 
@@ -71,4 +86,6 @@
 - Expand automated tests further with combat-state assertions and longer-duration stability checks.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.
 - Add animation clips/state machine for humanoid rigs (idle, locomotion, jump) and blend between states for local + remote players.
+- Replace current procedural placeholder animation clips with imported production clips (Mixamo/API-generated), preserving existing layer/mask architecture.
+- Add animation import pipeline docs (Mixamo FBX Binary -> Blender retarget -> GLB clip pack) and automate conversion/validation checks.
 - Evaluate GLTF optimization pass (meshopt/texture compression and possible `.glb` packing) before adding more character/prop assets.

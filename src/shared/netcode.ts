@@ -14,6 +14,7 @@ export const inputCommandSchema = defineSchema({
   strafe: Binary.Float32,
   jump: Binary.Boolean,
   sprint: Binary.Boolean,
+  usePrimary: Binary.Boolean,
   yawDelta: Binary.Float32,
   pitch: Binary.Rotation32,
   delta: Binary.Float32
@@ -25,7 +26,10 @@ export const playerEntitySchema = defineSchema({
   z: { type: Binary.Float32, interp: true },
   yaw: { type: Binary.Rotation32, interp: true },
   pitch: { type: Binary.Rotation32, interp: true },
-  serverTick: Binary.UInt32
+  serverTick: Binary.UInt32,
+  grounded: Binary.Boolean,
+  upperBodyAction: Binary.UInt8,
+  upperBodyActionNonce: Binary.UInt16
 });
 
 export const identityMessageSchema = defineSchema({
@@ -75,6 +79,7 @@ export interface InputCommand {
   strafe: number;
   jump: boolean;
   sprint: boolean;
+  usePrimary: boolean;
   yawDelta: number;
   pitch: number;
   delta: number;
@@ -89,6 +94,9 @@ export interface PlayerEntity {
   yaw: number;
   pitch: number;
   serverTick: number;
+  grounded: boolean;
+  upperBodyAction: number;
+  upperBodyActionNonce: number;
 }
 
 export interface IdentityMessage {

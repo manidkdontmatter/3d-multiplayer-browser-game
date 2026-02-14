@@ -19,18 +19,38 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { CHARACTER_SUPERHERO_MALE_ASSET_ID } from "../assets/assetManifest";
 import { getLoadedAsset } from "../assets/assetLoader";
-import { PLAYER_EYE_HEIGHT, STATIC_WORLD_BLOCKS } from "../../shared/index";
+import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED, STATIC_WORLD_BLOCKS } from "../../shared/index";
 import type { PlayerPose, RemotePlayerState } from "./types";
+import { CharacterAnimationController } from "./CharacterAnimationController";
 
 const REMOTE_CHARACTER_TARGET_HEIGHT = PLAYER_EYE_HEIGHT + 0.08;
 const MIN_MODEL_HEIGHT = 1e-4;
 const REMOTE_CHARACTER_MODEL_YAW_OFFSET = Math.PI;
+const REMOTE_ANIMATION_SPEED_CAP = PLAYER_SPRINT_SPEED * 2.2;
+
+const REMOTE_CHARACTER_ROOT_MOTION_POLICY = {
+  // Root motion is disabled by default to keep movement physics/netcode authoritative.
+  defaultEnabled: false,
+  // Opt in per clip when/if a specific animation should apply root motion.
+  perClip: {}
+} as const;
+
+interface RemotePlayerVisual {
+  root: Group;
+  animationController: CharacterAnimationController | null;
+  lastX: number;
+  lastY: number;
+  lastZ: number;
+  horizontalSpeed: number;
+  verticalSpeed: number;
+  initialized: boolean;
+}
 
 export class WorldRenderer {
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
-  private readonly remotePlayers = new Map<number, Group>();
+  private readonly remotePlayers = new Map<number, RemotePlayerVisual>();
   private readonly platforms = new Map<number, Mesh>();
   private readonly cameraForward = new Vector3(0, 0, -1);
   private readonly remotePlayerTemplate: Group | null;
@@ -60,24 +80,54 @@ export class WorldRenderer {
     this.renderer.setSize(width, height);
   }
 
-  public syncRemotePlayers(players: RemotePlayerState[]): void {
+  public syncRemotePlayers(players: RemotePlayerState[], frameDeltaSeconds: number): void {
+    const dt = Math.max(1 / 240, Math.min(frameDeltaSeconds, 1 / 20));
     const activeNids = new Set<number>();
     for (const remotePlayer of players) {
       activeNids.add(remotePlayer.nid);
-      let root = this.remotePlayers.get(remotePlayer.nid);
-      if (!root) {
-        root = this.createRemotePlayerMesh();
-        this.remotePlayers.set(remotePlayer.nid, root);
-        this.scene.add(root);
+      let visual = this.remotePlayers.get(remotePlayer.nid);
+      if (!visual) {
+        visual = this.createRemotePlayerVisual();
+        this.remotePlayers.set(remotePlayer.nid, visual);
+        this.scene.add(visual.root);
       }
 
-      root.position.set(remotePlayer.x, remotePlayer.y - PLAYER_EYE_HEIGHT, remotePlayer.z);
-      root.rotation.y = remotePlayer.yaw;
+      const renderY = remotePlayer.y - PLAYER_EYE_HEIGHT;
+      if (visual.initialized) {
+        const deltaX = remotePlayer.x - visual.lastX;
+        const deltaY = renderY - visual.lastY;
+        const deltaZ = remotePlayer.z - visual.lastZ;
+        const sampleHorizontalSpeed = Math.hypot(deltaX, deltaZ) / dt;
+        const sampleVerticalSpeed = deltaY / dt;
+        const smoothing = 1 - Math.exp(-12 * dt);
+        visual.horizontalSpeed += (sampleHorizontalSpeed - visual.horizontalSpeed) * smoothing;
+        visual.verticalSpeed += (sampleVerticalSpeed - visual.verticalSpeed) * smoothing;
+      } else {
+        visual.horizontalSpeed = 0;
+        visual.verticalSpeed = 0;
+        visual.initialized = true;
+      }
+
+      visual.horizontalSpeed = Math.min(Math.max(0, visual.horizontalSpeed), REMOTE_ANIMATION_SPEED_CAP);
+      visual.root.position.set(remotePlayer.x, renderY, remotePlayer.z);
+      visual.root.rotation.y = remotePlayer.yaw;
+      visual.lastX = remotePlayer.x;
+      visual.lastY = renderY;
+      visual.lastZ = remotePlayer.z;
+
+      visual.animationController?.update({
+        deltaSeconds: dt,
+        horizontalSpeed: visual.horizontalSpeed,
+        verticalSpeed: visual.verticalSpeed,
+        grounded: remotePlayer.grounded,
+        upperBodyAction: remotePlayer.upperBodyAction,
+        upperBodyActionNonce: remotePlayer.upperBodyActionNonce
+      });
     }
 
-    for (const [nid, mesh] of this.remotePlayers) {
+    for (const [nid, visual] of this.remotePlayers) {
       if (!activeNids.has(nid)) {
-        this.scene.remove(mesh);
+        this.scene.remove(visual.root);
         this.remotePlayers.delete(nid);
       }
     }
@@ -169,40 +219,53 @@ export class WorldRenderer {
     }
   }
 
-  private createRemotePlayerMesh(): Group {
+  private createRemotePlayerVisual(): RemotePlayerVisual {
+    let root: Group;
+    let animationController: CharacterAnimationController | null = null;
     if (this.remotePlayerTemplate) {
-      return cloneSkeleton(this.remotePlayerTemplate) as Group;
+      root = cloneSkeleton(this.remotePlayerTemplate) as Group;
+      animationController = new CharacterAnimationController(root, {
+        rootMotion: REMOTE_CHARACTER_ROOT_MOTION_POLICY
+      });
+    } else {
+      root = new Group();
+
+      const capsuleRadius = 0.38;
+      const capsuleLength = 1.0;
+      const capsuleHeight = capsuleLength + capsuleRadius * 2;
+      const body = new Mesh(
+        new CapsuleGeometry(capsuleRadius, capsuleLength, 3, 6),
+        new MeshStandardMaterial({
+          color: 0xf4d8b5,
+          roughness: 0.94,
+          metalness: 0.01
+        })
+      );
+      body.position.y = capsuleHeight * 0.5;
+      root.add(body);
+
+      const visorSize = capsuleHeight * 0.2;
+      const visor = new Mesh(
+        new BoxGeometry(visorSize, visorSize, visorSize),
+        new MeshStandardMaterial({
+          color: 0x1b1e2e,
+          roughness: 0.35,
+          metalness: 0.15
+        })
+      );
+      visor.position.set(0, capsuleHeight * 0.75, -(capsuleRadius + visorSize * 0.5));
+      root.add(visor);
     }
-
-    const root = new Group();
-
-    const capsuleRadius = 0.38;
-    const capsuleLength = 1.0;
-    const capsuleHeight = capsuleLength + capsuleRadius * 2;
-    const body = new Mesh(
-      new CapsuleGeometry(capsuleRadius, capsuleLength, 3, 6),
-      new MeshStandardMaterial({
-        color: 0xf4d8b5,
-        roughness: 0.94,
-        metalness: 0.01
-      })
-    );
-    body.position.y = capsuleHeight * 0.5;
-    root.add(body);
-
-    const visorSize = capsuleHeight * 0.2;
-    const visor = new Mesh(
-      new BoxGeometry(visorSize, visorSize, visorSize),
-      new MeshStandardMaterial({
-        color: 0x1b1e2e,
-        roughness: 0.35,
-        metalness: 0.15
-      })
-    );
-    visor.position.set(0, capsuleHeight * 0.75, -(capsuleRadius + visorSize * 0.5));
-    root.add(visor);
-
-    return root;
+    return {
+      root,
+      animationController,
+      lastX: 0,
+      lastY: 0,
+      lastZ: 0,
+      horizontalSpeed: 0,
+      verticalSpeed: 0,
+      initialized: false
+    };
   }
 
   private createRemotePlayerTemplate(): Group | null {
