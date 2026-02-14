@@ -3,7 +3,6 @@ import { AABB3D, Channel, ChannelAABB3D } from "nengi";
 import {
   applyPlatformCarry,
   GRAVITY,
-  MAX_COMMAND_DELTA_SECONDS,
   NType,
   normalizeYaw,
   PLATFORM_DEFINITIONS,
@@ -12,6 +11,7 @@ import {
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
+  SERVER_TICK_SECONDS,
   samplePlatformTransform,
   PLAYER_SPRINT_SPEED,
   PLAYER_WALK_SPEED,
@@ -76,6 +76,9 @@ type InputCommand = {
   pitch: number;
   delta: number;
 };
+
+const INPUT_SEQUENCE_MODULO = 0x10000;
+const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
 
 export class GameSimulation {
   private readonly playersByUserId = new Map<number, PlayerEntity>();
@@ -169,6 +172,15 @@ export class GameSimulation {
       return;
     }
 
+    let latestSequence = player.lastProcessedSequence;
+    let hasAcceptedCommand = false;
+    let mergedForward = 0;
+    let mergedStrafe = 0;
+    let mergedPitch = player.pitch;
+    let mergedSprint = false;
+    let queuedJump = false;
+    let accumulatedYawDelta = 0;
+
     for (const rawCommand of commands) {
       const command = rawCommand as Partial<InputCommand>;
       if (
@@ -180,37 +192,51 @@ export class GameSimulation {
         continue;
       }
 
-      const delta = Math.max(0, Math.min(command.delta ?? 0.05, MAX_COMMAND_DELTA_SECONDS));
-      const pitch = command.pitch ?? player.pitch;
-      const yawDelta = command.yawDelta ?? 0;
-      const forward = command.forward ?? 0;
-      const strafe = command.strafe ?? 0;
+      const pitch = command.pitch ?? mergedPitch;
+      const yawDelta = normalizeYaw(command.yawDelta ?? 0);
+      const forward = command.forward ?? mergedForward;
+      const strafe = command.strafe ?? mergedStrafe;
       const sprint = Boolean(command.sprint);
       const sequence =
         typeof command.sequence === "number"
-          ? command.sequence
-          : ((player.lastProcessedSequence + 1) & 0xffff);
-
-      if (command.jump && player.grounded) {
-        player.vy = PLAYER_JUMP_VELOCITY;
-        player.grounded = false;
-        player.groundedPlatformPid = null;
+          ? (command.sequence & 0xffff)
+          : ((latestSequence + 1) & 0xffff);
+      if (!this.isSequenceAheadOf(latestSequence, sequence)) {
+        continue;
       }
 
-      player.yaw = normalizeYaw(player.yaw + yawDelta);
-
-      const speedScale = sprint ? PLAYER_SPRINT_SPEED / PLAYER_WALK_SPEED : 1;
-      const horizontal = stepHorizontalMovement(
-        { vx: player.vx, vz: player.vz },
-        { forward, strafe, sprint: false, yaw: player.yaw },
-        player.grounded,
-        delta
-      );
-      player.vx = horizontal.vx * speedScale;
-      player.vz = horizontal.vz * speedScale;
-      player.pitch = Math.max(-1.45, Math.min(1.45, pitch));
-      player.lastProcessedSequence = sequence;
+      hasAcceptedCommand = true;
+      latestSequence = sequence;
+      mergedForward = forward;
+      mergedStrafe = strafe;
+      mergedPitch = pitch;
+      mergedSprint = sprint;
+      queuedJump = queuedJump || Boolean(command.jump);
+      accumulatedYawDelta = normalizeYaw(accumulatedYawDelta + yawDelta);
     }
+
+    if (!hasAcceptedCommand) {
+      return;
+    }
+
+    if (queuedJump && player.grounded) {
+      player.vy = PLAYER_JUMP_VELOCITY;
+      player.grounded = false;
+      player.groundedPlatformPid = null;
+    }
+
+    player.yaw = normalizeYaw(player.yaw + accumulatedYawDelta);
+    const speedScale = mergedSprint ? PLAYER_SPRINT_SPEED / PLAYER_WALK_SPEED : 1;
+    const horizontal = stepHorizontalMovement(
+      { vx: player.vx, vz: player.vz },
+      { forward: mergedForward, strafe: mergedStrafe, sprint: false, yaw: player.yaw },
+      player.grounded,
+      SERVER_TICK_SECONDS
+    );
+    player.vx = horizontal.vx * speedScale;
+    player.vz = horizontal.vz * speedScale;
+    player.pitch = Math.max(-1.45, Math.min(1.45, mergedPitch));
+    player.lastProcessedSequence = latestSequence;
   }
 
   public step(delta: number): void {
@@ -507,5 +533,10 @@ export class GameSimulation {
     }
 
     return { x: baseRadius + (maxRings + 1) * ringStep, z: 0 };
+  }
+
+  private isSequenceAheadOf(lastSequence: number, candidateSequence: number): boolean {
+    const delta = (candidateSequence - lastSequence + INPUT_SEQUENCE_MODULO) % INPUT_SEQUENCE_MODULO;
+    return delta > 0 && delta < INPUT_SEQUENCE_HALF_RANGE;
   }
 }

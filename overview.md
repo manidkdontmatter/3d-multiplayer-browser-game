@@ -46,6 +46,7 @@ Key runtime modules:
 - AOI/visibility via nengi spatial channels (`ChannelAABB3D` + per-user `AABB3D` views).
 - Snapshot replication from server to clients.
 - Client input commands include rotation deltas and movement intent.
+- Server movement integration is tick-owned (`SERVER_TICK_SECONDS`) rather than client-timed.
 - Client-side prediction uses Rapier KCC path to mirror server movement/collision as closely as possible.
 
 ## Current Behavioral Notes

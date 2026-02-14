@@ -220,7 +220,10 @@ export class NetworkClient {
         continue;
       }
       if (message?.ntype === NType.InputAckMessage) {
-        if (this.lastAckSequence !== null && message.sequence === this.lastAckSequence) {
+        if (
+          this.lastAckSequence !== null &&
+          !this.isSequenceAheadOf(this.lastAckSequence, message.sequence)
+        ) {
           continue;
         }
         this.lastAckSequence = message.sequence;
@@ -278,6 +281,11 @@ export class NetworkClient {
   private isAckForOrAheadOf(candidateSequence: number, ackedSequence: number): boolean {
     const delta = (ackedSequence - candidateSequence + INPUT_SEQUENCE_MODULO) % INPUT_SEQUENCE_MODULO;
     return delta === 0 || delta < INPUT_SEQUENCE_HALF_RANGE;
+  }
+
+  private isSequenceAheadOf(lastSequence: number, candidateSequence: number): boolean {
+    const delta = (candidateSequence - lastSequence + INPUT_SEQUENCE_MODULO) % INPUT_SEQUENCE_MODULO;
+    return delta > 0 && delta < INPUT_SEQUENCE_HALF_RANGE;
   }
 
   private applyInterpolatedFrames(rawFrames: unknown): void {
