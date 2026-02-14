@@ -63,6 +63,7 @@
 ## UI/UX Standards
 
 - Build UI to production game standards: high quality, deliberate, and maintainable; avoid placeholder-looking or low-effort layouts.
+- UI must ship as game-ready production UI for appearance, usability, and layout quality; do not deliver test-only/dev-only presentation quality as final implementation.
 - Follow proven game UI conventions and patterns seen in top-quality titles, adapted to this project's specific needs instead of copying blindly.
 - Prioritize player UX first: clear information hierarchy, low interaction friction, predictable controls, and fast, obvious feedback to user actions.
 - Design for flow and non-clunky operation: minimize unnecessary clicks/toggles, reduce context switching, and keep high-frequency actions near primary focus areas.
