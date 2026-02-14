@@ -20,6 +20,7 @@
 ## Workflow and Tooling
 
 - Git workflow note: after meaningful, verified changes (for example passing relevant tests or completing a logical task), commit and push to GitHub without waiting for an extra prompt.
+- Dependency governance note: before installing, adding, or upgrading any library/package (npm or otherwise), ask the user for explicit approval first; do not proceed on package changes until approved.
 - Network note: internet speed can be slow (~3 mbps). Use longer timeouts, retry failed downloads, and avoid unnecessary reinstall/download work.
 - Testing note: use Playwright for browser automation/testing when relevant (including develop-web-game workflow if available).
 - Runtime note: use Node 20.x (pinned to `20.19.0` via `.nvmrc`).
