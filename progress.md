@@ -43,9 +43,9 @@ Original prompt: we will add animations next. where do you think i can source so
 - Client boot now has a staged loading overlay with progress bar (`#boot-overlay`) that tracks manifest preload and startup phases (physics -> network -> ready).
 - Asset pipeline now uses Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`) through `src/client/assets/assetLoader.ts`, with a runtime cache for preloaded assets.
 - Latest verification (2026-02-13, asset-loading pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after boot overlay + asset preloader integration.
-- Incoming root-level `3d-models/` pack was reorganized into `public/assets/models/characters/superhero/` so runtime URLs are stable and root stays clean.
+- Incoming root-level `3d-models/` pack was reorganized into `public/assets/models/characters/male/` so runtime URLs are stable and root stays clean.
 - Added a runtime asset structure note at `public/assets/README.md`.
-- `ASSET_MANIFEST` now registers only the active superhero male rig for preload/use.
+- `ASSET_MANIFEST` now registers the active male rig for preload/use.
 - Character texture budget was reduced to max `720x720` for browser suitability.
 - Safe color/albedo textures were converted from PNG to JPG; normal/roughness maps remained PNG to preserve data fidelity.
 - Remote players now render with the preloaded male GLTF rig (static T-pose for now) and fall back to capsule meshes if model load/template setup fails.
@@ -72,6 +72,14 @@ Original prompt: we will add animations next. where do you think i can source so
 - Latest verification (2026-02-14, test-optimization pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, `npm run test:multiplayer`, and `npm run verify:quick:standalone` all pass.
 - Latest verification (2026-02-14, character-asset integration pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer:quick` pass after folder reorg + male GLTF remote rendering integration.
 - Latest verification (2026-02-14, animation layering pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, and `npm run test:multiplayer` pass after layered animation integration.
+- Asset naming was normalized from `superhero` to `male` across runtime paths, asset IDs, labels, and docs.
+- Model files now live at `public/assets/models/characters/male/Male_FullBody.gltf` (+ `Male_FullBody.bin`) with renamed male texture filenames.
+- Added Mixamo clip intake path `public/assets/animations/mixamo/` and preloaded FBX assets (`Idle`, `Walking`, `Running`, `Jump`, `Punching`) via `ASSET_MANIFEST`.
+- `assetLoader` now supports `fbx` kind using Three.js `FBXLoader`.
+- `WorldRenderer` now retargets Mixamo clips onto the male rig at runtime and injects them into `CharacterAnimationController` clip overrides.
+- Imported `Idle.fbx` is now retargeted and used as the runtime idle clip; procedural idle remains only as fallback if imported clips are missing.
+- Latest verification (2026-02-14, mixamo-retarget + rename pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass.
+- Latest verification (2026-02-14, imported-idle integration pass): `npm run typecheck` and `npm run test:multiplayer:quick` pass; pass artifacts show remote players in non-T-pose idle.
 
 ## Session Close Notes (2026-02-13)
 
@@ -85,7 +93,6 @@ Original prompt: we will add animations next. where do you think i can source so
 - Add combat/state channel scaffolding for next gameplay systems.
 - Expand automated tests further with combat-state assertions and longer-duration stability checks.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.
-- Add animation clips/state machine for humanoid rigs (idle, locomotion, jump) and blend between states for local + remote players.
-- Replace current procedural placeholder animation clips with imported production clips (Mixamo/API-generated), preserving existing layer/mask architecture.
+- Expand humanoid animation set beyond base locomotion/jump/upper-body action (strafe, backpedal, turn-in-place, land, hit-react) while preserving existing layer/mask architecture.
 - Add animation import pipeline docs (Mixamo FBX Binary -> Blender retarget -> GLB clip pack) and automate conversion/validation checks.
 - Evaluate GLTF optimization pass (meshopt/texture compression and possible `.glb` packing) before adding more character/prop assets.

@@ -1318,7 +1318,7 @@
     },
     {
       "mesh": 2,
-      "name": "SuperHero_Male",
+      "name": "Male",
       "skin": 0
     },
     {
@@ -1362,7 +1362,7 @@
     },
     {
       "doubleSided": true,
-      "name": "MI_Superhero_Male",
+      "name": "MI_Male",
       "normalTexture": {
         "index": 4
       },
@@ -1493,18 +1493,18 @@
     },
     {
       "mimeType": "image/png",
-      "name": "T_Superhero_Male_Normal",
-      "uri": "T_Superhero_Male_Normal.png"
+      "name": "T_Male_Normal",
+      "uri": "T_Male_Normal.png"
     },
     {
       "mimeType": "image/jpeg",
-      "name": "T_Superhero_Male_Dark",
-      "uri": "T_Superhero_Male_Dark.jpg"
+      "name": "T_Male_Dark",
+      "uri": "T_Male_Dark.jpg"
     },
     {
       "mimeType": "image/png",
-      "name": "T_Superhero_Male_Roughness",
-      "uri": "T_Superhero_Male_Roughness.png"
+      "name": "T_Male_Roughness",
+      "uri": "T_Male_Roughness.png"
     }
   ],
   "skins": [
@@ -2012,7 +2012,7 @@
   "buffers": [
     {
       "byteLength": 720076,
-      "uri": "Superhero_Male_FullBody.bin"
+      "uri": "Male_FullBody.bin"
     }
   ]
 }

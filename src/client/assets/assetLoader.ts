@@ -1,9 +1,10 @@
-import { AudioLoader, FileLoader, LoadingManager, Texture, TextureLoader } from "three";
+import { AudioLoader, FileLoader, Group, LoadingManager, Texture, TextureLoader } from "three";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { AssetDefinition } from "./assetManifest";
 
-export type LoadedAsset = ArrayBuffer | AudioBuffer | Texture | GLTF;
+export type LoadedAsset = ArrayBuffer | AudioBuffer | Texture | GLTF | Group;
 
 export interface AssetPreloadProgress {
   loadedCount: number;
@@ -59,6 +60,7 @@ export async function preloadAssets(
   const textureLoader = new TextureLoader(manager);
   const audioLoader = new AudioLoader(manager);
   const gltfLoader = new GLTFLoader(manager);
+  const fbxLoader = new FBXLoader(manager);
 
   let loadedCount = 0;
   for (const asset of preloadList) {
@@ -66,7 +68,8 @@ export async function preloadAssets(
       manager,
       textureLoader,
       audioLoader,
-      gltfLoader
+      gltfLoader,
+      fbxLoader
     });
     assetCache.set(asset.id, loadedAsset);
     loadedCount += 1;
@@ -79,6 +82,7 @@ interface LoaderSet {
   textureLoader: TextureLoader;
   audioLoader: AudioLoader;
   gltfLoader: GLTFLoader;
+  fbxLoader: FBXLoader;
 }
 
 async function loadSingleAsset(asset: AssetDefinition, loaders: LoaderSet): Promise<LoadedAsset> {
@@ -86,6 +90,8 @@ async function loadSingleAsset(asset: AssetDefinition, loaders: LoaderSet): Prom
     switch (asset.kind) {
       case "gltf":
         return await loaders.gltfLoader.loadAsync(asset.url);
+      case "fbx":
+        return await loaders.fbxLoader.loadAsync(asset.url);
       case "texture":
         return await loaders.textureLoader.loadAsync(asset.url);
       case "audio":

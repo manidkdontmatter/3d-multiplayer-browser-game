@@ -21,6 +21,13 @@ export interface CharacterAnimationUpdateInput {
 }
 
 export interface CharacterAnimationControllerOptions {
+  clips?: Partial<{
+    idle: AnimationClip;
+    walk: AnimationClip;
+    run: AnimationClip;
+    jump: AnimationClip;
+    upperCast: AnimationClip;
+  }>;
   rootMotion?: {
     defaultEnabled?: boolean;
     perClip?: Record<string, boolean>;
@@ -31,7 +38,7 @@ type BoneOffsetTrack = Array<[x: number, y: number, z: number]>;
 
 const PRIMARY_UPPER_BODY_ACTION_ID = 1;
 const SPEED_SMOOTH_RATE = 10;
-const ROOT_MOTION_BONE_NAMES = new Set(["root", "armature"]);
+const ROOT_MOTION_BONE_NAMES = new Set(["root", "armature", "pelvis", "mixamorig:hips"]);
 const UPPER_BODY_BONE_PREFIXES = [
   "spine_",
   "neck_",
@@ -72,11 +79,12 @@ export class CharacterAnimationController {
     this.rootMotionPerClip = options.rootMotion?.perClip ?? {};
     this.captureBindPose(root);
 
-    const idleClip = this.makeIdleClip();
-    const walkClip = this.makeWalkClip();
-    const runClip = this.makeRunClip();
-    const jumpClip = this.makeJumpClip();
-    const castClip = this.makeUpperBodyCastClip();
+    const clipOverrides = options.clips ?? {};
+    const idleClip = clipOverrides.idle ?? this.makeIdleClip();
+    const walkClip = clipOverrides.walk ?? this.makeWalkClip();
+    const runClip = clipOverrides.run ?? this.makeRunClip();
+    const jumpClip = clipOverrides.jump ?? this.makeJumpClip();
+    const castClip = clipOverrides.upperCast ?? this.makeUpperBodyCastClip();
     const maskedCastClip = this.maskClipToUpperBody(castClip, "upperCast");
 
     this.locomotionActions = {
@@ -228,6 +236,26 @@ export class CharacterAnimationController {
         [0, 0, 0.05],
         [0.02, 0, 0.04],
         [0, 0, 0.05]
+      ],
+      upperarm_l: [
+        [0.08, 0, -1.42],
+        [0.12, 0, -1.38],
+        [0.08, 0, -1.42]
+      ],
+      upperarm_r: [
+        [0.08, 0, 1.42],
+        [0.12, 0, 1.38],
+        [0.08, 0, 1.42]
+      ],
+      lowerarm_l: [
+        [0.18, 0, -0.2],
+        [0.2, 0, -0.16],
+        [0.18, 0, -0.2]
+      ],
+      lowerarm_r: [
+        [0.18, 0, 0.2],
+        [0.2, 0, 0.16],
+        [0.18, 0, 0.2]
       ]
     });
   }

@@ -4,9 +4,11 @@ This directory contains browser-served runtime assets.
 
 ## Structure
 
-- `models/characters/superhero/`
-  - `Superhero_Male_FullBody.gltf` + `Superhero_Male_FullBody.bin`
-  - Male texture set only (currently no animation clips)
+- `models/characters/male/`
+  - `Male_FullBody.gltf` + `Male_FullBody.bin`
+  - Male texture set
+- `animations/mixamo/`
+  - `Idle.fbx`, `Walking.fbx`, `Running.fbx`, `Jump.fbx`, `Punching.fbx`
 
 ## Rules
 

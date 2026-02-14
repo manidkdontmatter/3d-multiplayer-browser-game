@@ -1,5 +1,6 @@
 import {
   AmbientLight,
+  AnimationClip,
   Box3,
   BoxGeometry,
   CapsuleGeometry,
@@ -12,12 +13,20 @@ import {
   Object3D,
   PerspectiveCamera,
   Scene,
+  SkinnedMesh,
   Vector3,
   WebGLRenderer
 } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
-import { CHARACTER_SUPERHERO_MALE_ASSET_ID } from "../assets/assetManifest";
+import { clone as cloneSkeleton, retargetClip } from "three/examples/jsm/utils/SkeletonUtils.js";
+import {
+  ANIMATION_MIXAMO_IDLE_ASSET_ID,
+  ANIMATION_MIXAMO_JUMP_ASSET_ID,
+  ANIMATION_MIXAMO_PUNCH_ASSET_ID,
+  ANIMATION_MIXAMO_RUN_ASSET_ID,
+  ANIMATION_MIXAMO_WALK_ASSET_ID,
+  CHARACTER_MALE_ASSET_ID
+} from "../assets/assetManifest";
 import { getLoadedAsset } from "../assets/assetLoader";
 import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED, STATIC_WORLD_BLOCKS } from "../../shared/index";
 import type { PlayerPose, RemotePlayerState } from "./types";
@@ -27,6 +36,74 @@ const REMOTE_CHARACTER_TARGET_HEIGHT = PLAYER_EYE_HEIGHT + 0.08;
 const MIN_MODEL_HEIGHT = 1e-4;
 const REMOTE_CHARACTER_MODEL_YAW_OFFSET = Math.PI;
 const REMOTE_ANIMATION_SPEED_CAP = PLAYER_SPRINT_SPEED * 2.2;
+const MIXAMO_HIP_BONE = "mixamorig:Hips";
+
+const MIXAMO_RETARGET_BONE_NAMES: Readonly<Record<string, string>> = {
+  pelvis: MIXAMO_HIP_BONE,
+  spine_01: "mixamorig:Spine",
+  spine_02: "mixamorig:Spine1",
+  spine_03: "mixamorig:Spine2",
+  neck_01: "mixamorig:Neck",
+  Head: "mixamorig:Head",
+  clavicle_l: "mixamorig:LeftShoulder",
+  upperarm_l: "mixamorig:LeftArm",
+  lowerarm_l: "mixamorig:LeftForeArm",
+  hand_l: "mixamorig:LeftHand",
+  thumb_01_l: "mixamorig:LeftHandThumb1",
+  thumb_02_l: "mixamorig:LeftHandThumb2",
+  thumb_03_l: "mixamorig:LeftHandThumb3",
+  thumb_04_leaf_l: "mixamorig:LeftHandThumb4",
+  index_01_l: "mixamorig:LeftHandIndex1",
+  index_02_l: "mixamorig:LeftHandIndex2",
+  index_03_l: "mixamorig:LeftHandIndex3",
+  index_04_leaf_l: "mixamorig:LeftHandIndex4",
+  middle_01_l: "mixamorig:LeftHandMiddle1",
+  middle_02_l: "mixamorig:LeftHandMiddle2",
+  middle_03_l: "mixamorig:LeftHandMiddle3",
+  middle_04_leaf_l: "mixamorig:LeftHandMiddle4",
+  ring_01_l: "mixamorig:LeftHandRing1",
+  ring_02_l: "mixamorig:LeftHandRing2",
+  ring_03_l: "mixamorig:LeftHandRing3",
+  ring_04_leaf_l: "mixamorig:LeftHandRing4",
+  pinky_01_l: "mixamorig:LeftHandPinky1",
+  pinky_02_l: "mixamorig:LeftHandPinky2",
+  pinky_03_l: "mixamorig:LeftHandPinky3",
+  pinky_04_leaf_l: "mixamorig:LeftHandPinky4",
+  clavicle_r: "mixamorig:RightShoulder",
+  upperarm_r: "mixamorig:RightArm",
+  lowerarm_r: "mixamorig:RightForeArm",
+  hand_r: "mixamorig:RightHand",
+  thumb_01_r: "mixamorig:RightHandThumb1",
+  thumb_02_r: "mixamorig:RightHandThumb2",
+  thumb_03_r: "mixamorig:RightHandThumb3",
+  thumb_04_leaf_r: "mixamorig:RightHandThumb4",
+  index_01_r: "mixamorig:RightHandIndex1",
+  index_02_r: "mixamorig:RightHandIndex2",
+  index_03_r: "mixamorig:RightHandIndex3",
+  index_04_leaf_r: "mixamorig:RightHandIndex4",
+  middle_01_r: "mixamorig:RightHandMiddle1",
+  middle_02_r: "mixamorig:RightHandMiddle2",
+  middle_03_r: "mixamorig:RightHandMiddle3",
+  middle_04_leaf_r: "mixamorig:RightHandMiddle4",
+  ring_01_r: "mixamorig:RightHandRing1",
+  ring_02_r: "mixamorig:RightHandRing2",
+  ring_03_r: "mixamorig:RightHandRing3",
+  ring_04_leaf_r: "mixamorig:RightHandRing4",
+  pinky_01_r: "mixamorig:RightHandPinky1",
+  pinky_02_r: "mixamorig:RightHandPinky2",
+  pinky_03_r: "mixamorig:RightHandPinky3",
+  pinky_04_leaf_r: "mixamorig:RightHandPinky4",
+  thigh_l: "mixamorig:LeftUpLeg",
+  calf_l: "mixamorig:LeftLeg",
+  foot_l: "mixamorig:LeftFoot",
+  ball_l: "mixamorig:LeftToeBase",
+  ball_leaf_l: "mixamorig:LeftToe_End",
+  thigh_r: "mixamorig:RightUpLeg",
+  calf_r: "mixamorig:RightLeg",
+  foot_r: "mixamorig:RightFoot",
+  ball_r: "mixamorig:RightToeBase",
+  ball_leaf_r: "mixamorig:RightToe_End"
+};
 
 const REMOTE_CHARACTER_ROOT_MOTION_POLICY = {
   // Root motion is disabled by default to keep movement physics/netcode authoritative.
@@ -46,6 +123,14 @@ interface RemotePlayerVisual {
   initialized: boolean;
 }
 
+interface RetargetedAnimationSet {
+  idle: AnimationClip;
+  walk: AnimationClip;
+  run: AnimationClip;
+  jump: AnimationClip;
+  upperCast: AnimationClip;
+}
+
 export class WorldRenderer {
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
@@ -54,6 +139,7 @@ export class WorldRenderer {
   private readonly platforms = new Map<number, Mesh>();
   private readonly cameraForward = new Vector3(0, 0, -1);
   private readonly remotePlayerTemplate: Group | null;
+  private readonly remotePlayerRetargetedClips: RetargetedAnimationSet | null;
 
   public constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -72,6 +158,7 @@ export class WorldRenderer {
 
     this.initializeScene();
     this.remotePlayerTemplate = this.createRemotePlayerTemplate();
+    this.remotePlayerRetargetedClips = this.createRetargetedAnimationSet(this.remotePlayerTemplate);
   }
 
   public resize(width: number, height: number): void {
@@ -225,6 +312,7 @@ export class WorldRenderer {
     if (this.remotePlayerTemplate) {
       root = cloneSkeleton(this.remotePlayerTemplate) as Group;
       animationController = new CharacterAnimationController(root, {
+        clips: this.remotePlayerRetargetedClips ?? undefined,
         rootMotion: REMOTE_CHARACTER_ROOT_MOTION_POLICY
       });
     } else {
@@ -269,7 +357,7 @@ export class WorldRenderer {
   }
 
   private createRemotePlayerTemplate(): Group | null {
-    const gltf = getLoadedAsset<GLTF>(CHARACTER_SUPERHERO_MALE_ASSET_ID);
+    const gltf = getLoadedAsset<GLTF>(CHARACTER_MALE_ASSET_ID);
     if (!gltf?.scene) {
       return null;
     }
@@ -281,6 +369,98 @@ export class WorldRenderer {
     this.normalizeModelToGround(model, REMOTE_CHARACTER_TARGET_HEIGHT);
     root.add(model);
     return root;
+  }
+
+  private createRetargetedAnimationSet(template: Group | null): RetargetedAnimationSet | null {
+    if (!template) {
+      return null;
+    }
+
+    const targetSkinnedMesh = this.findFirstSkinnedMesh(template);
+    if (!targetSkinnedMesh) {
+      return null;
+    }
+
+    const walk = this.retargetMixamoClip(
+      targetSkinnedMesh,
+      ANIMATION_MIXAMO_WALK_ASSET_ID,
+      "walk"
+    );
+    const idle = this.retargetMixamoClip(
+      targetSkinnedMesh,
+      ANIMATION_MIXAMO_IDLE_ASSET_ID,
+      "idle"
+    );
+    const run = this.retargetMixamoClip(
+      targetSkinnedMesh,
+      ANIMATION_MIXAMO_RUN_ASSET_ID,
+      "run"
+    );
+    const jump = this.retargetMixamoClip(
+      targetSkinnedMesh,
+      ANIMATION_MIXAMO_JUMP_ASSET_ID,
+      "jump"
+    );
+    const upperCast = this.retargetMixamoClip(
+      targetSkinnedMesh,
+      ANIMATION_MIXAMO_PUNCH_ASSET_ID,
+      "upperCast"
+    );
+
+    if (!idle || !walk || !run || !jump || !upperCast) {
+      return null;
+    }
+
+    return { idle, walk, run, jump, upperCast };
+  }
+
+  private retargetMixamoClip(
+    targetSkinnedMesh: SkinnedMesh,
+    sourceAssetId: string,
+    clipName: string
+  ): AnimationClip | null {
+    const sourceRoot = getLoadedAsset<Group>(sourceAssetId);
+    if (!sourceRoot) {
+      return null;
+    }
+    const sourceSkinnedMesh = this.findFirstSkinnedMesh(sourceRoot);
+    const sourceClip = sourceRoot.animations?.[0];
+    if (!sourceSkinnedMesh || !sourceClip) {
+      return null;
+    }
+
+    const retargeted = retargetClip(targetSkinnedMesh, sourceSkinnedMesh, sourceClip, {
+      names: MIXAMO_RETARGET_BONE_NAMES,
+      hip: MIXAMO_HIP_BONE,
+      preserveBoneMatrix: true,
+      preserveHipPosition: true,
+      useFirstFramePosition: true
+    });
+
+    const normalizedTracks = retargeted.tracks.map((track) => {
+      const clonedTrack = track.clone();
+      const bonesPathMatch = /^\.bones\[([^\]]+)\]\.(.+)$/i.exec(clonedTrack.name);
+      if (bonesPathMatch) {
+        const [, boneName, property] = bonesPathMatch;
+        clonedTrack.name = `${boneName}.${property}`;
+      }
+      return clonedTrack;
+    });
+
+    return new AnimationClip(clipName, retargeted.duration, normalizedTracks);
+  }
+
+  private findFirstSkinnedMesh(root: Object3D): SkinnedMesh | null {
+    let found: SkinnedMesh | null = null;
+    root.traverse((node) => {
+      if (found) {
+        return;
+      }
+      if ((node as SkinnedMesh & { isSkinnedMesh?: boolean }).isSkinnedMesh) {
+        found = node as SkinnedMesh;
+      }
+    });
+    return found;
   }
 
   private normalizeModelToGround(model: Object3D, targetHeight: number): void {

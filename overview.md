@@ -56,11 +56,13 @@ Key runtime modules:
 ## Current Behavioral Notes
 
 - Runtime character assets now live under `public/assets/models/characters/**` and are loaded via the manifest in `src/client/assets/assetManifest.ts`.
-- Remote player rendering now uses the preloaded male superhero GLTF rig by default, with capsule fallback if the asset is unavailable.
+- Remote player rendering now uses the preloaded male GLTF rig by default, with capsule fallback if the asset is unavailable.
 - Remote player animation now uses a layered runtime controller:
   - base locomotion blends idle/walk/run from measured speed
   - jump pose activates while server-replicated grounded state is false
   - upper-body overlay action is independently triggered from replicated action nonce/events
+- Mixamo clips (`Idle`, `Walking`, `Running`, `Jump`, `Punching`) are now preloaded from `public/assets/animations/mixamo/` and retargeted at runtime onto the male rig skeleton before being fed into the animation controller.
+- Procedural clips remain only as an internal fallback path if imported/retargeted clips are unavailable.
 - Root motion is disabled by default in animation policy so physics/netcode remain movement-authoritative; per-clip root-motion opt-in is supported for future specific clips.
 - Client startup now uses a staged boot pipeline:
   - optional manifest-driven preload pass (`ASSET_MANIFEST`) through Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`)
