@@ -126,6 +126,14 @@ export class InputController {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (!event.repeat && (event.code === "KeyB" || event.code === "KeyN")) {
+      if (event.code === "KeyB") {
+        this.abilityLoadoutToggleQueued = true;
+      } else {
+        this.abilityCreatorToggleQueued = true;
+      }
+      return;
+    }
     if (this.isTypingTarget(event.target)) {
       return;
     }
@@ -136,10 +144,6 @@ export class InputController {
       this.cameraFreezeToggleQueued = true;
     } else if (event.code === "KeyC" && !event.repeat) {
       this.cspToggleQueued = true;
-    } else if (event.code === "KeyB" && !event.repeat) {
-      this.abilityLoadoutToggleQueued = true;
-    } else if (event.code === "KeyN" && !event.repeat) {
-      this.abilityCreatorToggleQueued = true;
     } else if (!event.repeat) {
       const slot = this.mapDigitCodeToHotbarSlot(event.code);
       if (slot !== null) {
