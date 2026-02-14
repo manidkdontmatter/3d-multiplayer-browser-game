@@ -112,7 +112,7 @@ export class NetworkClient {
     delta: number,
     movement: MovementInput,
     orientation: { yaw: number; pitch: number },
-    actions: { usePrimary: boolean }
+    actions: { usePrimaryPressed: boolean }
   ): void {
     if (!this.connected) {
       return;
@@ -141,7 +141,7 @@ export class NetworkClient {
       strafe: movement.strafe,
       jump: movement.jump,
       sprint: movement.sprint,
-      usePrimary: actions.usePrimary,
+      usePrimaryPressed: actions.usePrimaryPressed,
       yawDelta,
       pitch: orientation.pitch,
       delta

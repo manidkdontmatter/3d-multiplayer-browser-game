@@ -49,7 +49,7 @@ Key runtime modules:
 - AOI/visibility via nengi spatial channels (`ChannelAABB3D` + per-user `AABB3D` views).
 - Snapshot replication from server to clients, including `serverTick` stamping on replicated player/platform entities.
 - Client input commands include rotation deltas and movement intent.
-- Client input commands also carry primary-action intent (`usePrimary`) for replicated upper-body action triggering.
+- Client input commands also carry primary-action press events (`usePrimaryPressed`) for replicated upper-body action triggering.
 - Server movement integration is tick-owned (`SERVER_TICK_SECONDS`) rather than client-timed.
 - Client-side prediction uses Rapier KCC path to mirror server movement/collision as closely as possible.
 
@@ -61,6 +61,7 @@ Key runtime modules:
   - base locomotion blends idle/walk/run from measured speed
   - jump pose activates while server-replicated grounded state is false
   - upper-body overlay action is independently triggered from replicated action nonce/events
+- Upper-body masking is now resilient to rig naming differences and falls back to unmasked playback with a warning if no upper-body tracks are matched.
 - Mixamo clips (`Idle`, `Walking`, `Running`, `Jump`, `Punching`) are now preloaded from `public/assets/animations/mixamo/` and retargeted at runtime onto the male rig skeleton before being fed into the animation controller.
 - Procedural clips remain only as an internal fallback path if imported/retargeted clips are unavailable.
 - Root motion is disabled by default in animation policy so physics/netcode remain movement-authoritative; per-clip root-motion opt-in is supported for future specific clips.

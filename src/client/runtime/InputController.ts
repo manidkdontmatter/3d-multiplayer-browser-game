@@ -6,6 +6,7 @@ export class InputController {
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
   private primaryActionHeld = false;
+  private primaryActionQueued = false;
   private yaw = 0;
   private pitch = 0;
   private readonly sensitivity = 0.0025;
@@ -65,6 +66,12 @@ export class InputController {
 
   public isPrimaryActionHeld(): boolean {
     return this.primaryActionHeld;
+  }
+
+  public consumePrimaryActionTrigger(): boolean {
+    const queued = this.primaryActionQueued;
+    this.primaryActionQueued = false;
+    return queued;
   }
 
   public setLookAngles(yaw: number, pitch: number): void {
@@ -128,6 +135,7 @@ export class InputController {
       return;
     }
     this.primaryActionHeld = true;
+    this.primaryActionQueued = true;
   };
 
   private readonly onMouseUp = (event: MouseEvent): void => {
@@ -139,5 +147,6 @@ export class InputController {
 
   private readonly onWindowBlur = (): void => {
     this.primaryActionHeld = false;
+    this.primaryActionQueued = false;
   };
 }

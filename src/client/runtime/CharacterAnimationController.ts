@@ -41,20 +41,22 @@ const PRIMARY_UPPER_BODY_ACTION_ID = 1;
 const SPEED_SMOOTH_RATE = 10;
 const DEFAULT_ANIMATION_CROSSFADE_SECONDS = 0.1;
 const ROOT_MOTION_BONE_NAMES = new Set(["root", "armature", "pelvis", "mixamorig:hips"]);
-const UPPER_BODY_BONE_PREFIXES = [
-  "spine_",
-  "neck_",
+const UPPER_BODY_BONE_KEYWORDS = [
+  "spine",
+  "neck",
   "head",
-  "clavicle_",
-  "upperarm_",
-  "lowerarm_",
-  "hand_",
-  "thumb_",
-  "index_",
-  "middle_",
-  "ring_",
-  "pinky_"
+  "clavicle",
+  "shoulder",
+  "arm",
+  "forearm",
+  "hand",
+  "thumb",
+  "index",
+  "middle",
+  "ring",
+  "pinky"
 ];
+const LOWER_BODY_BONE_KEYWORDS = ["pelvis", "hip", "thigh", "leg", "calf", "foot", "toe"];
 
 export class CharacterAnimationController {
   private readonly mixer: AnimationMixer;
@@ -598,10 +600,21 @@ export class CharacterAnimationController {
         if (!boneName) {
           return false;
         }
-        const normalized = boneName.toLowerCase();
-        return UPPER_BODY_BONE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+        return this.isUpperBodyBoneName(boneName);
       })
       .map((track) => track.clone());
+
+    if (filteredTracks.length === 0) {
+      console.warn(
+        `[anim] Upper-body mask matched no tracks for "${targetName}", using unmasked fallback.`
+      );
+      return new AnimationClip(
+        targetName,
+        clip.duration,
+        clip.tracks.map((track) => track.clone())
+      );
+    }
+
     return new AnimationClip(targetName, clip.duration, filteredTracks);
   }
 
@@ -661,6 +674,20 @@ export class CharacterAnimationController {
       return target;
     }
     return current + Math.sign(delta) * maxDelta;
+  }
+
+  private isUpperBodyBoneName(boneName: string): boolean {
+    const normalized = boneName
+      .toLowerCase()
+      .replace(/^mixamorig:/, "")
+      .replace(/^armature[\\/.:]?/, "");
+    if (normalized.length === 0) {
+      return false;
+    }
+    if (LOWER_BODY_BONE_KEYWORDS.some((keyword) => normalized.includes(keyword))) {
+      return false;
+    }
+    return UPPER_BODY_BONE_KEYWORDS.some((keyword) => normalized.includes(keyword));
   }
 
   private normalizeLocomotionWeights(): void {

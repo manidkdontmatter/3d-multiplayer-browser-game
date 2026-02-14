@@ -42,7 +42,6 @@ type PlayerEntity = {
   groundedPlatformPid: number | null;
   upperBodyAction: number;
   upperBodyActionNonce: number;
-  lastUsePrimary: boolean;
   lastProcessedSequence: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
@@ -77,7 +76,7 @@ type InputCommand = {
   strafe: number;
   jump: boolean;
   sprint: boolean;
-  usePrimary: boolean;
+  usePrimaryPressed: boolean;
   yawDelta: number;
   pitch: number;
   delta: number;
@@ -142,7 +141,6 @@ export class GameSimulation {
       groundedPlatformPid: null,
       upperBodyAction: 0,
       upperBodyActionNonce: 0,
-      lastUsePrimary: false,
       lastProcessedSequence: 0,
       body,
       collider
@@ -188,7 +186,7 @@ export class GameSimulation {
     let mergedStrafe = 0;
     let mergedPitch = player.pitch;
     let mergedSprint = false;
-    let mergedUsePrimary = player.lastUsePrimary;
+    let queuedUsePrimaryPressed = false;
     let queuedJump = false;
     let accumulatedYawDelta = 0;
 
@@ -222,7 +220,7 @@ export class GameSimulation {
       mergedStrafe = strafe;
       mergedPitch = pitch;
       mergedSprint = sprint;
-      mergedUsePrimary = Boolean(command.usePrimary);
+      queuedUsePrimaryPressed = queuedUsePrimaryPressed || Boolean(command.usePrimaryPressed);
       queuedJump = queuedJump || Boolean(command.jump);
       accumulatedYawDelta = normalizeYaw(accumulatedYawDelta + yawDelta);
     }
@@ -248,11 +246,10 @@ export class GameSimulation {
     player.vx = horizontal.vx * speedScale;
     player.vz = horizontal.vz * speedScale;
     player.pitch = Math.max(-1.45, Math.min(1.45, mergedPitch));
-    if (mergedUsePrimary && !player.lastUsePrimary) {
+    if (queuedUsePrimaryPressed) {
       player.upperBodyAction = 1;
       player.upperBodyActionNonce = (player.upperBodyActionNonce + 1) & 0xffff;
     }
-    player.lastUsePrimary = mergedUsePrimary;
     player.lastProcessedSequence = latestSequence;
   }
 

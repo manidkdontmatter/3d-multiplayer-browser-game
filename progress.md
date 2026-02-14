@@ -33,6 +33,9 @@ Original prompt: we will add animations next. where do you think i can source so
 - Added opt-in ack chaos simulation in client netcode (`?netsim=1&ackDrop=...&ackDelayMs=...&ackJitterMs=...`) for out-of-order/drop resilience testing.
 - Added `npm run test:multiplayer:chaos` for CSP multiplayer validation under simulated ack drop/reorder conditions.
 - Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
+- Primary action netcode now uses edge-triggered command events (`usePrimaryPressed`) instead of held-state merging, preventing quick click drops when multiple input commands are batched server-side.
+- Multiplayer automation now explicitly validates remote upper-body action replication by waiting for `upperBodyActionNonce` to advance after a primary click.
+- Animation masking hardening: upper-body mask selection now supports broader rig naming patterns and logs/falls back to unmasked clip playback if no tracks are matched.
 - Added project-scoped Codex config at `.codex/config.toml` with workspace-write sandbox defaults, live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
 - Updated project-scoped Codex config defaults for higher throughput: `approval_policy = "never"` with `sandbox_mode = "workspace-write"`, plus a `profiles.yolo` alias for explicit danger-full-access runs.
 - Expanded `test:multiplayer` assertions: sprint movement, jump height gain, and disconnect/reconnect remote reappearance are now validated and recorded in `output/multiplayer/state.json`.
@@ -80,6 +83,7 @@ Original prompt: we will add animations next. where do you think i can source so
 - Imported `Idle.fbx` is now retargeted and used as the runtime idle clip; procedural idle remains only as fallback if imported clips are missing.
 - Latest verification (2026-02-14, mixamo-retarget + rename pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass.
 - Latest verification (2026-02-14, imported-idle integration pass): `npm run typecheck` and `npm run test:multiplayer:quick` pass; pass artifacts show remote players in non-T-pose idle.
+- Latest verification (2026-02-14, animation-netcode reliability pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after switching to `usePrimaryPressed` and adding remote nonce assertions.
 
 ## Session Close Notes (2026-02-13)
 

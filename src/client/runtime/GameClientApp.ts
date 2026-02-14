@@ -134,7 +134,7 @@ export class GameClientApp {
       delta,
       movement,
       { yaw, pitch },
-      { usePrimary: this.input.isPrimaryActionHeld() }
+      { usePrimaryPressed: this.input.consumePrimaryActionTrigger() }
     );
 
     const serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform();

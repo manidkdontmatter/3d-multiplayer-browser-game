@@ -12,6 +12,7 @@ const E2E_NETSIM_ENABLED = process.env.E2E_NETSIM === "1";
 const E2E_ENABLE_SPRINT_TEST = process.env.E2E_ENABLE_SPRINT_TEST !== "0";
 const E2E_ENABLE_JUMP_TEST = process.env.E2E_ENABLE_JUMP_TEST !== "0";
 const E2E_ENABLE_RECONNECT_TEST = process.env.E2E_ENABLE_RECONNECT_TEST !== "0";
+const E2E_ENABLE_PRIMARY_ACTION_TEST = process.env.E2E_ENABLE_PRIMARY_ACTION_TEST !== "0";
 const ARTIFACTS_ON_PASS = process.env.E2E_ARTIFACTS_ON_PASS === "1";
 const ARTIFACTS_ON_FAIL = process.env.E2E_ARTIFACTS_ON_FAIL !== "0";
 const MIN_REQUIRED_LOCAL_MOVEMENT = readEnvNumber("E2E_MIN_LOCAL_MOVEMENT", 1.0);
@@ -32,9 +33,12 @@ const JUMP_TIMEOUT_MS = readEnvNumber("E2E_JUMP_TIMEOUT_MS", 9000);
 const JUMP_RETRY_SETTLE_MS = 800;
 const DISCONNECT_RECONNECT_TIMEOUT_MS = readEnvNumber("E2E_RECONNECT_TIMEOUT_MS", 12000);
 const PAGE_RECONNECT_COOLDOWN_MS = 2200;
+const PRIMARY_ACTION_TIMEOUT_MS = readEnvNumber("E2E_PRIMARY_ACTION_TIMEOUT_MS", 7000);
 const NETSIM_ACK_DROP = readEnvNumber("E2E_NETSIM_ACK_DROP", 0.15);
 const NETSIM_ACK_DELAY_MS = readEnvNumber("E2E_NETSIM_ACK_DELAY_MS", 60);
 const NETSIM_ACK_JITTER_MS = readEnvNumber("E2E_NETSIM_ACK_JITTER_MS", 90);
+const WRAP16_MODULO = 0x10000;
+const WRAP16_HALF_RANGE = WRAP16_MODULO >>> 1;
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -176,6 +180,11 @@ function findRemotePlayer(state, nid) {
   return remotes[0] ?? null;
 }
 
+function isWrap16Ahead(previous, candidate) {
+  const delta = (candidate - previous + WRAP16_MODULO) % WRAP16_MODULO;
+  return delta > 0 && delta < WRAP16_HALF_RANGE;
+}
+
 async function waitForLocalMovement(page, baseline, minDistance, timeoutMs) {
   const start = Date.now();
   let latestState = null;
@@ -236,6 +245,34 @@ async function waitForRemotePresence(page, targetNid, timeoutMs = 10000) {
     await delay(MOVEMENT_POLL_MS);
   }
   return null;
+}
+
+async function waitForRemotePrimaryActionNonceIncrement(page, targetNid, baselineNonce, timeoutMs) {
+  const start = Date.now();
+  let latestState = null;
+  let latestNonce = baselineNonce;
+
+  while (Date.now() - start < timeoutMs) {
+    latestState = await readState(page);
+    const remote = findRemotePlayer(latestState, targetNid);
+    const nonce =
+      typeof remote?.upperBodyActionNonce === "number" ? remote.upperBodyActionNonce : baselineNonce;
+    latestNonce = nonce;
+    if (isWrap16Ahead(baselineNonce, nonce)) {
+      return {
+        state: latestState,
+        nonce,
+        triggered: true
+      };
+    }
+    await delay(MOVEMENT_POLL_MS);
+  }
+
+  return {
+    state: latestState,
+    nonce: latestNonce,
+    triggered: false
+  };
 }
 
 async function waitForJumpHeight(page, baselineY, minDelta, timeoutMs) {
@@ -329,6 +366,8 @@ async function main() {
   let movedDistanceRemote = null;
   let sprintDistance = null;
   let jumpHeight = null;
+  let primaryActionTriggered = null;
+  let primaryActionNonce = null;
   let reconnectSeen = false;
   let reconnectedBState = null;
   let reconnectedRemoteState = null;
@@ -459,6 +498,46 @@ async function main() {
     movedDistanceRemote = remoteMove.distance;
     afterB = remoteMove.state;
 
+    if (E2E_ENABLE_PRIMARY_ACTION_TEST) {
+      await pageA.bringToFront();
+      await pageA.mouse.click(640, 360);
+      await pageA.waitForTimeout(120);
+
+      const baselineActionState = (await readState(pageB)) ?? afterB ?? beforeB;
+      const baselineActionRemote = findRemotePlayer(baselineActionState, aNid);
+      if (!baselineActionRemote) {
+        throw new Error("Could not find client A in client B remote player list before primary action test.");
+      }
+      const baselineNonce =
+        typeof baselineActionRemote.upperBodyActionNonce === "number"
+          ? baselineActionRemote.upperBodyActionNonce
+          : 0;
+
+      await pageA.mouse.down({ button: "left" });
+      await pageA.waitForTimeout(24);
+      await pageA.mouse.up({ button: "left" });
+
+      await pageB.bringToFront();
+      await pageB.mouse.click(640, 360);
+      await pageB.waitForTimeout(90);
+
+      const actionResult = await waitForRemotePrimaryActionNonceIncrement(
+        pageB,
+        aNid,
+        baselineNonce,
+        PRIMARY_ACTION_TIMEOUT_MS
+      );
+      primaryActionTriggered = actionResult.triggered;
+      primaryActionNonce = actionResult.nonce;
+      afterB = actionResult.state ?? afterB;
+
+      if (!primaryActionTriggered) {
+        throw new Error(
+          `Expected primary action nonce to advance on remote view from ${baselineNonce}, got ${primaryActionNonce}.`
+        );
+      }
+    }
+
     if (E2E_ENABLE_SPRINT_TEST) {
       await pageA.bringToFront();
       await pageA.mouse.click(640, 360);
@@ -578,7 +657,9 @@ async function main() {
     console.log(
       `[multi] PASS server=${serverUrl} movedA=${movedDistanceA.toFixed(2)} movedRemote=${movedDistanceRemote.toFixed(
         2
-      )} sprint=${E2E_ENABLE_SPRINT_TEST ? (sprintDistance ?? 0).toFixed(2) : "skipped"} jump=${
+      )} primary=${E2E_ENABLE_PRIMARY_ACTION_TEST ? String(primaryActionTriggered) : "skipped"} sprint=${
+        E2E_ENABLE_SPRINT_TEST ? (sprintDistance ?? 0).toFixed(2) : "skipped"
+      } jump=${
         E2E_ENABLE_JUMP_TEST ? (jumpHeight ?? 0).toFixed(2) : "skipped"
       } reconnect=${E2E_ENABLE_RECONNECT_TEST ? String(reconnectSeen) : "skipped"}`
     );
@@ -618,12 +699,15 @@ async function main() {
         afterB,
         movedDistanceA,
         movedDistanceRemote,
+        primaryActionTriggered,
+        primaryActionNonce,
         sprintDistance,
         jumpHeight,
         reconnectSeen,
         reconnectedBState,
         reconnectedRemoteState,
         checks: {
+          primaryActionEnabled: E2E_ENABLE_PRIMARY_ACTION_TEST,
           sprintEnabled: E2E_ENABLE_SPRINT_TEST,
           jumpEnabled: E2E_ENABLE_JUMP_TEST,
           reconnectEnabled: E2E_ENABLE_RECONNECT_TEST

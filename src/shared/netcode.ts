@@ -14,7 +14,7 @@ export const inputCommandSchema = defineSchema({
   strafe: Binary.Float32,
   jump: Binary.Boolean,
   sprint: Binary.Boolean,
-  usePrimary: Binary.Boolean,
+  usePrimaryPressed: Binary.Boolean,
   yawDelta: Binary.Float32,
   pitch: Binary.Rotation32,
   delta: Binary.Float32
@@ -79,7 +79,7 @@ export interface InputCommand {
   strafe: number;
   jump: boolean;
   sprint: boolean;
-  usePrimary: boolean;
+  usePrimaryPressed: boolean;
   yawDelta: number;
   pitch: number;
   delta: number;
