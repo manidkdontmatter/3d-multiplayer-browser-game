@@ -2,6 +2,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
   GRAVITY,
+  normalizeYaw,
   PLATFORM_DEFINITIONS,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
@@ -121,7 +122,7 @@ export class LocalPhysicsWorld {
   }
 
   public step(delta: number, movement: MovementInput, yaw: number, pitch: number): void {
-    const dt = Math.max(1 / 120, Math.min(delta, 1 / 20));
+    const dt = this.clampStepDelta(delta);
     this.world.integrationParameters.dt = dt;
     const previousSimulationSeconds = this.simulationSeconds;
     this.simulationSeconds += dt;
@@ -198,6 +199,20 @@ export class LocalPhysicsWorld {
     this.pose.z = position.z;
     this.pose.yaw = yaw;
     this.pose.pitch = pitch;
+  }
+
+  public predictAttachedPlatformYawDelta(delta: number): number {
+    if (!this.grounded || this.groundedPlatformPid === null) {
+      return 0;
+    }
+    const definition = PLATFORM_DEFINITIONS.find((platformDef) => platformDef.pid === this.groundedPlatformPid);
+    if (!definition) {
+      return 0;
+    }
+    const dt = this.clampStepDelta(delta);
+    const previousPose = samplePlatformTransform(definition, this.simulationSeconds);
+    const currentPose = samplePlatformTransform(definition, this.simulationSeconds + dt);
+    return normalizeYaw(currentPose.yaw - previousPose.yaw);
   }
 
   public getPose(): PlayerPose {
@@ -312,5 +327,9 @@ export class LocalPhysicsWorld {
     }
 
     return selectedPid;
+  }
+
+  private clampStepDelta(delta: number): number {
+    return Math.max(1 / 120, Math.min(delta, 1 / 20));
   }
 }

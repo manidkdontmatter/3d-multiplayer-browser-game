@@ -54,6 +54,7 @@ Key runtime modules:
 - CSP can be toggled at runtime with `C` for testing.
 - When CSP is enabled, client reconciliation uses a position-only render-side smoothing layer with correction-offset decay; yaw/pitch stay authoritative to keep camera-forward input alignment stable.
 - Platform carry yaw reconciliation is now explicit: server acks include `platformYawDelta` so client can compose platform rotation without conflating it with player mouse-look yaw.
+- Client CSP also predicts platform yaw carry each local step and applies only residual correction from acks, improving on-platform rotation smoothness.
 - Reconciliation metrics are exposed in runtime status text and `window.render_game_to_text` for diagnostics and automated artifact review.
 - Core verification commands currently passing are recorded in `progress.md`.
 

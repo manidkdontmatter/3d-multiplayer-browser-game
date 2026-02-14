@@ -22,6 +22,7 @@
 - CSP reconciliation now preserves camera/input alignment by shifting queued replay input yaw when external yaw corrections are applied (platform carry + dismount reconcile).
 - CSP reconciliation smoothing is now position-only (no render yaw/pitch offsets), while still tracking yaw/pitch error metrics and hard-snap thresholds.
 - Fixed on-platform CSP look/movement drift: server input-ack now sends explicit `platformYawDelta`, and client applies only that carry delta (instead of inferring carry from total ack yaw change that also includes mouse-look).
+- Added client-side predicted platform yaw carry on CSP frames with residual ack correction (`ack.platformYawDelta - predictedCarrySinceAck`) to reduce visible on-platform rotational jitter.
 - Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
 - Added project-scoped Codex config at `.codex/config.toml` with workspace-write sandbox defaults, live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
 - Updated project-scoped Codex config defaults for higher throughput: `approval_policy = "never"` with `sandbox_mode = "workspace-write"`, plus a `profiles.yolo` alias for explicit danger-full-access runs.
@@ -29,7 +30,7 @@
 - Added `test:multiplayer:csp` command and validated the multiplayer suite under `E2E_CSP=1`.
 - Multiplayer automation now includes a post-connect warmup window and bounded retry windows for remote movement/jump checks to reduce startup/throttling false negatives.
 - Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
-- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:multiplayer`, and `npm run test:multiplayer:csp` all pass after explicit platform-yaw-ack reconciliation updates.
+- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:multiplayer`, and `npm run test:multiplayer:csp` all pass after platform-carry yaw prediction + residual-ack reconciliation updates.
 
 ## Session Close Notes (2026-02-13)
 

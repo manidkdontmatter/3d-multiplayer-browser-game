@@ -32,6 +32,7 @@ export class GameClientApp {
   private frozenCameraPose: PlayerPose | null = null;
   private cspEnabled: boolean;
   private wasServerGroundedOnPlatform = false;
+  private predictedPlatformYawCarrySinceAck = 0;
   private testMovementOverride: MovementInput | null = null;
   private reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
   private lastReconcilePositionError = 0;
@@ -120,7 +121,7 @@ export class GameClientApp {
 
   private stepFixed(delta: number): void {
     const movement = this.testMovementOverride ?? this.input.sampleMovement();
-    const yaw = this.input.getYaw();
+    let yaw = this.input.getYaw();
     const pitch = this.input.getPitch();
 
     this.network.step(delta, movement, { yaw, pitch });
@@ -128,6 +129,15 @@ export class GameClientApp {
     const serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform();
     let preReconciliationPose: PlayerPose | null = null;
     if (this.cspEnabled) {
+      const predictedPlatformYawDelta = this.physics.predictAttachedPlatformYawDelta(delta);
+      if (Math.abs(predictedPlatformYawDelta) > 1e-6) {
+        this.input.applyYawDelta(predictedPlatformYawDelta);
+        this.network.syncSentYaw(this.input.getYaw());
+        this.predictedPlatformYawCarrySinceAck = normalizeYaw(
+          this.predictedPlatformYawCarrySinceAck + predictedPlatformYawDelta
+        );
+        yaw = this.input.getYaw();
+      }
       this.physics.step(delta, movement, yaw, pitch);
       preReconciliationPose = this.physics.getPose();
     }
@@ -135,11 +145,14 @@ export class GameClientApp {
     const recon = this.network.consumeReconciliationFrame();
     if (recon) {
       if (recon.ack.groundedPlatformPid >= 0) {
-        const platformYawDelta = recon.ack.platformYawDelta;
-        if (Math.abs(platformYawDelta) > 1e-6) {
-          this.input.applyYawDelta(platformYawDelta);
-          this.network.shiftPendingInputYaw(platformYawDelta);
+        const residualPlatformYawDelta = normalizeYaw(
+          recon.ack.platformYawDelta - this.predictedPlatformYawCarrySinceAck
+        );
+        if (Math.abs(residualPlatformYawDelta) > 1e-6) {
+          this.input.applyYawDelta(residualPlatformYawDelta);
+          this.network.shiftPendingInputYaw(residualPlatformYawDelta);
         }
+        this.predictedPlatformYawCarrySinceAck = 0;
         // Keep delta baseline aligned after external yaw adjustment to avoid double-applying carry.
         this.network.syncSentYaw(this.input.getYaw());
       } else if (this.wasServerGroundedOnPlatform) {
@@ -148,7 +161,10 @@ export class GameClientApp {
           this.input.applyYawDelta(yawError);
           this.network.shiftPendingInputYaw(yawError);
         }
+        this.predictedPlatformYawCarrySinceAck = 0;
         this.network.syncSentYaw(this.input.getYaw());
+      } else {
+        this.predictedPlatformYawCarrySinceAck = 0;
       }
 
       if (this.cspEnabled) {
@@ -387,6 +403,7 @@ export class GameClientApp {
 
   private resetReconciliationSmoothing(): void {
     this.reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
+    this.predictedPlatformYawCarrySinceAck = 0;
   }
 
   private getReconciliationOffsetMagnitude(): number {
