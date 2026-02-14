@@ -1,12 +1,15 @@
 import type { MovementInput } from "./types";
+import { clampHotbarSlotIndex } from "../../shared/abilities";
 
 export class InputController {
   private readonly heldKeys = new Set<string>();
   private jumpQueued = false;
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
+  private abilityMenuToggleQueued = false;
   private primaryActionHeld = false;
   private primaryActionQueued = false;
+  private selectedHotbarSlot = 0;
   private yaw = 0;
   private pitch = 0;
   private readonly sensitivity = 0.0025;
@@ -95,6 +98,20 @@ export class InputController {
     return queued;
   }
 
+  public consumeAbilityMenuToggle(): boolean {
+    const queued = this.abilityMenuToggleQueued;
+    this.abilityMenuToggleQueued = false;
+    return queued;
+  }
+
+  public getSelectedHotbarSlot(): number {
+    return this.selectedHotbarSlot;
+  }
+
+  public setSelectedHotbarSlot(slot: number): void {
+    this.selectedHotbarSlot = clampHotbarSlotIndex(slot);
+  }
+
   private readonly onCanvasClick = (): void => {
     if (document.pointerLockElement !== this.canvas) {
       void this.canvas.requestPointerLock();
@@ -109,6 +126,13 @@ export class InputController {
       this.cameraFreezeToggleQueued = true;
     } else if (event.code === "KeyC" && !event.repeat) {
       this.cspToggleQueued = true;
+    } else if (event.code === "KeyB" && !event.repeat) {
+      this.abilityMenuToggleQueued = true;
+    } else if (!event.repeat) {
+      const slot = this.mapDigitCodeToHotbarSlot(event.code);
+      if (slot !== null) {
+        this.selectedHotbarSlot = slot;
+      }
     }
   };
 
@@ -149,4 +173,21 @@ export class InputController {
     this.primaryActionHeld = false;
     this.primaryActionQueued = false;
   };
+
+  private mapDigitCodeToHotbarSlot(code: string): number | null {
+    switch (code) {
+      case "Digit1":
+        return 0;
+      case "Digit2":
+        return 1;
+      case "Digit3":
+        return 2;
+      case "Digit4":
+        return 3;
+      case "Digit5":
+        return 4;
+      default:
+        return null;
+    }
+  }
 }

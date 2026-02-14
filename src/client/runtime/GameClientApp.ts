@@ -1,10 +1,18 @@
 import { Clock } from "three";
-import { normalizeYaw, SERVER_TICK_SECONDS } from "../../shared/index";
+import {
+  ABILITY_ID_NONE,
+  DEFAULT_HOTBAR_ABILITY_IDS,
+  getAbilityDefinitionById,
+  getAllAbilityDefinitions,
+  normalizeYaw,
+  SERVER_TICK_SECONDS
+} from "../../shared/index";
 import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
 import { LocalPhysicsWorld } from "./LocalPhysicsWorld";
 import { WorldRenderer } from "./WorldRenderer";
 import type { MovementInput, PlayerPose } from "./types";
+import { AbilityHud } from "../ui/AbilityHud";
 
 const FIXED_STEP = 1 / 60;
 const YAW_RECONCILE_EPSILON = 0.03;
@@ -19,6 +27,7 @@ export type ClientCreatePhase = "physics" | "network" | "ready";
 export class GameClientApp {
   private readonly input: InputController;
   private readonly renderer: WorldRenderer;
+  private readonly abilityHud: AbilityHud;
   private readonly network = new NetworkClient();
   private readonly clock = new Clock();
   private readonly physics: LocalPhysicsWorld;
@@ -43,6 +52,7 @@ export class GameClientApp {
   private lastReconcileReplayCount = 0;
   private reconcileCorrectionCount = 0;
   private reconcileHardSnapCount = 0;
+  private readonly hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -54,6 +64,19 @@ export class GameClientApp {
     this.physics = physics;
     this.cspEnabled = cspEnabled;
     this.input = new InputController(canvas);
+    this.abilityHud = AbilityHud.mount(document, {
+      availableAbilities: getAllAbilityDefinitions(),
+      initialHotbarAssignments: this.hotbarAbilityIds,
+      initialSelectedSlot: this.input.getSelectedHotbarSlot(),
+      onHotbarSlotSelected: (slot) => {
+        this.input.setSelectedHotbarSlot(slot);
+      },
+      onHotbarAssignmentChanged: (slot, abilityId) => {
+        this.hotbarAbilityIds[slot] = abilityId;
+        this.input.setSelectedHotbarSlot(slot);
+        this.abilityHud.setSelectedSlot(slot, false);
+      }
+    });
     this.renderer = new WorldRenderer(canvas);
   }
 
@@ -111,6 +134,13 @@ export class GameClientApp {
       this.cspEnabled = !this.cspEnabled;
       this.resetReconciliationSmoothing();
     }
+    if (this.input.consumeAbilityMenuToggle()) {
+      const menuOpen = this.abilityHud.toggleMenu();
+      if (menuOpen && document.pointerLockElement === this.canvas) {
+        void document.exitPointerLock();
+      }
+    }
+    this.abilityHud.setSelectedSlot(this.input.getSelectedHotbarSlot(), false);
 
     this.accumulator += seconds;
     while (this.accumulator >= FIXED_STEP) {
@@ -121,6 +151,7 @@ export class GameClientApp {
     const pose = this.getRenderPose();
     this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
     this.renderer.syncPlatforms(this.network.getPlatforms());
+    this.renderer.syncProjectiles(this.network.getProjectiles());
     this.renderer.render(pose);
     this.updateStatus();
   }
@@ -129,12 +160,18 @@ export class GameClientApp {
     const movement = this.testMovementOverride ?? this.input.sampleMovement();
     let yaw = this.input.getYaw();
     const pitch = this.input.getPitch();
+    const activeHotbarSlot = this.input.getSelectedHotbarSlot();
+    const selectedAbilityId = this.hotbarAbilityIds[activeHotbarSlot] ?? ABILITY_ID_NONE;
 
     this.network.step(
       delta,
       movement,
       { yaw, pitch },
-      { usePrimaryPressed: this.input.consumePrimaryActionTrigger() }
+      {
+        usePrimaryPressed: this.input.consumePrimaryActionTrigger(),
+        activeHotbarSlot,
+        selectedAbilityId
+      }
     );
 
     const serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform();
@@ -237,8 +274,13 @@ export class GameClientApp {
     const yawErrorDegrees = (this.lastReconcileYawError * 180) / Math.PI;
     const interpDelayMs = this.network.getInterpolationDelayMs();
     const ackJitterMs = this.network.getAckJitterMs();
+    const localHealth = this.network.getLocalPlayerPose()?.health ?? 100;
+    const projectileCount = this.network.getProjectiles().length;
+    const activeSlot = this.input.getSelectedHotbarSlot() + 1;
+    const selectedAbilityId = this.hotbarAbilityIds[activeSlot - 1] ?? ABILITY_ID_NONE;
+    const activeAbilityName = getAbilityDefinitionById(selectedAbilityId)?.name ?? "Empty";
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -267,12 +309,15 @@ export class GameClientApp {
       }
       this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
       this.renderer.syncPlatforms(this.network.getPlatforms());
+      this.renderer.syncProjectiles(this.network.getProjectiles());
       this.renderer.render(this.getRenderPose());
       this.updateStatus();
     };
 
     window.render_game_to_text = () => {
       const pose = this.getRenderPose();
+      const selectedSlot = this.input.getSelectedHotbarSlot();
+      const selectedAbilityId = this.hotbarAbilityIds[selectedSlot] ?? ABILITY_ID_NONE;
       const payload = {
         mode: this.network.getConnectionState(),
         pointerLock: document.pointerLockElement === this.canvas,
@@ -291,6 +336,15 @@ export class GameClientApp {
           yaw: p.yaw,
           serverTick: p.serverTick
         })),
+        projectiles: this.network.getProjectiles().map((projectile) => ({
+          nid: projectile.nid,
+          ownerNid: projectile.ownerNid,
+          kind: projectile.kind,
+          x: projectile.x,
+          y: projectile.y,
+          z: projectile.z,
+          serverTick: projectile.serverTick
+        })),
         remotePlayers: this.network.getRemotePlayers().map((p) => ({
           nid: p.nid,
           x: p.x,
@@ -300,9 +354,20 @@ export class GameClientApp {
           pitch: p.pitch,
           serverTick: p.serverTick,
           grounded: p.grounded,
+          health: p.health,
           upperBodyAction: p.upperBodyAction,
           upperBodyActionNonce: p.upperBodyActionNonce
         })),
+        localAbility: {
+          selectedSlot,
+          selectedAbilityId,
+          selectedAbilityName: getAbilityDefinitionById(selectedAbilityId)?.name ?? "Empty",
+          hotbar: this.hotbarAbilityIds.map((abilityId, slot) => ({
+            slot,
+            abilityId,
+            abilityName: getAbilityDefinitionById(abilityId)?.name ?? "Empty"
+          }))
+        },
         netTiming: {
           interpolationDelayMs: this.network.getInterpolationDelayMs(),
           ackJitterMs: this.network.getAckJitterMs()

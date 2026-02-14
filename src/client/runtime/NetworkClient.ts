@@ -3,7 +3,7 @@ import { WebSocketClientAdapter } from "nengi-websocket-client-adapter";
 import { normalizeYaw } from "../../shared/index";
 import { NType, type IdentityMessage, type InputAckMessage, ncontext } from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
-import type { MovementInput, PlatformState, RemotePlayerState } from "./types";
+import type { MovementInput, PlatformState, ProjectileState, RemotePlayerState } from "./types";
 
 export interface PendingInput {
   sequence: number;
@@ -112,7 +112,7 @@ export class NetworkClient {
     delta: number,
     movement: MovementInput,
     orientation: { yaw: number; pitch: number },
-    actions: { usePrimaryPressed: boolean }
+    actions: { usePrimaryPressed: boolean; activeHotbarSlot: number; selectedAbilityId: number }
   ): void {
     if (!this.connected) {
       return;
@@ -127,6 +127,8 @@ export class NetworkClient {
     const yawDelta = this.hasSentYaw ? normalizeYaw(orientation.yaw - this.lastSentYaw) : orientation.yaw;
     this.lastSentYaw = orientation.yaw;
     this.hasSentYaw = true;
+    const activeHotbarSlot = this.clampUnsignedInt(actions.activeHotbarSlot, 0xff);
+    const selectedAbilityId = this.clampUnsignedInt(actions.selectedAbilityId, 0xffff);
     this.pendingInputs.push({
       sequence,
       delta,
@@ -142,6 +144,8 @@ export class NetworkClient {
       jump: movement.jump,
       sprint: movement.sprint,
       usePrimaryPressed: actions.usePrimaryPressed,
+      activeHotbarSlot,
+      selectedAbilityId,
       yawDelta,
       pitch: orientation.pitch,
       delta
@@ -189,6 +193,21 @@ export class NetworkClient {
         continue;
       }
       output.push(platform);
+    }
+    return output;
+  }
+
+  public getProjectiles(): ProjectileState[] {
+    const output: ProjectileState[] = [];
+    for (const rawEntity of this.entities.values()) {
+      if (rawEntity.ntype !== NType.ProjectileEntity) {
+        continue;
+      }
+      const projectile = this.toProjectileState(rawEntity);
+      if (!projectile) {
+        continue;
+      }
+      output.push(projectile);
     }
     return output;
   }
@@ -448,6 +467,14 @@ export class NetworkClient {
     return Math.max(min, Math.min(max, value));
   }
 
+  private clampUnsignedInt(raw: number, max: number): number {
+    if (!Number.isFinite(raw)) {
+      return 0;
+    }
+    const integer = Math.floor(raw);
+    return Math.max(0, Math.min(max, integer));
+  }
+
   private applyInterpolatedFrames(rawFrames: unknown): void {
     if (!Array.isArray(rawFrames)) {
       return;
@@ -502,6 +529,7 @@ export class NetworkClient {
     const pitch = raw.pitch;
     const serverTick = raw.serverTick;
     const grounded = raw.grounded;
+    const health = raw.health;
     const upperBodyAction = raw.upperBodyAction;
     const upperBodyActionNonce = raw.upperBodyActionNonce;
 
@@ -526,6 +554,7 @@ export class NetworkClient {
       pitch,
       serverTick,
       grounded: typeof grounded === "boolean" ? grounded : true,
+      health: typeof health === "number" ? health : 100,
       upperBodyAction: typeof upperBodyAction === "number" ? upperBodyAction : 0,
       upperBodyActionNonce: typeof upperBodyActionNonce === "number" ? upperBodyActionNonce : 0
     };
@@ -572,6 +601,37 @@ export class NetworkClient {
       halfX,
       halfY,
       halfZ
+    };
+  }
+
+  private toProjectileState(raw: Record<string, unknown>): ProjectileState | null {
+    const nid = raw.nid;
+    const ownerNid = raw.ownerNid;
+    const kind = raw.kind;
+    const x = raw.x;
+    const y = raw.y;
+    const z = raw.z;
+    const serverTick = raw.serverTick;
+    if (
+      typeof nid !== "number" ||
+      typeof ownerNid !== "number" ||
+      typeof kind !== "number" ||
+      typeof x !== "number" ||
+      typeof y !== "number" ||
+      typeof z !== "number" ||
+      typeof serverTick !== "number"
+    ) {
+      return null;
+    }
+
+    return {
+      nid,
+      ownerNid,
+      kind,
+      x,
+      y,
+      z,
+      serverTick
     };
   }
 }

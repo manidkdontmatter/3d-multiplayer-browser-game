@@ -84,6 +84,18 @@ Original prompt: we will add animations next. where do you think i can source so
 - Latest verification (2026-02-14, mixamo-retarget + rename pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass.
 - Latest verification (2026-02-14, imported-idle integration pass): `npm run typecheck` and `npm run test:multiplayer:quick` pass; pass artifacts show remote players in non-T-pose idle.
 - Latest verification (2026-02-14, animation-netcode reliability pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after switching to `usePrimaryPressed` and adding remote nonce assertions.
+- Added shared ability definitions (`src/shared/abilities.ts`) with category/points/attribute metadata and default hotbar/unlocked sets, aligned with the future ability-creator pipeline.
+- Added first-pass ability HUD (`src/client/ui/AbilityHud.ts`) with:
+  - bottom hotbar UI (slots 1-5)
+  - `B`-toggle loadout panel
+  - drag-and-drop and click-to-assign ability cards
+  - right-click clear slot behavior
+- Client netcode now sends `selectedAbilityId` with `InputCommand` and clamps command payload values before serialization.
+- Server command intake now explicitly filters by `NType.InputCommand`, sanitizes selected ability IDs against server-unlocked abilities, and keeps slot selection + cast execution authoritative.
+- Added server-authoritative projectile lifecycle scaffolding in `GameSimulation` with health damage/respawn, world collision checks, and deterministic TTL/range cleanup.
+- Fixed projectile max-range bookkeeping bug: range is now measured by traveled distance from spawn (`remainingRange`) instead of distance from world origin.
+- `render_game_to_text` now exposes local hotbar/selected ability state for deterministic automation assertions.
+- Latest verification (2026-02-14, ability-hud + projectile-authority pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, and `npm run test:multiplayer` all pass.
 
 ## Session Close Notes (2026-02-13)
 
@@ -94,7 +106,9 @@ Original prompt: we will add animations next. where do you think i can source so
 ## Active TODO
 
 - Tune reconciliation smoothing/hard-snap thresholds using targeted `?csp=1` multiplayer validation and capture jitter metrics over longer movement/platform runs.
-- Add combat/state channel scaffolding for next gameplay systems.
+- Add explicit server->client loadout replication message(s) so hotbar assignment state survives reconnects without relying on client-local defaults.
+- Build the first real ability inventory model (owned abilities, slot validation rules, server persistence boundary) as the foundation for the full ability creator.
+- Implement ability creator domain scaffolding (point budget validation + attribute constraints) with server-side canonical validation and lightweight client preview UI.
 - Expand automated tests further with combat-state assertions and longer-duration stability checks.
 - Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.
 - Expand humanoid animation set beyond base locomotion/jump/upper-body action (strafe, backpedal, turn-in-place, land, hit-react) while preserving existing layer/mask architecture.

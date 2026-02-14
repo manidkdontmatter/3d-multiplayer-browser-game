@@ -13,6 +13,7 @@ import {
   Object3D,
   PerspectiveCamera,
   Scene,
+  SphereGeometry,
   SkinnedMesh,
   Vector3,
   WebGLRenderer
@@ -29,7 +30,7 @@ import {
 } from "../assets/assetManifest";
 import { getLoadedAsset } from "../assets/assetLoader";
 import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED, STATIC_WORLD_BLOCKS } from "../../shared/index";
-import type { PlayerPose, RemotePlayerState } from "./types";
+import type { PlayerPose, ProjectileState, RemotePlayerState } from "./types";
 import { CharacterAnimationController } from "./CharacterAnimationController";
 
 const REMOTE_CHARACTER_TARGET_HEIGHT = PLAYER_EYE_HEIGHT + 0.08;
@@ -137,6 +138,7 @@ export class WorldRenderer {
   private readonly camera: PerspectiveCamera;
   private readonly remotePlayers = new Map<number, RemotePlayerVisual>();
   private readonly platforms = new Map<number, Mesh>();
+  private readonly projectiles = new Map<number, Mesh>();
   private readonly cameraForward = new Vector3(0, 0, -1);
   private readonly remotePlayerTemplate: Group | null;
   private readonly remotePlayerRetargetedClips: RetargetedAnimationSet | null;
@@ -256,6 +258,36 @@ export class WorldRenderer {
       if (!activeNids.has(nid)) {
         this.scene.remove(mesh);
         this.platforms.delete(nid);
+      }
+    }
+  }
+
+  public syncProjectiles(projectiles: ProjectileState[]): void {
+    const activeNids = new Set<number>();
+    for (const projectile of projectiles) {
+      activeNids.add(projectile.nid);
+      let mesh = this.projectiles.get(projectile.nid);
+      if (!mesh) {
+        mesh = new Mesh(
+          new SphereGeometry(0.2, 10, 8),
+          new MeshStandardMaterial({
+            color: projectile.kind === 1 ? 0x74e0ff : 0xffdc8f,
+            emissive: projectile.kind === 1 ? 0x3aa3cf : 0xa76f1f,
+            emissiveIntensity: 0.42,
+            roughness: 0.28,
+            metalness: 0.02
+          })
+        );
+        this.projectiles.set(projectile.nid, mesh);
+        this.scene.add(mesh);
+      }
+      mesh.position.set(projectile.x, projectile.y, projectile.z);
+    }
+
+    for (const [nid, mesh] of this.projectiles) {
+      if (!activeNids.has(nid)) {
+        this.scene.remove(mesh);
+        this.projectiles.delete(nid);
       }
     }
   }

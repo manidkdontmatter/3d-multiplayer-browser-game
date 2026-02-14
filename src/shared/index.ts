@@ -1,3 +1,4 @@
+export * from "./abilities";
 export * from "./config";
 export * from "./movement";
 export * from "./netcode";

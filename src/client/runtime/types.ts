@@ -22,6 +22,7 @@ export interface RemotePlayerState {
   pitch: number;
   serverTick: number;
   grounded: boolean;
+  health: number;
   upperBodyAction: number;
   upperBodyActionNonce: number;
 }
@@ -38,4 +39,14 @@ export interface PlatformState {
   halfX: number;
   halfY: number;
   halfZ: number;
+}
+
+export interface ProjectileState {
+  nid: number;
+  ownerNid: number;
+  kind: number;
+  x: number;
+  y: number;
+  z: number;
+  serverTick: number;
 }
