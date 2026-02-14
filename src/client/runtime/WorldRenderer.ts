@@ -24,6 +24,7 @@ import type { PlayerPose, RemotePlayerState } from "./types";
 
 const REMOTE_CHARACTER_TARGET_HEIGHT = PLAYER_EYE_HEIGHT + 0.08;
 const MIN_MODEL_HEIGHT = 1e-4;
+const REMOTE_CHARACTER_MODEL_YAW_OFFSET = Math.PI;
 
 export class WorldRenderer {
   private readonly renderer: WebGLRenderer;
@@ -212,6 +213,8 @@ export class WorldRenderer {
 
     const root = new Group();
     const model = cloneSkeleton(gltf.scene) as Object3D;
+    // GLTF forward axis is opposite this project's forward convention; rotate once here.
+    model.rotation.y = REMOTE_CHARACTER_MODEL_YAW_OFFSET;
     this.normalizeModelToGround(model, REMOTE_CHARACTER_TARGET_HEIGHT);
     root.add(model);
     return root;

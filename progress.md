@@ -47,6 +47,7 @@
 - Character texture budget was reduced to max `720x720` for browser suitability.
 - Safe color/albedo textures were converted from PNG to JPG; normal/roughness maps remained PNG to preserve data fidelity.
 - Remote players now render with the preloaded male GLTF rig (static T-pose for now) and fall back to capsule meshes if model load/template setup fails.
+- Applied a fixed `Math.PI` model yaw offset in renderer template setup so character facing aligns with gameplay yaw (model no longer appears backward).
 - Cleaned model package references by updating glTF URIs to canonical texture names and removing unneeded filename-alias duplicates.
 - Validation loop optimized for faster iteration:
   - Typecheck now uses incremental TS build info caching (`tsconfig.client.tsbuildinfo`, `tsconfig.server.tsbuildinfo`).
