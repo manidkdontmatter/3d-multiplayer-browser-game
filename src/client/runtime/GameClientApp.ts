@@ -127,8 +127,9 @@ export class GameClientApp {
     this.network.step(delta, movement, { yaw, pitch });
 
     const serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform();
+    const cspActive = this.isCspActive(serverGroundedOnPlatform);
     let preReconciliationPose: PlayerPose | null = null;
-    if (this.cspEnabled) {
+    if (cspActive) {
       const predictedPlatformYawDelta = this.physics.predictAttachedPlatformYawDelta(delta);
       if (Math.abs(predictedPlatformYawDelta) > 1e-6) {
         this.input.applyYawDelta(predictedPlatformYawDelta);
@@ -140,6 +141,9 @@ export class GameClientApp {
       }
       this.physics.step(delta, movement, yaw, pitch);
       preReconciliationPose = this.physics.getPose();
+    } else {
+      this.predictedPlatformYawCarrySinceAck = 0;
+      this.resetReconciliationSmoothing();
     }
 
     const recon = this.network.consumeReconciliationFrame();
@@ -167,21 +171,21 @@ export class GameClientApp {
         this.predictedPlatformYawCarrySinceAck = 0;
       }
 
-      if (this.cspEnabled) {
-        this.physics.setReconciliationState({
-          x: recon.ack.x,
-          y: recon.ack.y,
-          z: recon.ack.z,
-          yaw: recon.ack.yaw,
-          pitch: recon.ack.pitch,
-          vx: recon.ack.vx,
-          vy: recon.ack.vy,
-          vz: recon.ack.vz,
-          grounded: recon.ack.grounded,
-          groundedPlatformPid: recon.ack.groundedPlatformPid,
-          serverTimeSeconds: recon.ack.serverTick * SERVER_TICK_SECONDS
-        });
+      this.physics.setReconciliationState({
+        x: recon.ack.x,
+        y: recon.ack.y,
+        z: recon.ack.z,
+        yaw: recon.ack.yaw,
+        pitch: recon.ack.pitch,
+        vx: recon.ack.vx,
+        vy: recon.ack.vy,
+        vz: recon.ack.vz,
+        grounded: recon.ack.grounded,
+        groundedPlatformPid: recon.ack.groundedPlatformPid,
+        serverTimeSeconds: recon.ack.serverTick * SERVER_TICK_SECONDS
+      });
 
+      if (cspActive) {
         for (const pending of recon.replay) {
           this.physics.step(
             pending.delta,
@@ -202,7 +206,7 @@ export class GameClientApp {
       }
     }
 
-    if (this.cspEnabled) {
+    if (cspActive) {
       this.decayReconciliationSmoothing(delta);
     }
 
@@ -216,10 +220,12 @@ export class GameClientApp {
 
     const pose = this.getRenderPose();
     const netState = this.network.getConnectionState();
+    const cspActive = this.isCspActive();
+    const cspLabel = this.cspEnabled ? (cspActive ? "on" : "auto-off") : "off";
     const smoothingMagnitude = this.getReconciliationOffsetMagnitude();
     const yawErrorDegrees = (this.lastReconcileYawError * 180) / Math.PI;
     this.statusNode.textContent =
-      `mode=${netState} | csp=${this.cspEnabled ? "on" : "off"} | cam=${this.freezeCamera ? "frozen" : "follow"} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -319,7 +325,7 @@ export class GameClientApp {
     if (this.freezeCamera && this.frozenCameraPose) {
       return { ...this.frozenCameraPose };
     }
-    if (!this.cspEnabled) {
+    if (!this.isCspActive()) {
       const serverPose = this.network.getLocalPlayerPose();
       if (serverPose) {
         return {
@@ -430,5 +436,9 @@ export class GameClientApp {
       return true;
     }
     return false;
+  }
+
+  private isCspActive(serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform()): boolean {
+    return this.cspEnabled && !serverGroundedOnPlatform;
   }
 }

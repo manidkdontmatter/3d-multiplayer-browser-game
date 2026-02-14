@@ -53,6 +53,7 @@ Key runtime modules:
 
 - CSP is currently default OFF at runtime due to remaining on-platform jitter under real play.
 - CSP can be toggled at runtime with `C` for testing.
+- If CSP is user-enabled, it auto-suppresses while server reports platform-grounded state and resumes automatically after dismount.
 - When CSP is enabled, client reconciliation uses a position-only render-side smoothing layer with correction-offset decay; yaw/pitch stay authoritative to keep camera-forward input alignment stable.
 - Platform carry yaw reconciliation is now explicit: server acks include `platformYawDelta` so client can compose platform rotation without conflating it with player mouse-look yaw.
 - Client CSP also predicts platform yaw carry each local step and applies only residual correction from acks, improving on-platform rotation smoothness.
