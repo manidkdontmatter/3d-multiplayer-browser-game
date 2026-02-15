@@ -32,7 +32,7 @@ import {
   toPlatformLocal,
   stepHorizontalMovement
 } from "../shared/index";
-import type { AbilityDefinition } from "../shared/index";
+import type { AbilityDefinition, MeleeAbilityProfile } from "../shared/index";
 
 type UserLike = {
   id: number;
@@ -143,6 +143,7 @@ type RuntimeAbilityEntry = {
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
 const PROJECTILE_MAX_RANGE = 260;
+const MELEE_DIRECTION_EPSILON = 1e-6;
 
 export class GameSimulation {
   private readonly playersByUserId = new Map<number, PlayerEntity>();
@@ -815,13 +816,18 @@ export class GameSimulation {
       player
     );
     const ability = this.getAbilityDefinitionForPlayer(player, abilityId);
-    const projectileProfile = ability?.projectile;
-    if (!projectileProfile) {
+    if (!ability) {
+      return;
+    }
+    const projectileProfile = ability.projectile;
+    const meleeProfile = ability.melee;
+    const activeCooldownSeconds = projectileProfile?.cooldownSeconds ?? meleeProfile?.cooldownSeconds;
+    if (activeCooldownSeconds === undefined) {
       return;
     }
 
     const secondsSinceLastFire = this.elapsedSeconds - player.lastPrimaryFireAtSeconds;
-    if (secondsSinceLastFire < projectileProfile.cooldownSeconds) {
+    if (secondsSinceLastFire < activeCooldownSeconds) {
       return;
     }
 
@@ -829,10 +835,23 @@ export class GameSimulation {
     player.upperBodyAction = 1;
     player.upperBodyActionNonce = (player.upperBodyActionNonce + 1) & 0xffff;
 
-    const cosPitch = Math.cos(player.pitch);
-    const dirX = -Math.sin(player.yaw) * cosPitch;
-    const dirY = Math.sin(player.pitch);
-    const dirZ = -Math.cos(player.yaw) * cosPitch;
+    if (projectileProfile) {
+      this.spawnProjectileAbility(player, projectileProfile);
+      return;
+    }
+    if (meleeProfile) {
+      this.tryApplyMeleeHit(player, meleeProfile);
+    }
+  }
+
+  private spawnProjectileAbility(
+    player: PlayerEntity,
+    projectileProfile: NonNullable<AbilityDefinition["projectile"]>
+  ): void {
+    const direction = this.computeViewDirection(player.yaw, player.pitch);
+    const dirX = direction.x;
+    const dirY = direction.y;
+    const dirZ = direction.z;
 
     const spawnX = player.x + dirX * projectileProfile.spawnForwardOffset;
     const spawnY = player.y + projectileProfile.spawnVerticalOffset + dirY * projectileProfile.spawnForwardOffset;
@@ -858,6 +877,188 @@ export class GameSimulation {
 
     this.spatialChannel.addEntity(projectile);
     this.projectilesByNid.set(projectile.nid, projectile);
+  }
+
+  private tryApplyMeleeHit(player: PlayerEntity, meleeProfile: MeleeAbilityProfile): void {
+    const hitTarget = this.findMeleeHitTarget(player, meleeProfile);
+    if (!hitTarget) {
+      return;
+    }
+    this.applyProjectileDamage(hitTarget, meleeProfile.damage);
+  }
+
+  private findMeleeHitTarget(
+    attacker: PlayerEntity,
+    meleeProfile: MeleeAbilityProfile
+  ): PlayerEntity | null {
+    const direction = this.computeViewDirection(attacker.yaw, attacker.pitch);
+    const originX = attacker.x;
+    const originY = attacker.y;
+    const originZ = attacker.z;
+    const range = Math.max(0.1, meleeProfile.range);
+    const halfArcRadians = (Math.max(5, Math.min(175, meleeProfile.arcDegrees)) * Math.PI) / 360;
+    const minFacingDot = Math.cos(halfArcRadians);
+    const maxCenterDistance = range + PLAYER_CAPSULE_RADIUS * 2 + meleeProfile.radius;
+    const maxCenterDistanceSq = maxCenterDistance * maxCenterDistance;
+    const attackEndX = originX + direction.x * range;
+    const attackEndY = originY + direction.y * range;
+    const attackEndZ = originZ + direction.z * range;
+    const combinedRadius = meleeProfile.radius + PLAYER_CAPSULE_RADIUS;
+    const combinedRadiusSq = combinedRadius * combinedRadius;
+    let bestTarget: PlayerEntity | null = null;
+    let bestForwardDistance = Number.POSITIVE_INFINITY;
+
+    for (const candidate of this.playersByUserId.values()) {
+      if (candidate.nid === attacker.nid) {
+        continue;
+      }
+
+      const bodyPos = candidate.body.translation();
+      const centerDx = bodyPos.x - originX;
+      const centerDy = bodyPos.y - originY;
+      const centerDz = bodyPos.z - originZ;
+      const centerDistanceSq = centerDx * centerDx + centerDy * centerDy + centerDz * centerDz;
+      if (centerDistanceSq > maxCenterDistanceSq) {
+        continue;
+      }
+
+      const centerDistance = Math.sqrt(Math.max(centerDistanceSq, 0));
+      if (centerDistance > 1e-6) {
+        const facingDot =
+          (centerDx * direction.x + centerDy * direction.y + centerDz * direction.z) / centerDistance;
+        if (facingDot < minFacingDot) {
+          continue;
+        }
+      }
+
+      const segmentMinY = bodyPos.y - PLAYER_CAPSULE_HALF_HEIGHT;
+      const segmentMaxY = bodyPos.y + PLAYER_CAPSULE_HALF_HEIGHT;
+      const distanceSq = this.segmentSegmentDistanceSq(
+        originX,
+        originY,
+        originZ,
+        attackEndX,
+        attackEndY,
+        attackEndZ,
+        bodyPos.x,
+        segmentMinY,
+        bodyPos.z,
+        bodyPos.x,
+        segmentMaxY,
+        bodyPos.z
+      );
+      if (distanceSq > combinedRadiusSq) {
+        continue;
+      }
+
+      const forwardDistance =
+        centerDx * direction.x + centerDy * direction.y + centerDz * direction.z;
+      if (forwardDistance < bestForwardDistance) {
+        bestForwardDistance = forwardDistance;
+        bestTarget = candidate;
+      }
+    }
+
+    return bestTarget;
+  }
+
+  private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
+    const cosPitch = Math.cos(pitch);
+    const x = -Math.sin(yaw) * cosPitch;
+    const y = Math.sin(pitch);
+    const z = -Math.cos(yaw) * cosPitch;
+    const magnitude = Math.hypot(x, y, z);
+    if (magnitude <= MELEE_DIRECTION_EPSILON) {
+      return { x: 0, y: 0, z: -1 };
+    }
+    const invMagnitude = 1 / magnitude;
+    return {
+      x: x * invMagnitude,
+      y: y * invMagnitude,
+      z: z * invMagnitude
+    };
+  }
+
+  private segmentSegmentDistanceSq(
+    p1x: number,
+    p1y: number,
+    p1z: number,
+    q1x: number,
+    q1y: number,
+    q1z: number,
+    p2x: number,
+    p2y: number,
+    p2z: number,
+    q2x: number,
+    q2y: number,
+    q2z: number
+  ): number {
+    const d1x = q1x - p1x;
+    const d1y = q1y - p1y;
+    const d1z = q1z - p1z;
+    const d2x = q2x - p2x;
+    const d2y = q2y - p2y;
+    const d2z = q2z - p2z;
+    const rx = p1x - p2x;
+    const ry = p1y - p2y;
+    const rz = p1z - p2z;
+    const a = d1x * d1x + d1y * d1y + d1z * d1z;
+    const e = d2x * d2x + d2y * d2y + d2z * d2z;
+    const f = d2x * rx + d2y * ry + d2z * rz;
+    const epsilon = 1e-6;
+
+    let s = 0;
+    let t = 0;
+
+    if (a <= epsilon && e <= epsilon) {
+      return rx * rx + ry * ry + rz * rz;
+    }
+
+    if (a <= epsilon) {
+      s = 0;
+      t = this.clamp01(f / e);
+    } else {
+      const c = d1x * rx + d1y * ry + d1z * rz;
+      if (e <= epsilon) {
+        t = 0;
+        s = this.clamp01(-c / a);
+      } else {
+        const b = d1x * d2x + d1y * d2y + d1z * d2z;
+        const denom = a * e - b * b;
+        if (denom > epsilon) {
+          s = this.clamp01((b * f - c * e) / denom);
+        } else {
+          s = 0;
+        }
+        t = (b * s + f) / e;
+
+        if (t < 0) {
+          t = 0;
+          s = this.clamp01(-c / a);
+        } else if (t > 1) {
+          t = 1;
+          s = this.clamp01((b - c) / a);
+        }
+      }
+    }
+
+    const c1x = p1x + d1x * s;
+    const c1y = p1y + d1y * s;
+    const c1z = p1z + d1z * s;
+    const c2x = p2x + d2x * t;
+    const c2y = p2y + d2y * t;
+    const c2z = p2z + d2z * t;
+    const dx = c1x - c2x;
+    const dy = c1y - c2y;
+    const dz = c1z - c2z;
+    return dx * dx + dy * dy + dz * dz;
+  }
+
+  private clamp01(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    return Math.max(0, Math.min(1, value));
   }
 
   private updateProjectiles(delta: number): void {

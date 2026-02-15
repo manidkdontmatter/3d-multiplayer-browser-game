@@ -20,6 +20,7 @@ const RECONCILE_POSITION_SNAP_THRESHOLD = 2.5;
 const RECONCILE_YAW_SNAP_THRESHOLD = Math.PI * 0.75;
 const RECONCILE_OFFSET_EPSILON = 0.0005;
 const LOOK_PITCH_LIMIT = 1.45;
+const PRIMARY_UPPER_BODY_ACTION_ID = 1;
 
 export type ClientCreatePhase = "physics" | "network" | "ready";
 
@@ -51,6 +52,7 @@ export class GameClientApp {
   private lastReconcileReplayCount = 0;
   private reconcileCorrectionCount = 0;
   private reconcileHardSnapCount = 0;
+  private localUpperBodyActionNonce = 0;
   private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
   private lastAbilityCreateMessage = "Ready.";
 
@@ -160,6 +162,11 @@ export class GameClientApp {
     this.applyAbilityEvents();
 
     const pose = this.getRenderPose();
+    this.renderer.syncLocalPlayer(pose, seconds, {
+      grounded: this.physics.isGrounded(),
+      upperBodyAction: PRIMARY_UPPER_BODY_ACTION_ID,
+      upperBodyActionNonce: this.localUpperBodyActionNonce
+    });
     this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
     this.renderer.syncPlatforms(this.network.getPlatforms());
     this.renderer.syncProjectiles(this.network.getProjectiles());
@@ -173,13 +180,17 @@ export class GameClientApp {
     const pitch = this.input.getPitch();
     const activeHotbarSlot = this.input.getSelectedHotbarSlot();
     const selectedAbilityId = this.hotbarAbilityIds[activeHotbarSlot] ?? ABILITY_ID_NONE;
+    const usePrimaryPressed = this.input.consumePrimaryActionTrigger();
+    if (usePrimaryPressed) {
+      this.localUpperBodyActionNonce = (this.localUpperBodyActionNonce + 1) & 0xffff;
+    }
 
     this.network.step(
       delta,
       movement,
       { yaw, pitch },
       {
-        usePrimaryPressed: this.input.consumePrimaryActionTrigger(),
+        usePrimaryPressed,
         activeHotbarSlot,
         selectedAbilityId
       }
@@ -344,6 +355,11 @@ export class GameClientApp {
         this.stepFixed(FIXED_STEP);
       }
       this.applyAbilityEvents();
+      this.renderer.syncLocalPlayer(this.getRenderPose(), FIXED_STEP, {
+        grounded: this.physics.isGrounded(),
+        upperBodyAction: PRIMARY_UPPER_BODY_ACTION_ID,
+        upperBodyActionNonce: this.localUpperBodyActionNonce
+      });
       this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
       this.renderer.syncPlatforms(this.network.getPlatforms());
       this.renderer.syncProjectiles(this.network.getProjectiles());

@@ -58,6 +58,10 @@ Key runtime modules:
 
 - Runtime character assets now live under `public/assets/models/characters/**` and are loaded via the manifest in `src/client/assets/assetManifest.ts`.
 - Remote player rendering now uses the preloaded male GLTF rig by default, with capsule fallback if the asset is unavailable.
+- Local first-person rendering now uses the same male GLTF rig as a local presentation mesh (no separate FPS-arms model):
+  - head/neck are suppressed locally to avoid camera obstruction
+  - upper-body first-person offsets keep arms visible in-frame when looking down
+  - world/remote representation remains authoritative and separate
 - Remote player animation now uses a layered runtime controller:
   - base locomotion blends idle/walk/run from measured speed
   - jump pose activates while server-replicated grounded state is false
@@ -66,14 +70,16 @@ Key runtime modules:
 - Mixamo clips (`Idle`, `Walking`, `Running`, `Jump`, `Punching`) are now preloaded from `public/assets/animations/mixamo/` and retargeted at runtime onto the male rig skeleton before being fed into the animation controller.
 - Procedural clips remain only as an internal fallback path if imported/retargeted clips are unavailable.
 - Root motion is disabled by default in animation policy so physics/netcode remain movement-authoritative; per-clip root-motion opt-in is supported for future specific clips.
-- Ability/shared gameplay scaffolding in `src/shared/abilities.ts` now includes creator draft validation + profile synthesis logic (category, stat-point budget, attributes, projectile profile synthesis, wire helpers).
+- Ability/shared gameplay scaffolding in `src/shared/abilities.ts` now includes creator draft validation + profile synthesis logic (category, stat-point budget, attributes, projectile+melee profile synthesis, wire helpers).
 - Client now includes separated in-game ability UIs (`src/client/ui/AbilityHud.ts`):
   - persistent hotbar slots (`1-5`), slot selection, and drag/drop assignment
   - inventory/loadout panel (`B`) for assigning equipped abilities
   - creator panel (`N`) for stat-point allocation, attributes, and create/equip submission
   - focused menu behavior: opening one panel closes the other to keep interaction flow uncluttered
   - server result status feedback reflected in creator UI
-- Server now runs a basic authoritative projectile combat loop (spawn, travel, collision, damage, despawn, respawn) in `src/server/GameSimulation.ts`.
+- Server now runs a basic authoritative combat loop in `src/server/GameSimulation.ts`:
+  - projectile abilities (spawn, travel, collision, damage, despawn, respawn)
+  - melee abilities (server-side range/radius/arc hit checks against player capsules)
 - Ability creation is now server-authoritative: client submits drafts as `AbilityCreateCommand`; server validates/builds runtime abilities, then sends authoritative catalog/loadout/result messages back to the owning client.
 - Client startup now uses a staged boot pipeline:
   - optional manifest-driven preload pass (`ASSET_MANIFEST`) through Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`)

@@ -6,12 +6,14 @@ import {
   CapsuleGeometry,
   Color,
   DirectionalLight,
+  Euler,
   Fog,
   Group,
   Mesh,
   MeshStandardMaterial,
   Object3D,
   PerspectiveCamera,
+  Quaternion,
   Scene,
   SphereGeometry,
   SkinnedMesh,
@@ -37,6 +39,9 @@ const REMOTE_CHARACTER_TARGET_HEIGHT = PLAYER_EYE_HEIGHT + 0.08;
 const MIN_MODEL_HEIGHT = 1e-4;
 const REMOTE_CHARACTER_MODEL_YAW_OFFSET = Math.PI;
 const REMOTE_ANIMATION_SPEED_CAP = PLAYER_SPRINT_SPEED * 2.2;
+const LOCAL_FIRST_PERSON_BODY_BACK_OFFSET = 0.16;
+const LOCAL_FIRST_PERSON_BODY_DOWN_OFFSET = -0.05;
+const LOCAL_FIRST_PERSON_HEAD_SCALE = 0.001;
 const MIXAMO_HIP_BONE = "mixamorig:Hips";
 
 const MIXAMO_RETARGET_BONE_NAMES: Readonly<Record<string, string>> = {
@@ -124,6 +129,27 @@ interface RemotePlayerVisual {
   initialized: boolean;
 }
 
+interface LocalPlayerVisual {
+  root: Group;
+  animationController: CharacterAnimationController | null;
+  hiddenHeadBones: Object3D[];
+  firstPersonBones: {
+    spineUpper: Object3D | null;
+    clavicleL: Object3D | null;
+    clavicleR: Object3D | null;
+    upperArmL: Object3D | null;
+    upperArmR: Object3D | null;
+    forearmL: Object3D | null;
+    forearmR: Object3D | null;
+  };
+  lastX: number;
+  lastY: number;
+  lastZ: number;
+  horizontalSpeed: number;
+  verticalSpeed: number;
+  initialized: boolean;
+}
+
 interface RetargetedAnimationSet {
   idle: AnimationClip;
   walk: AnimationClip;
@@ -142,6 +168,9 @@ export class WorldRenderer {
   private readonly cameraForward = new Vector3(0, 0, -1);
   private readonly remotePlayerTemplate: Group | null;
   private readonly remotePlayerRetargetedClips: RetargetedAnimationSet | null;
+  private readonly localPlayerVisual: LocalPlayerVisual | null;
+  private readonly tempEuler = new Euler(0, 0, 0, "XYZ");
+  private readonly tempQuat = new Quaternion();
 
   public constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -161,6 +190,10 @@ export class WorldRenderer {
     this.initializeScene();
     this.remotePlayerTemplate = this.createRemotePlayerTemplate();
     this.remotePlayerRetargetedClips = this.createRetargetedAnimationSet(this.remotePlayerTemplate);
+    this.localPlayerVisual = this.createLocalPlayerVisual();
+    if (this.localPlayerVisual) {
+      this.scene.add(this.localPlayerVisual.root);
+    }
   }
 
   public resize(width: number, height: number): void {
@@ -220,6 +253,50 @@ export class WorldRenderer {
         this.remotePlayers.delete(nid);
       }
     }
+  }
+
+  public syncLocalPlayer(
+    localPose: PlayerPose,
+    frameDeltaSeconds: number,
+    animationState: { grounded: boolean; upperBodyAction: number; upperBodyActionNonce: number }
+  ): void {
+    if (!this.localPlayerVisual) {
+      return;
+    }
+    const dt = Math.max(1 / 240, Math.min(frameDeltaSeconds, 1 / 20));
+    const visual = this.localPlayerVisual;
+    const renderY = localPose.y - PLAYER_EYE_HEIGHT;
+    if (visual.initialized) {
+      const deltaX = localPose.x - visual.lastX;
+      const deltaY = renderY - visual.lastY;
+      const deltaZ = localPose.z - visual.lastZ;
+      const sampleHorizontalSpeed = Math.hypot(deltaX, deltaZ) / dt;
+      const sampleVerticalSpeed = deltaY / dt;
+      const smoothing = 1 - Math.exp(-14 * dt);
+      visual.horizontalSpeed += (sampleHorizontalSpeed - visual.horizontalSpeed) * smoothing;
+      visual.verticalSpeed += (sampleVerticalSpeed - visual.verticalSpeed) * smoothing;
+    } else {
+      visual.horizontalSpeed = 0;
+      visual.verticalSpeed = 0;
+      visual.initialized = true;
+    }
+
+    visual.horizontalSpeed = Math.min(Math.max(0, visual.horizontalSpeed), REMOTE_ANIMATION_SPEED_CAP);
+    visual.root.position.set(localPose.x, renderY, localPose.z);
+    visual.root.rotation.y = localPose.yaw;
+    visual.lastX = localPose.x;
+    visual.lastY = renderY;
+    visual.lastZ = localPose.z;
+
+    visual.animationController?.update({
+      deltaSeconds: dt,
+      horizontalSpeed: visual.horizontalSpeed,
+      verticalSpeed: visual.verticalSpeed,
+      grounded: animationState.grounded,
+      upperBodyAction: animationState.upperBodyAction,
+      upperBodyActionNonce: animationState.upperBodyActionNonce
+    });
+    this.applyLocalFirstPersonOffsets(localPose.pitch);
   }
 
   public syncPlatforms(platformStates: Array<{
@@ -388,6 +465,54 @@ export class WorldRenderer {
     };
   }
 
+  private createLocalPlayerVisual(): LocalPlayerVisual | null {
+    if (!this.remotePlayerTemplate) {
+      return null;
+    }
+
+    const root = new Group();
+    const model = cloneSkeleton(this.remotePlayerTemplate) as Group;
+    model.position.y += LOCAL_FIRST_PERSON_BODY_DOWN_OFFSET;
+    model.position.z += LOCAL_FIRST_PERSON_BODY_BACK_OFFSET;
+    root.add(model);
+
+    const animationController = new CharacterAnimationController(root, {
+      clips: this.remotePlayerRetargetedClips ?? undefined,
+      rootMotion: REMOTE_CHARACTER_ROOT_MOTION_POLICY
+    });
+
+    const hiddenHeadBones = this.collectNamedNodes(model, [
+      "mixamorig:Head",
+      "mixamorig:Neck",
+      "Head",
+      "Neck"
+    ]);
+    for (const bone of hiddenHeadBones) {
+      bone.scale.setScalar(LOCAL_FIRST_PERSON_HEAD_SCALE);
+    }
+
+    return {
+      root,
+      animationController,
+      hiddenHeadBones,
+      firstPersonBones: {
+        spineUpper: this.findFirstExistingNode(model, ["mixamorig:Spine2", "spine_03"]),
+        clavicleL: this.findFirstExistingNode(model, ["mixamorig:LeftShoulder", "clavicle_l"]),
+        clavicleR: this.findFirstExistingNode(model, ["mixamorig:RightShoulder", "clavicle_r"]),
+        upperArmL: this.findFirstExistingNode(model, ["mixamorig:LeftArm", "upperarm_l"]),
+        upperArmR: this.findFirstExistingNode(model, ["mixamorig:RightArm", "upperarm_r"]),
+        forearmL: this.findFirstExistingNode(model, ["mixamorig:LeftForeArm", "lowerarm_l"]),
+        forearmR: this.findFirstExistingNode(model, ["mixamorig:RightForeArm", "lowerarm_r"])
+      },
+      lastX: 0,
+      lastY: 0,
+      lastZ: 0,
+      horizontalSpeed: 0,
+      verticalSpeed: 0,
+      initialized: false
+    };
+  }
+
   private createRemotePlayerTemplate(): Group | null {
     const gltf = getLoadedAsset<GLTF>(CHARACTER_MALE_ASSET_ID);
     if (!gltf?.scene) {
@@ -493,6 +618,67 @@ export class WorldRenderer {
       }
     });
     return found;
+  }
+
+  private findFirstExistingNode(root: Object3D, names: string[]): Object3D | null {
+    for (const name of names) {
+      const found = root.getObjectByName(name);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  private collectNamedNodes(root: Object3D, names: string[]): Object3D[] {
+    const collected: Object3D[] = [];
+    const seen = new Set<Object3D>();
+    for (const name of names) {
+      const node = root.getObjectByName(name);
+      if (!node || seen.has(node)) {
+        continue;
+      }
+      seen.add(node);
+      collected.push(node);
+    }
+    return collected;
+  }
+
+  private applyLocalFirstPersonOffsets(pitch: number): void {
+    if (!this.localPlayerVisual) {
+      return;
+    }
+    const visual = this.localPlayerVisual;
+    for (const headBone of visual.hiddenHeadBones) {
+      headBone.scale.setScalar(LOCAL_FIRST_PERSON_HEAD_SCALE);
+    }
+
+    const lookFactor = this.clamp(Math.abs(pitch) / 1.35, 0, 1);
+    this.rotateBoneOffset(visual.firstPersonBones.spineUpper, -0.28 - lookFactor * 0.08, 0, 0);
+    this.rotateBoneOffset(visual.firstPersonBones.clavicleL, 0.05, 0.08, -0.24);
+    this.rotateBoneOffset(visual.firstPersonBones.clavicleR, 0.05, -0.08, 0.24);
+    this.rotateBoneOffset(visual.firstPersonBones.upperArmL, -0.26, 0.14, -0.55);
+    this.rotateBoneOffset(visual.firstPersonBones.upperArmR, -0.26, -0.14, 0.55);
+    this.rotateBoneOffset(visual.firstPersonBones.forearmL, -0.06, 0.07, -0.28);
+    this.rotateBoneOffset(visual.firstPersonBones.forearmR, -0.06, -0.07, 0.28);
+  }
+
+  private rotateBoneOffset(
+    bone: Object3D | null,
+    offsetX: number,
+    offsetY: number,
+    offsetZ: number
+  ): void {
+    if (!bone) {
+      return;
+    }
+    this.tempEuler.set(offsetX, offsetY, offsetZ, "XYZ");
+    this.tempQuat.setFromEuler(this.tempEuler);
+    bone.quaternion.multiply(this.tempQuat);
+  }
+
+  private clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
   }
 
   private normalizeModelToGround(model: Object3D, targetHeight: number): void {

@@ -25,6 +25,14 @@ export interface ProjectileAbilityProfile {
   spawnVerticalOffset: number;
 }
 
+export interface MeleeAbilityProfile {
+  damage: number;
+  range: number;
+  radius: number;
+  cooldownSeconds: number;
+  arcDegrees: number;
+}
+
 export interface AbilityDefinition {
   id: number;
   key: string;
@@ -34,6 +42,7 @@ export interface AbilityDefinition {
   points: AbilityStatPoints;
   attributes: AbilityAttributeKey[];
   projectile?: ProjectileAbilityProfile;
+  melee?: MeleeAbilityProfile;
 }
 
 export interface AbilityCreationDraft {
@@ -68,6 +77,7 @@ const WIRE_VALUE_TO_ABILITY_CATEGORY = new Map<number, AbilityCategory>(
 
 export const ABILITY_ID_NONE = 0;
 export const ABILITY_ID_ARC_BOLT = 1;
+export const ABILITY_ID_PUNCH = 2;
 export const ABILITY_DYNAMIC_ID_START = 1024;
 export const HOTBAR_SLOT_COUNT = 5;
 export const ABILITY_CREATOR_TOTAL_POINTS = 20;
@@ -130,6 +140,27 @@ const ABILITY_DEFINITIONS: ReadonlyArray<AbilityDefinition> = [
       spawnForwardOffset: MAGIC_BOLT_SPAWN_FORWARD_OFFSET,
       spawnVerticalOffset: MAGIC_BOLT_SPAWN_VERTICAL_OFFSET
     }
+  },
+  {
+    id: ABILITY_ID_PUNCH,
+    key: "punch",
+    name: "Punch",
+    description: "Fast close-range melee strike.",
+    category: "melee",
+    points: {
+      power: 7,
+      velocity: 4,
+      efficiency: 5,
+      control: 4
+    },
+    attributes: ["quick-cast"],
+    melee: {
+      damage: 18,
+      range: 1.95,
+      radius: 0.34,
+      cooldownSeconds: 0.4,
+      arcDegrees: 62
+    }
   }
 ];
 
@@ -139,14 +170,15 @@ const ABILITY_DEFINITIONS_BY_ID = new Map<number, AbilityDefinition>(
 
 export const DEFAULT_HOTBAR_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([
   ABILITY_ID_ARC_BOLT,
-  ABILITY_ID_NONE,
+  ABILITY_ID_PUNCH,
   ABILITY_ID_NONE,
   ABILITY_ID_NONE,
   ABILITY_ID_NONE
 ]);
 
 export const DEFAULT_UNLOCKED_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([
-  ABILITY_ID_ARC_BOLT
+  ABILITY_ID_ARC_BOLT,
+  ABILITY_ID_PUNCH
 ]);
 
 export function getAllAbilityDefinitions(): ReadonlyArray<AbilityDefinition> {
@@ -222,7 +254,8 @@ export function createAbilityDefinitionFromDraft(
     return null;
   }
   const normalized = validation.normalized;
-  const profile = buildAbilityProjectileProfile(normalized);
+  const projectileProfile = buildAbilityProjectileProfile(normalized);
+  const meleeProfile = buildAbilityMeleeProfile(normalized);
   const resolvedAbilityId = Number.isFinite(abilityId)
     ? Math.max(ABILITY_DYNAMIC_ID_START, Math.floor(abilityId))
     : ABILITY_DYNAMIC_ID_START;
@@ -235,7 +268,8 @@ export function createAbilityDefinitionFromDraft(
     category: normalized.category,
     points: normalized.points,
     attributes: normalized.attributes,
-    projectile: profile
+    projectile: projectileProfile,
+    melee: meleeProfile
   };
 }
 
@@ -361,6 +395,47 @@ function buildAbilityProjectileProfile(
     lifetimeSeconds: clampNumber(lifetime, 0.9, 4.2),
     spawnForwardOffset: MAGIC_BOLT_SPAWN_FORWARD_OFFSET,
     spawnVerticalOffset: MAGIC_BOLT_SPAWN_VERTICAL_OFFSET
+  };
+}
+
+function buildAbilityMeleeProfile(draft: AbilityCreationDraft): MeleeAbilityProfile | undefined {
+  if (draft.category !== "melee") {
+    return undefined;
+  }
+
+  const points = draft.points;
+  let damage = 9 + points.power * 2.35;
+  let range = 1.1 + points.velocity * 0.08 + points.control * 0.05;
+  let radius = 0.2 + points.control * 0.02;
+  let cooldown = 0.92 - points.efficiency * 0.035;
+  let arcDegrees = 42 + points.control * 4;
+
+  if (draft.attributes.includes("homing-lite")) {
+    arcDegrees += 10;
+    range += 0.1;
+    damage *= 0.94;
+  }
+  if (draft.attributes.includes("wide-impact")) {
+    radius += 0.14;
+    arcDegrees += 14;
+    damage *= 0.9;
+  }
+  if (draft.attributes.includes("quick-cast")) {
+    cooldown *= 0.75;
+    damage *= 0.92;
+  }
+  if (draft.attributes.includes("long-reach")) {
+    range += 0.55;
+    cooldown += 0.07;
+    damage *= 0.9;
+  }
+
+  return {
+    damage: clampNumber(damage, 6, 46),
+    range: clampNumber(range, 0.9, 3.2),
+    radius: clampNumber(radius, 0.16, 0.72),
+    cooldownSeconds: clampNumber(cooldown, 0.12, 1.4),
+    arcDegrees: clampNumber(arcDegrees, 30, 140)
   };
 }
 

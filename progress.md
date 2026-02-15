@@ -13,6 +13,12 @@ Original prompt: we will add animations next. where do you think i can source so
   - loadout/inventory panel on `B`
   - creator panel on `N`
 - UI visual language is now centralized by token-driven style rules and applied across boot overlay, HUD, hotbar, and ability panels for consistency.
+- First-person combat baseline now includes:
+  - shared full-body local first-person presentation rig (no separate FPS-arms asset)
+  - local head/neck suppression + first-person upper-body pose offsets so the player can see their own arms/body when looking down
+  - default melee `Punch` ability on hotbar slot `2`
+  - server-authoritative melee hit resolution (range/radius/arc checks against player capsules)
+  - melee profile synthesis for runtime-created melee abilities from the ability creator
 
 ## Latest Verified
 
@@ -21,12 +27,15 @@ Original prompt: we will add animations next. where do you think i can source so
 - 2026-02-14: `npm run test:multiplayer:quick` passed.
 - 2026-02-15: `npm run test:smoke` and `npm run test:multiplayer:quick` passed after production-style ability UI redesign (separate loadout/creator systems retained).
 - 2026-02-15: `npm run test:smoke` passed after shared UI style-system normalization pass.
+- 2026-02-15: `npm run typecheck:client` and `npm run typecheck:server` passed after first-person local-body + melee integration.
+- 2026-02-15: `npm run test:smoke` passed after first-person local-body + melee integration.
+- 2026-02-15: `npm run test:multiplayer:quick` passed after first-person local-body + melee integration.
 
 ## Active Priorities
 
 1. Ability system productization
 - Persist runtime-created abilities/loadouts across reconnect/server restart.
-- Extend creator/runtime execution beyond projectile templates (melee/passive/utility paths).
+- Extend creator/runtime execution beyond projectile+basic-melee templates (passive/utility paths).
 - Add deeper creator e2e assertions (catalog/loadout replication + cast behavior).
 
 2. Animation system expansion

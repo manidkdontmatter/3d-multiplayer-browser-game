@@ -219,6 +219,10 @@ export class LocalPhysicsWorld {
     return { ...this.pose };
   }
 
+  public isGrounded(): boolean {
+    return this.grounded;
+  }
+
   public setReconciliationState(state: ReconciliationState): void {
     this.pose.x = state.x;
     this.pose.y = state.y;
