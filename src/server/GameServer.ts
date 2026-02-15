@@ -8,27 +8,38 @@ import {
 } from "nengi";
 import { SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
 import { GameSimulation } from "./GameSimulation";
+import { PersistenceService } from "./persistence/PersistenceService";
 
 type QueueEvent = {
   type: NetworkEvent;
   user?: {
     id: number;
     queueMessage: (message: unknown) => void;
+    remoteAddress?: string;
+    networkAdapter?: {
+      disconnect?: (user: unknown, reason: unknown) => void;
+    };
+    accountId?: number;
   };
   commands?: unknown[];
+  payload?: unknown;
 };
 
 const MAX_TICK_INTERVAL_SAMPLES = 6000;
+const DEFAULT_PERSIST_FLUSH_INTERVAL_MS = 5000;
 
 export class GameServer {
   private readonly instance: Instance;
   private readonly globalChannel: Channel;
   private readonly spatialChannel: ChannelAABB3D;
   private readonly simulation: GameSimulation;
+  private readonly persistence: PersistenceService;
   private adapter: { listen: (port: number, ready: () => void) => void; close?: () => void } | null = null;
   private loopHandle: NodeJS.Timeout | null = null;
   private running = false;
   private nextTickAtMs = 0;
+  private nextPersistFlushAtMs = 0;
+  private readonly persistFlushIntervalMs: number;
   private lastTickDurationMs = 0;
   private tickDurationAccumMs = 0;
   private tickDurationCount = 0;
@@ -46,15 +57,23 @@ export class GameServer {
     this.instance = new Instance(context);
     this.globalChannel = new Channel(this.instance.localState);
     this.spatialChannel = new ChannelAABB3D(this.instance.localState);
-    this.simulation = new GameSimulation(this.globalChannel, this.spatialChannel);
+    this.persistFlushIntervalMs = this.resolvePersistFlushIntervalMs();
+    this.persistence = new PersistenceService(process.env.SERVER_DATA_PATH ?? "./data/game.sqlite");
+    this.simulation = new GameSimulation(this.globalChannel, this.spatialChannel, this.persistence);
   }
 
   public async start(port = SERVER_PORT): Promise<void> {
     this.instance.onConnect = async (handshake: unknown) => {
-      if (handshake && typeof handshake === "object") {
-        return { ok: true };
+      if (!handshake || typeof handshake !== "object") {
+        throw new Error("Handshake payload required.");
       }
-      throw new Error("Handshake payload required.");
+      const authKey = (handshake as { authKey?: unknown }).authKey;
+      if (typeof authKey !== "string" || authKey.length === 0) {
+        throw new Error("authKey required.");
+      }
+      return {
+        authKey
+      };
     };
 
     this.adapter = await this.createNetworkAdapter();
@@ -65,6 +84,7 @@ export class GameServer {
     this.running = true;
     const now = performance.now();
     this.nextTickAtMs = now + SERVER_TICK_MS;
+    this.nextPersistFlushAtMs = now + this.persistFlushIntervalMs;
     this.lastTickDurationLogMs = now;
     this.scheduleLoop(0);
   }
@@ -76,9 +96,12 @@ export class GameServer {
       this.loopHandle = null;
     }
 
+    this.flushPersistenceNow();
+
     if (this.adapter?.close) {
       this.adapter.close();
     }
+    this.persistence.close();
 
     if (process.env.SERVER_TICK_METRICS === "1") {
       const metrics = this.getTickMetrics();
@@ -166,7 +189,7 @@ export class GameServer {
       const event = this.instance.queue.next() as QueueEvent;
 
       if (event.type === NetworkEvent.UserConnected && event.user) {
-        this.simulation.addUser(event.user);
+        this.handleUserConnected(event.user, event.payload);
         continue;
       }
 
@@ -181,6 +204,7 @@ export class GameServer {
     }
 
     this.simulation.step(SERVER_TICK_SECONDS);
+    this.maybeFlushPersistence(performance.now());
     this.instance.step();
 
     const tickDurationMs = performance.now() - tickStart;
@@ -235,6 +259,56 @@ export class GameServer {
 
     const delay = this.nextTickAtMs - performance.now();
     this.scheduleLoop(delay);
+  }
+
+  private handleUserConnected(
+    user: NonNullable<QueueEvent["user"]>,
+    payload: unknown
+  ): void {
+    const authKey = (payload as { authKey?: unknown } | undefined)?.authKey;
+    const auth = this.persistence.authenticateOrCreate(authKey, user.remoteAddress);
+    if (!auth.ok || !auth.accountId) {
+      this.disconnectUser(user, {
+        code: auth.code,
+        retryAfterMs: auth.retryAfterMs
+      });
+      return;
+    }
+
+    user.accountId = auth.accountId;
+    this.simulation.addUser(user);
+  }
+
+  private disconnectUser(user: NonNullable<QueueEvent["user"]>, reason: unknown): void {
+    try {
+      user.networkAdapter?.disconnect?.(user, reason);
+    } catch (error) {
+      console.warn("[server] failed to disconnect rejected user", error);
+    }
+  }
+
+  private maybeFlushPersistence(nowMs: number): void {
+    if (nowMs < this.nextPersistFlushAtMs) {
+      return;
+    }
+    this.flushPersistenceNow();
+    this.nextPersistFlushAtMs = nowMs + this.persistFlushIntervalMs;
+  }
+
+  private flushPersistenceNow(): void {
+    try {
+      this.simulation.flushDirtyPlayerState();
+    } catch (error) {
+      console.error("[server] persistence flush failed", error);
+    }
+  }
+
+  private resolvePersistFlushIntervalMs(): number {
+    const raw = Number(process.env.SERVER_PERSIST_FLUSH_MS ?? DEFAULT_PERSIST_FLUSH_INTERVAL_MS);
+    if (!Number.isFinite(raw) || raw < 250) {
+      return DEFAULT_PERSIST_FLUSH_INTERVAL_MS;
+    }
+    return Math.floor(raw);
   }
 
   private pushTickIntervalSample(intervalMs: number): void {

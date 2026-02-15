@@ -3,6 +3,7 @@ import {
   applyPlatformCarry,
   GRAVITY,
   normalizeYaw,
+  PlatformSpatialIndex,
   PLATFORM_DEFINITIONS,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
@@ -33,6 +34,13 @@ export interface ReconciliationState {
 interface LocalPlatformBody {
   pid: number;
   body: RAPIER.RigidBody;
+  halfX: number;
+  halfY: number;
+  halfZ: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
 }
 
 export class LocalPhysicsWorld {
@@ -41,6 +49,8 @@ export class LocalPhysicsWorld {
   private readonly playerCollider: RAPIER.Collider;
   private readonly world: RAPIER.World;
   private readonly platformBodies = new Map<number, LocalPlatformBody>();
+  private readonly platformSpatialIndex = new PlatformSpatialIndex();
+  private readonly platformQueryScratch: number[] = [];
   private grounded = false;
   private groundedPlatformPid: number | null = null;
   private verticalVelocity = 0;
@@ -114,7 +124,17 @@ export class LocalPhysicsWorld {
         { x: 0, y: Math.sin(platformPose.yaw * 0.5), z: 0, w: Math.cos(platformPose.yaw * 0.5) },
         true
       );
-      local.platformBodies.set(platformDef.pid, { pid: platformDef.pid, body: platformBody });
+      local.platformBodies.set(platformDef.pid, {
+        pid: platformDef.pid,
+        body: platformBody,
+        halfX: platformDef.halfX,
+        halfY: platformDef.halfY,
+        halfZ: platformDef.halfZ,
+        x: platformPose.x,
+        y: platformPose.y,
+        z: platformPose.z,
+        yaw: platformPose.yaw
+      });
     }
     local.syncPlatformBodies(0);
 
@@ -244,17 +264,29 @@ export class LocalPhysicsWorld {
   }
 
   private syncPlatformBodies(seconds: number): void {
+    this.platformSpatialIndex.clear();
     for (const platformDef of PLATFORM_DEFINITIONS) {
-      const platformBody = this.platformBodies.get(platformDef.pid)?.body;
-      if (!platformBody) {
+      const platform = this.platformBodies.get(platformDef.pid);
+      if (!platform) {
         continue;
       }
       const pose = samplePlatformTransform(platformDef, seconds);
-      platformBody.setTranslation({ x: pose.x, y: pose.y, z: pose.z }, true);
-      platformBody.setRotation(
+      platform.x = pose.x;
+      platform.y = pose.y;
+      platform.z = pose.z;
+      platform.yaw = pose.yaw;
+      platform.body.setTranslation({ x: pose.x, y: pose.y, z: pose.z }, true);
+      platform.body.setRotation(
         { x: 0, y: Math.sin(pose.yaw * 0.5), z: 0, w: Math.cos(pose.yaw * 0.5) },
         true
       );
+      this.platformSpatialIndex.insert({
+        pid: platform.pid,
+        x: platform.x,
+        z: platform.z,
+        halfX: platform.halfX,
+        halfZ: platform.halfZ
+      });
     }
   }
 
@@ -296,25 +328,39 @@ export class LocalPhysicsWorld {
     const preferredVerticalTolerance = 0.45;
     const maxBelowTopTolerance = 0.2;
     const horizontalMargin = PLAYER_CAPSULE_RADIUS * 0.75;
+    this.platformSpatialIndex.queryAabb(
+      bodyX,
+      bodyZ,
+      horizontalMargin,
+      horizontalMargin,
+      this.platformQueryScratch
+    );
+    if (preferredPid !== null && !this.platformQueryScratch.includes(preferredPid)) {
+      this.platformQueryScratch.push(preferredPid);
+      this.platformQueryScratch.sort((a, b) => a - b);
+    }
     let selectedPid: number | null = null;
     let closestVerticalGapAbs = Number.POSITIVE_INFINITY;
 
-    for (const definition of PLATFORM_DEFINITIONS) {
-      const pose = samplePlatformTransform(definition, this.simulationSeconds);
-      const local = toPlatformLocal(pose, bodyX, bodyZ);
-      const withinX = Math.abs(local.x) <= definition.halfX + horizontalMargin;
-      const withinZ = Math.abs(local.z) <= definition.halfZ + horizontalMargin;
+    for (const platformPid of this.platformQueryScratch) {
+      const platform = this.platformBodies.get(platformPid);
+      if (!platform) {
+        continue;
+      }
+      const local = toPlatformLocal(platform, bodyX, bodyZ);
+      const withinX = Math.abs(local.x) <= platform.halfX + horizontalMargin;
+      const withinZ = Math.abs(local.z) <= platform.halfZ + horizontalMargin;
       if (!withinX || !withinZ) {
         continue;
       }
 
-      const topY = pose.y + definition.halfY;
+      const topY = platform.y + platform.halfY;
       const signedGap = footY - topY;
       if (signedGap < -maxBelowTopTolerance) {
         continue;
       }
       const maxGap =
-        preferredPid !== null && definition.pid === preferredPid
+        preferredPid !== null && platform.pid === preferredPid
           ? preferredVerticalTolerance
           : baseVerticalTolerance;
       if (signedGap > maxGap) {
@@ -327,7 +373,7 @@ export class LocalPhysicsWorld {
       }
 
       closestVerticalGapAbs = gapAbs;
-      selectedPid = definition.pid;
+      selectedPid = platform.pid;
     }
 
     return selectedPid;

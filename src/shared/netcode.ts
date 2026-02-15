@@ -10,7 +10,9 @@ export enum NType {
   AbilityCreateCommand = 7,
   AbilityDefinitionMessage = 8,
   LoadoutStateMessage = 9,
-  AbilityCreateResultMessage = 10
+  AbilityCreateResultMessage = 10,
+  LoadoutCommand = 11,
+  TrainingDummyEntity = 12
 }
 
 export const inputCommandSchema = defineSchema({
@@ -20,11 +22,9 @@ export const inputCommandSchema = defineSchema({
   jump: Binary.Boolean,
   sprint: Binary.Boolean,
   usePrimaryPressed: Binary.Boolean,
-  activeHotbarSlot: Binary.UInt8,
-  selectedAbilityId: Binary.UInt16,
+  usePrimaryHeld: Binary.Boolean,
   yawDelta: Binary.Float32,
-  pitch: Binary.Rotation32,
-  delta: Binary.Float32
+  pitch: Binary.Rotation32
 });
 
 export const abilityCreateCommandSchema = defineSchema({
@@ -37,6 +37,14 @@ export const abilityCreateCommandSchema = defineSchema({
   pointsControl: Binary.UInt8,
   attributeMask: Binary.UInt16,
   targetHotbarSlot: Binary.UInt8
+});
+
+export const loadoutCommandSchema = defineSchema({
+  applySelectedHotbarSlot: Binary.Boolean,
+  selectedHotbarSlot: Binary.UInt8,
+  applyAssignment: Binary.Boolean,
+  assignTargetSlot: Binary.UInt8,
+  assignAbilityId: Binary.UInt16
 });
 
 export const playerEntitySchema = defineSchema({
@@ -94,6 +102,16 @@ export const projectileEntitySchema = defineSchema({
   serverTick: Binary.UInt32
 });
 
+export const trainingDummyEntitySchema = defineSchema({
+  x: { type: Binary.Float32, interp: true },
+  y: { type: Binary.Float32, interp: true },
+  z: { type: Binary.Float32, interp: true },
+  yaw: { type: Binary.Rotation32, interp: true },
+  serverTick: Binary.UInt32,
+  health: Binary.UInt8,
+  maxHealth: Binary.UInt8
+});
+
 export const abilityDefinitionMessageSchema = defineSchema({
   abilityId: Binary.UInt16,
   name: Binary.String,
@@ -110,7 +128,9 @@ export const abilityDefinitionMessageSchema = defineSchema({
   cooldownSeconds: Binary.Float32,
   lifetimeSeconds: Binary.Float32,
   spawnForwardOffset: Binary.Float32,
-  spawnVerticalOffset: Binary.Float32
+  spawnVerticalOffset: Binary.Float32,
+  meleeRange: Binary.Float32,
+  meleeArcDegrees: Binary.Float32
 });
 
 export const loadoutStateMessageSchema = defineSchema({
@@ -132,11 +152,13 @@ export const abilityCreateResultMessageSchema = defineSchema({
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCreateCommand, abilityCreateCommandSchema);
+ncontext.register(NType.LoadoutCommand, loadoutCommandSchema);
 ncontext.register(NType.PlayerEntity, playerEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
 ncontext.register(NType.PlatformEntity, platformEntitySchema);
 ncontext.register(NType.InputAckMessage, inputAckMessageSchema);
 ncontext.register(NType.ProjectileEntity, projectileEntitySchema);
+ncontext.register(NType.TrainingDummyEntity, trainingDummyEntitySchema);
 ncontext.register(NType.AbilityDefinitionMessage, abilityDefinitionMessageSchema);
 ncontext.register(NType.LoadoutStateMessage, loadoutStateMessageSchema);
 ncontext.register(NType.AbilityCreateResultMessage, abilityCreateResultMessageSchema);
@@ -149,11 +171,9 @@ export interface InputCommand {
   jump: boolean;
   sprint: boolean;
   usePrimaryPressed: boolean;
-  activeHotbarSlot: number;
-  selectedAbilityId: number;
+  usePrimaryHeld: boolean;
   yawDelta: number;
   pitch: number;
-  delta: number;
 }
 
 export interface AbilityCreateCommand {
@@ -167,6 +187,15 @@ export interface AbilityCreateCommand {
   pointsControl: number;
   attributeMask: number;
   targetHotbarSlot: number;
+}
+
+export interface LoadoutCommand {
+  ntype: NType.LoadoutCommand;
+  applySelectedHotbarSlot: boolean;
+  selectedHotbarSlot: number;
+  applyAssignment: boolean;
+  assignTargetSlot: number;
+  assignAbilityId: number;
 }
 
 export interface PlayerEntity {
@@ -232,6 +261,18 @@ export interface ProjectileEntity {
   serverTick: number;
 }
 
+export interface TrainingDummyEntity {
+  nid: number;
+  ntype: NType.TrainingDummyEntity;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  serverTick: number;
+  health: number;
+  maxHealth: number;
+}
+
 export interface AbilityDefinitionMessage {
   ntype: NType.AbilityDefinitionMessage;
   abilityId: number;
@@ -250,6 +291,8 @@ export interface AbilityDefinitionMessage {
   lifetimeSeconds: number;
   spawnForwardOffset: number;
   spawnVerticalOffset: number;
+  meleeRange: number;
+  meleeArcDegrees: number;
 }
 
 export interface LoadoutStateMessage {

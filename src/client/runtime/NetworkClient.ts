@@ -15,11 +15,19 @@ import {
   type AbilityDefinitionMessage,
   type IdentityMessage,
   type InputAckMessage,
+  type LoadoutCommand,
   type LoadoutStateMessage,
+  type TrainingDummyEntity,
   ncontext
 } from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
-import type { MovementInput, PlatformState, ProjectileState, RemotePlayerState } from "./types";
+import type {
+  MovementInput,
+  PlatformState,
+  ProjectileState,
+  RemotePlayerState,
+  TrainingDummyState
+} from "./types";
 
 export interface PendingInput {
   sequence: number;
@@ -102,6 +110,14 @@ interface QueuedAbilityCreateCommand extends AbilityCreateDraftCommandPayload {
   submitNonce: number;
 }
 
+interface QueuedLoadoutCommand {
+  applySelectedHotbarSlot: boolean;
+  selectedHotbarSlot: number;
+  applyAssignment: boolean;
+  assignTargetSlot: number;
+  assignAbilityId: number;
+}
+
 export class NetworkClient {
   private readonly client = new Client(ncontext, WebSocketClientAdapter, SERVER_TICK_RATE);
   private readonly interpolator = new Interpolator(this.client);
@@ -113,6 +129,7 @@ export class NetworkClient {
   private readonly pendingAbilityCreateResults: AbilityCreateResult[] = [];
   private pendingLoadoutState: LoadoutState | null = null;
   private queuedAbilityCreateCommand: QueuedAbilityCreateCommand | null = null;
+  private queuedLoadoutCommand: QueuedLoadoutCommand | null = null;
   private localPlayerNid: number | null = null;
   private connected = false;
   private nextCommandSequence = 0;
@@ -147,17 +164,21 @@ export class NetworkClient {
       this.pendingAbilityDefinitions.clear();
       this.pendingLoadoutState = null;
       this.queuedAbilityCreateCommand = null;
+      this.queuedLoadoutCommand = null;
     });
     this.client.setWebsocketErrorHandler(() => {
       // Errors are expected when server is unavailable during local-only workflows.
     });
   }
 
-  public async connect(serverUrl: string): Promise<void> {
+  public async connect(serverUrl: string, authKey: string): Promise<void> {
     try {
       const timeoutMs = 1500;
       await Promise.race([
-        this.client.connect(serverUrl, { token: "dev-token" }),
+        this.client.connect(serverUrl, {
+          authVersion: 1,
+          authKey
+        }),
         new Promise<never>((_resolve, reject) => {
           setTimeout(() => reject(new Error(`connect timeout after ${timeoutMs}ms`)), timeoutMs);
         })
@@ -174,7 +195,7 @@ export class NetworkClient {
     delta: number,
     movement: MovementInput,
     orientation: { yaw: number; pitch: number },
-    actions: { usePrimaryPressed: boolean; activeHotbarSlot: number; selectedAbilityId: number }
+    actions: { usePrimaryPressed: boolean; usePrimaryHeld: boolean }
   ): void {
     if (!this.connected) {
       return;
@@ -189,14 +210,25 @@ export class NetworkClient {
     const yawDelta = this.hasSentYaw ? normalizeYaw(orientation.yaw - this.lastSentYaw) : orientation.yaw;
     this.lastSentYaw = orientation.yaw;
     this.hasSentYaw = true;
-    const activeHotbarSlot = this.clampUnsignedInt(actions.activeHotbarSlot, 0xff);
-    const selectedAbilityId = this.clampUnsignedInt(actions.selectedAbilityId, 0xffff);
     this.pendingInputs.push({
       sequence,
       delta,
       movement: { ...movement },
       orientation: { ...orientation }
     });
+
+    const loadoutCommand = this.queuedLoadoutCommand;
+    if (loadoutCommand) {
+      this.client.addCommand({
+        ntype: NType.LoadoutCommand,
+        applySelectedHotbarSlot: loadoutCommand.applySelectedHotbarSlot,
+        selectedHotbarSlot: this.clampUnsignedInt(loadoutCommand.selectedHotbarSlot, 0xff),
+        applyAssignment: loadoutCommand.applyAssignment,
+        assignTargetSlot: this.clampUnsignedInt(loadoutCommand.assignTargetSlot, 0xff),
+        assignAbilityId: this.clampUnsignedInt(loadoutCommand.assignAbilityId, 0xffff)
+      } satisfies LoadoutCommand);
+      this.queuedLoadoutCommand = null;
+    }
 
     this.client.addCommand({
       ntype: NType.InputCommand,
@@ -206,11 +238,9 @@ export class NetworkClient {
       jump: movement.jump,
       sprint: movement.sprint,
       usePrimaryPressed: actions.usePrimaryPressed,
-      activeHotbarSlot,
-      selectedAbilityId,
+      usePrimaryHeld: actions.usePrimaryHeld,
       yawDelta,
-      pitch: orientation.pitch,
-      delta
+      pitch: orientation.pitch
     });
 
     const abilityCommand = this.queuedAbilityCreateCommand;
@@ -231,6 +261,33 @@ export class NetworkClient {
     }
 
     this.client.flush();
+  }
+
+  public queueLoadoutSelection(slot: number): void {
+    const queued = this.queuedLoadoutCommand ?? {
+      applySelectedHotbarSlot: false,
+      selectedHotbarSlot: 0,
+      applyAssignment: false,
+      assignTargetSlot: 0,
+      assignAbilityId: 0
+    };
+    queued.applySelectedHotbarSlot = true;
+    queued.selectedHotbarSlot = slot;
+    this.queuedLoadoutCommand = queued;
+  }
+
+  public queueLoadoutAssignment(slot: number, abilityId: number): void {
+    const queued = this.queuedLoadoutCommand ?? {
+      applySelectedHotbarSlot: false,
+      selectedHotbarSlot: 0,
+      applyAssignment: false,
+      assignTargetSlot: 0,
+      assignAbilityId: 0
+    };
+    queued.applyAssignment = true;
+    queued.assignTargetSlot = slot;
+    queued.assignAbilityId = abilityId;
+    this.queuedLoadoutCommand = queued;
   }
 
   public queueAbilityCreateDraft(payload: AbilityCreateDraftCommandPayload): number {
@@ -332,6 +389,21 @@ export class NetworkClient {
     return output;
   }
 
+  public getTrainingDummies(): TrainingDummyState[] {
+    const output: TrainingDummyState[] = [];
+    for (const rawEntity of this.entities.values()) {
+      if (rawEntity.ntype !== NType.TrainingDummyEntity) {
+        continue;
+      }
+      const dummy = this.toTrainingDummyState(rawEntity);
+      if (!dummy) {
+        continue;
+      }
+      output.push(dummy);
+    }
+    return output;
+  }
+
   public getConnectionState(): "connected" | "local-only" {
     return this.connected ? "connected" : "local-only";
   }
@@ -398,6 +470,7 @@ export class NetworkClient {
         | AbilityDefinitionMessage
         | LoadoutStateMessage
         | AbilityCreateResultMessage
+        | TrainingDummyEntity
         | undefined;
       if (message?.ntype === NType.IdentityMessage) {
         this.localPlayerNid = message.playerNid;
@@ -453,6 +526,13 @@ export class NetworkClient {
       this.clampUnsignedInt(message.kind, 0xff) > 0 &&
       message.speed > 0 &&
       message.damage > 0;
+    const hasMelee =
+      category === "melee" &&
+      message.damage > 0 &&
+      message.radius > 0 &&
+      message.cooldownSeconds > 0 &&
+      message.meleeRange > 0 &&
+      message.meleeArcDegrees > 0;
 
     return {
       id,
@@ -472,6 +552,15 @@ export class NetworkClient {
             lifetimeSeconds: message.lifetimeSeconds,
             spawnForwardOffset: message.spawnForwardOffset,
             spawnVerticalOffset: message.spawnVerticalOffset
+          }
+        : undefined,
+      melee: hasMelee
+        ? {
+            damage: message.damage,
+            radius: message.radius,
+            cooldownSeconds: message.cooldownSeconds,
+            range: message.meleeRange,
+            arcDegrees: message.meleeArcDegrees
           }
         : undefined
     };
@@ -710,7 +799,10 @@ export class NetworkClient {
         if (typeof patch.nid !== "number" || typeof patch.prop !== "string") {
           continue;
         }
-        const entity = this.entities.get(patch.nid) ?? { nid: patch.nid, ntype: NType.PlayerEntity };
+        const entity = this.entities.get(patch.nid);
+        if (!entity) {
+          continue;
+        }
         entity[patch.prop] = patch.value;
         this.entities.set(patch.nid, entity);
       }
@@ -835,6 +927,39 @@ export class NetworkClient {
       y,
       z,
       serverTick
+    };
+  }
+
+  private toTrainingDummyState(raw: Record<string, unknown>): TrainingDummyState | null {
+    const nid = raw.nid;
+    const x = raw.x;
+    const y = raw.y;
+    const z = raw.z;
+    const yaw = raw.yaw;
+    const serverTick = raw.serverTick;
+    const health = raw.health;
+    const maxHealth = raw.maxHealth;
+    if (
+      typeof nid !== "number" ||
+      typeof x !== "number" ||
+      typeof y !== "number" ||
+      typeof z !== "number" ||
+      typeof yaw !== "number" ||
+      typeof serverTick !== "number" ||
+      typeof health !== "number" ||
+      typeof maxHealth !== "number"
+    ) {
+      return null;
+    }
+    return {
+      nid,
+      x,
+      y,
+      z,
+      yaw,
+      serverTick,
+      health,
+      maxHealth
     };
   }
 }

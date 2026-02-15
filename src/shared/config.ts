@@ -1,7 +1,8 @@
 export const SERVER_PORT = 9001;
 export const SERVER_TICK_RATE = 30;
-export const SERVER_TICK_MS = Math.round(1000 / SERVER_TICK_RATE);
-export const SERVER_TICK_SECONDS = SERVER_TICK_MS / 1000;
+// Keep the target interval exact; rounding to 33ms makes 30hz run at ~30.3hz.
+export const SERVER_TICK_MS = 1000 / SERVER_TICK_RATE;
+export const SERVER_TICK_SECONDS = 1 / SERVER_TICK_RATE;
 export const PLAYER_WALK_SPEED = 6;
 export const PLAYER_SPRINT_SPEED = 9;
 export const PLAYER_GROUND_ACCEL = 60;

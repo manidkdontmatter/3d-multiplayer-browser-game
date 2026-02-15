@@ -1,8 +1,8 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { AABB3D, Channel, ChannelAABB3D } from "nengi";
 import {
-  ABILITY_DYNAMIC_ID_START,
   ABILITY_ID_NONE,
+  ABILITY_ID_PUNCH,
   abilityCategoryFromWireValue,
   abilityCategoryToWireValue,
   applyPlatformCarry,
@@ -18,6 +18,7 @@ import {
   NType,
   normalizeYaw,
   PLATFORM_DEFINITIONS,
+  PlatformSpatialIndex,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
@@ -33,14 +34,25 @@ import {
   stepHorizontalMovement
 } from "../shared/index";
 import type { AbilityDefinition, MeleeAbilityProfile } from "../shared/index";
+import type {
+  AbilityCreateCommand as AbilityCreateWireCommand,
+  InputCommand as InputWireCommand,
+  LoadoutCommand as LoadoutWireCommand
+} from "../shared/netcode";
+import {
+  type PlayerSnapshot,
+  PersistenceService
+} from "./persistence/PersistenceService";
 
 type UserLike = {
   id: number;
   queueMessage: (message: unknown) => void;
+  accountId?: number;
   view?: AABB3D;
 };
 
 type PlayerEntity = {
+  accountId: number;
   nid: number;
   ntype: NType.PlayerEntity;
   x: number;
@@ -61,6 +73,7 @@ type PlayerEntity = {
   upperBodyAction: number;
   upperBodyActionNonce: number;
   lastProcessedSequence: number;
+  primaryHeld: boolean;
   lastAbilitySubmitNonce: number;
   unlockedAbilityIds: Set<number>;
   body: RAPIER.RigidBody;
@@ -107,62 +120,79 @@ type PlatformEntity = {
   collider: RAPIER.Collider;
 };
 
-type InputCommand = {
-  ntype: NType.InputCommand;
-  sequence: number;
-  forward: number;
-  strafe: number;
-  jump: boolean;
-  sprint: boolean;
-  usePrimaryPressed: boolean;
-  activeHotbarSlot: number;
-  selectedAbilityId: number;
-  yawDelta: number;
-  pitch: number;
-  delta: number;
+type TrainingDummyEntity = {
+  nid: number;
+  ntype: NType.TrainingDummyEntity;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  serverTick: number;
+  health: number;
+  maxHealth: number;
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
 };
 
-type AbilityCreateCommand = {
-  ntype: NType.AbilityCreateCommand;
-  submitNonce: number;
-  name: string;
-  category: number;
-  pointsPower: number;
-  pointsVelocity: number;
-  pointsEfficiency: number;
-  pointsControl: number;
-  attributeMask: number;
-  targetHotbarSlot: number;
-};
+type CombatTarget =
+  | { kind: "player"; player: PlayerEntity }
+  | { kind: "dummy"; dummy: TrainingDummyEntity };
 
 type RuntimeAbilityEntry = {
   ownerNid: number;
   definition: AbilityDefinition;
 };
 
+type PendingOfflineSnapshot = {
+  snapshot: PlayerSnapshot;
+  dirtyCharacter: boolean;
+  dirtyAbilityState: boolean;
+};
+
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
 const PROJECTILE_MAX_RANGE = 260;
 const MELEE_DIRECTION_EPSILON = 1e-6;
+const PROJECTILE_POOL_PREWARM = 96;
+const PROJECTILE_POOL_MAX = 4096;
+const PROJECTILE_MIN_RADIUS = 0.005;
+const PROJECTILE_RADIUS_CACHE_SCALE = 1000;
+const PROJECTILE_SPEED_EPSILON = 1e-6;
+const TRAINING_DUMMY_MAX_HEALTH = 160;
+const TRAINING_DUMMY_RADIUS = 0.42;
+const TRAINING_DUMMY_HALF_HEIGHT = 0.95;
+const TRAINING_DUMMY_SPAWNS = [{ x: 7, y: TRAINING_DUMMY_HALF_HEIGHT, z: -5, yaw: 0 }] as const;
 
 export class GameSimulation {
   private readonly playersByUserId = new Map<number, PlayerEntity>();
+  private readonly playersByAccountId = new Map<number, PlayerEntity>();
+  private readonly playersByNid = new Map<number, PlayerEntity>();
+  private readonly trainingDummiesByNid = new Map<number, TrainingDummyEntity>();
+  private readonly combatTargetsByColliderHandle = new Map<number, CombatTarget>();
   private readonly usersById = new Map<number, UserLike>();
   private readonly platformsByPid = new Map<number, PlatformEntity>();
+  private readonly platformSpatialIndex = new PlatformSpatialIndex();
+  private readonly platformQueryScratch: number[] = [];
   private readonly projectilesByNid = new Map<number, ProjectileEntity>();
+  private readonly projectilePool: ProjectileEntity[] = [];
+  private readonly projectileCastShapeCache = new Map<number, RAPIER.Ball>();
   private readonly runtimeAbilitiesById = new Map<number, RuntimeAbilityEntry>();
+  private readonly dirtyCharacterAccountIds = new Set<number>();
+  private readonly dirtyAbilityStateAccountIds = new Set<number>();
+  private readonly pendingOfflineSnapshots = new Map<number, PendingOfflineSnapshot>();
   private readonly world: RAPIER.World;
   private readonly characterController: RAPIER.KinematicCharacterController;
+  private readonly identityRotation: RAPIER.Rotation = { x: 0, y: 0, z: 0, w: 1 };
   private elapsedSeconds = 0;
   private tickNumber = 0;
-  private nextRuntimeAbilityId = ABILITY_DYNAMIC_ID_START;
 
   public constructor(
     private readonly globalChannel: Channel,
-    private readonly spatialChannel: ChannelAABB3D
+    private readonly spatialChannel: ChannelAABB3D,
+    private readonly persistence: PersistenceService
   ) {
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
-    this.world.integrationParameters.dt = 1 / 30;
+    this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
     this.characterController = this.world.createCharacterController(0.01);
     this.characterController.setSlideEnabled(true);
     this.characterController.enableSnapToGround(0.2);
@@ -172,14 +202,27 @@ export class GameSimulation {
 
     this.createStaticWorldColliders();
     this.initializePlatforms();
+    this.initializeTrainingDummies();
+    this.prewarmProjectilePool(PROJECTILE_POOL_PREWARM);
   }
 
   public addUser(user: UserLike): void {
-    const spawn = this.getSpawnPosition();
+    const accountId = typeof user.accountId === "number" && Number.isFinite(user.accountId)
+      ? Math.max(1, Math.floor(user.accountId))
+      : null;
+    if (accountId === null) {
+      return;
+    }
+
+    const pendingOfflineSnapshot = this.pendingOfflineSnapshots.get(accountId);
+    const loaded = pendingOfflineSnapshot?.snapshot ?? this.persistence.loadPlayerState(accountId);
+    const spawn = loaded ? { x: loaded.x, z: loaded.z } : this.getSpawnPosition();
+    const initialCameraY = loaded?.y ?? (PLAYER_BODY_CENTER_HEIGHT + PLAYER_CAMERA_OFFSET_Y);
+    const initialBodyY = initialCameraY - PLAYER_CAMERA_OFFSET_Y;
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
         spawn.x,
-        PLAYER_BODY_CENTER_HEIGHT,
+        initialBodyY,
         spawn.z
       )
     );
@@ -189,36 +232,63 @@ export class GameSimulation {
     );
 
     const player: PlayerEntity = {
+      accountId,
       nid: 0,
       ntype: NType.PlayerEntity,
       x: spawn.x,
-      y: PLAYER_BODY_CENTER_HEIGHT + PLAYER_CAMERA_OFFSET_Y,
+      y: initialCameraY,
       z: spawn.z,
-      yaw: 0,
-      pitch: 0,
+      yaw: loaded?.yaw ?? 0,
+      pitch: loaded?.pitch ?? 0,
       serverTick: this.tickNumber,
-      vy: 0,
-      vx: 0,
-      vz: 0,
-      grounded: true,
+      vy: loaded?.vy ?? 0,
+      vx: loaded?.vx ?? 0,
+      vz: loaded?.vz ?? 0,
+      grounded: false,
       groundedPlatformPid: null,
-      health: PLAYER_MAX_HEALTH,
-      activeHotbarSlot: 0,
-      hotbarAbilityIds: this.createInitialHotbar(),
+      health: this.clampHealth(loaded?.health ?? PLAYER_MAX_HEALTH),
+      activeHotbarSlot: this.sanitizeHotbarSlot(loaded?.activeHotbarSlot ?? 0, 0),
+      hotbarAbilityIds: this.createInitialHotbar(loaded?.hotbarAbilityIds),
       lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
       upperBodyAction: 0,
       upperBodyActionNonce: 0,
       lastProcessedSequence: 0,
+      primaryHeld: false,
       lastAbilitySubmitNonce: 0,
       unlockedAbilityIds: new Set<number>(DEFAULT_UNLOCKED_ABILITY_IDS),
       body,
       collider
     };
 
+    this.ensurePunchAssigned(player);
+
     this.globalChannel.subscribe(user);
     this.spatialChannel.addEntity(player);
     this.playersByUserId.set(user.id, player);
+    this.playersByAccountId.set(player.accountId, player);
+    this.playersByNid.set(player.nid, player);
+    this.combatTargetsByColliderHandle.set(player.collider.handle, { kind: "player", player });
     this.usersById.set(user.id, user);
+    this.pendingOfflineSnapshots.delete(player.accountId);
+    if (!pendingOfflineSnapshot?.dirtyCharacter) {
+      this.dirtyCharacterAccountIds.delete(player.accountId);
+    }
+    if (!pendingOfflineSnapshot?.dirtyAbilityState) {
+      this.dirtyAbilityStateAccountIds.delete(player.accountId);
+    }
+
+    if (loaded) {
+      for (const runtimeAbility of loaded.runtimeAbilities) {
+        if (this.runtimeAbilitiesById.has(runtimeAbility.id)) {
+          continue;
+        }
+        this.runtimeAbilitiesById.set(runtimeAbility.id, {
+          ownerNid: player.nid,
+          definition: runtimeAbility
+        });
+        player.unlockedAbilityIds.add(runtimeAbility.id);
+      }
+    }
 
     const view = new AABB3D(player.x, player.y, player.z, 128, 64, 128);
     user.view = view;
@@ -229,6 +299,10 @@ export class GameSimulation {
       playerNid: player.nid
     });
     this.sendInitialAbilityState(user, player);
+    this.markPlayerDirty(player, {
+      dirtyCharacter: true,
+      dirtyAbilityState: true
+    });
   }
 
   public removeUser(user: UserLike): void {
@@ -237,8 +311,18 @@ export class GameSimulation {
       return;
     }
 
+    this.pendingOfflineSnapshots.set(player.accountId, {
+      snapshot: this.capturePlayerSnapshot(player),
+      dirtyCharacter: true,
+      dirtyAbilityState: true
+    });
+    this.dirtyCharacterAccountIds.add(player.accountId);
+    this.dirtyAbilityStateAccountIds.add(player.accountId);
     this.spatialChannel.removeEntity(player);
     this.playersByUserId.delete(user.id);
+    this.playersByAccountId.delete(player.accountId);
+    this.playersByNid.delete(player.nid);
+    this.combatTargetsByColliderHandle.delete(player.collider.handle);
     this.usersById.delete(user.id);
     this.removeProjectilesByOwner(player.nid);
     this.removeRuntimeAbilitiesByOwner(player.nid);
@@ -258,46 +342,46 @@ export class GameSimulation {
     let mergedStrafe = 0;
     let mergedPitch = player.pitch;
     let mergedSprint = false;
-    let mergedActiveHotbarSlot = this.sanitizeHotbarSlot(player.activeHotbarSlot, 0);
-    const previousActiveHotbarSlot = mergedActiveHotbarSlot;
-    const previousSelectedAbilityId = player.hotbarAbilityIds[mergedActiveHotbarSlot] ?? ABILITY_ID_NONE;
-    let mergedSelectedAbilityId = this.sanitizeSelectedAbilityId(
-      player.hotbarAbilityIds[mergedActiveHotbarSlot] ?? ABILITY_ID_NONE,
-      ABILITY_ID_NONE,
-      player
-    );
-    let requiresLoadoutResync = false;
     let queuedUsePrimaryPressed = false;
+    let mergedUsePrimaryHeld = player.primaryHeld;
     let queuedJump = false;
     let accumulatedYawDelta = 0;
 
     for (const rawCommand of commands) {
       const ntype = (rawCommand as { ntype?: unknown })?.ntype;
       if (ntype === NType.AbilityCreateCommand) {
-        this.processAbilityCreateCommand(user, player, rawCommand as Partial<AbilityCreateCommand>);
+        this.processAbilityCreateCommand(user, player, rawCommand as Partial<AbilityCreateWireCommand>);
+        continue;
+      }
+      if (ntype === NType.LoadoutCommand) {
+        this.processLoadoutCommand(user, player, rawCommand as Partial<LoadoutWireCommand>);
         continue;
       }
 
-      const command = rawCommand as Partial<InputCommand>;
+      const command = rawCommand as Partial<InputWireCommand>;
       if (command.ntype !== NType.InputCommand) {
         continue;
       }
       if (
         typeof command.forward !== "number" ||
+        !Number.isFinite(command.forward) ||
         typeof command.strafe !== "number" ||
+        !Number.isFinite(command.strafe) ||
         typeof command.yawDelta !== "number" ||
-        typeof command.pitch !== "number"
+        !Number.isFinite(command.yawDelta) ||
+        typeof command.pitch !== "number" ||
+        !Number.isFinite(command.pitch)
       ) {
         continue;
       }
 
       const pitch = command.pitch ?? mergedPitch;
       const yawDelta = normalizeYaw(command.yawDelta ?? 0);
-      const forward = command.forward ?? mergedForward;
-      const strafe = command.strafe ?? mergedStrafe;
+      const forward = this.clampAxis(command.forward ?? mergedForward);
+      const strafe = this.clampAxis(command.strafe ?? mergedStrafe);
       const sprint = Boolean(command.sprint);
       const sequence =
-        typeof command.sequence === "number"
+        typeof command.sequence === "number" && Number.isFinite(command.sequence)
           ? (command.sequence & 0xffff)
           : ((latestSequence + 1) & 0xffff);
       if (!this.isSequenceAheadOf(latestSequence, sequence)) {
@@ -310,29 +394,8 @@ export class GameSimulation {
       mergedStrafe = strafe;
       mergedPitch = pitch;
       mergedSprint = sprint;
-      const nextHotbarSlot = this.sanitizeHotbarSlot(command.activeHotbarSlot, mergedActiveHotbarSlot);
-      if (nextHotbarSlot !== mergedActiveHotbarSlot) {
-        mergedActiveHotbarSlot = nextHotbarSlot;
-        mergedSelectedAbilityId = this.sanitizeSelectedAbilityId(
-          player.hotbarAbilityIds[mergedActiveHotbarSlot] ?? ABILITY_ID_NONE,
-          ABILITY_ID_NONE,
-          player
-        );
-      }
-      const requestedSelectedAbilityId =
-        typeof command.selectedAbilityId === "number" && Number.isFinite(command.selectedAbilityId)
-          ? Math.max(0, Math.floor(command.selectedAbilityId))
-          : null;
-      const nextSelectedAbilityId = this.sanitizeSelectedAbilityId(
-        command.selectedAbilityId,
-        mergedSelectedAbilityId,
-        player
-      );
-      if (requestedSelectedAbilityId !== null && requestedSelectedAbilityId !== nextSelectedAbilityId) {
-        requiresLoadoutResync = true;
-      }
-      mergedSelectedAbilityId = nextSelectedAbilityId;
       queuedUsePrimaryPressed = queuedUsePrimaryPressed || Boolean(command.usePrimaryPressed);
+      mergedUsePrimaryHeld = Boolean(command.usePrimaryHeld);
       queuedJump = queuedJump || Boolean(command.jump);
       accumulatedYawDelta = normalizeYaw(accumulatedYawDelta + yawDelta);
     }
@@ -358,14 +421,7 @@ export class GameSimulation {
     player.vx = horizontal.vx * speedScale;
     player.vz = horizontal.vz * speedScale;
     player.pitch = Math.max(-1.45, Math.min(1.45, mergedPitch));
-    player.activeHotbarSlot = mergedActiveHotbarSlot;
-    player.hotbarAbilityIds[mergedActiveHotbarSlot] = mergedSelectedAbilityId;
-    const loadoutChanged =
-      player.activeHotbarSlot !== previousActiveHotbarSlot ||
-      player.hotbarAbilityIds[mergedActiveHotbarSlot] !== previousSelectedAbilityId;
-    if (loadoutChanged || requiresLoadoutResync) {
-      this.queueLoadoutStateMessage(user, player);
-    }
+    player.primaryHeld = mergedUsePrimaryHeld;
     if (queuedUsePrimaryPressed) {
       this.tryUsePrimaryAbility(player);
     }
@@ -380,6 +436,9 @@ export class GameSimulation {
     this.updatePlatforms(previousElapsedSeconds, this.elapsedSeconds);
 
     for (const [userId, player] of this.playersByUserId.entries()) {
+      if (player.primaryHeld) {
+        this.tryUsePrimaryAbility(player);
+      }
       const carry = this.samplePlayerPlatformCarry(player);
       player.yaw = normalizeYaw(player.yaw + carry.yaw);
       const attachedToPlatform = player.groundedPlatformPid !== null;
@@ -443,10 +502,48 @@ export class GameSimulation {
 
       this.syncUserView(userId, player);
       this.queueInputAck(userId, player, carry.yaw);
+      this.markPlayerDirty(player, {
+        dirtyCharacter: true,
+        dirtyAbilityState: false
+      });
     }
 
     this.updateProjectiles(delta);
     this.world.step();
+  }
+
+  public flushDirtyPlayerState(): void {
+    const dirtyAccounts = new Set<number>([
+      ...this.dirtyCharacterAccountIds,
+      ...this.dirtyAbilityStateAccountIds
+    ]);
+
+    for (const accountId of dirtyAccounts) {
+      const onlinePlayer = this.playersByAccountId.get(accountId);
+      const pendingOfflineSnapshot = this.pendingOfflineSnapshots.get(accountId);
+      const snapshot = onlinePlayer
+        ? this.capturePlayerSnapshot(onlinePlayer)
+        : pendingOfflineSnapshot?.snapshot;
+      if (!snapshot) {
+        continue;
+      }
+
+      const shouldSaveCharacter =
+        this.dirtyCharacterAccountIds.has(accountId) || Boolean(pendingOfflineSnapshot?.dirtyCharacter);
+      const shouldSaveAbilityState =
+        this.dirtyAbilityStateAccountIds.has(accountId) || Boolean(pendingOfflineSnapshot?.dirtyAbilityState);
+
+      if (shouldSaveCharacter) {
+        this.persistence.saveCharacterSnapshot(snapshot);
+      }
+      if (shouldSaveAbilityState) {
+        this.persistence.saveAbilityStateSnapshot(snapshot);
+      }
+
+      this.pendingOfflineSnapshots.delete(accountId);
+    }
+    this.dirtyCharacterAccountIds.clear();
+    this.dirtyAbilityStateAccountIds.clear();
   }
 
   private createStaticWorldColliders(): void {
@@ -503,6 +600,35 @@ export class GameSimulation {
       this.platformsByPid.set(platform.pid, platform);
       this.spatialChannel.addEntity(platform);
     }
+    this.rebuildPlatformSpatialIndex();
+  }
+
+  private initializeTrainingDummies(): void {
+    for (const spawn of TRAINING_DUMMY_SPAWNS) {
+      const body = this.world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(spawn.x, spawn.y, spawn.z)
+      );
+      const collider = this.world.createCollider(
+        RAPIER.ColliderDesc.capsule(TRAINING_DUMMY_HALF_HEIGHT, TRAINING_DUMMY_RADIUS),
+        body
+      );
+      const dummy: TrainingDummyEntity = {
+        nid: 0,
+        ntype: NType.TrainingDummyEntity,
+        x: spawn.x,
+        y: spawn.y,
+        z: spawn.z,
+        yaw: spawn.yaw,
+        serverTick: this.tickNumber,
+        health: TRAINING_DUMMY_MAX_HEALTH,
+        maxHealth: TRAINING_DUMMY_MAX_HEALTH,
+        body,
+        collider
+      };
+      this.spatialChannel.addEntity(dummy);
+      this.trainingDummiesByNid.set(dummy.nid, dummy);
+      this.combatTargetsByColliderHandle.set(dummy.collider.handle, { kind: "dummy", dummy });
+    }
   }
 
   private updatePlatforms(previousElapsedSeconds: number, elapsedSeconds: number): void {
@@ -524,6 +650,20 @@ export class GameSimulation {
         { x: 0, y: Math.sin(platform.yaw * 0.5), z: 0, w: Math.cos(platform.yaw * 0.5) },
         true
       );
+    }
+    this.rebuildPlatformSpatialIndex();
+  }
+
+  private rebuildPlatformSpatialIndex(): void {
+    this.platformSpatialIndex.clear();
+    for (const platform of this.platformsByPid.values()) {
+      this.platformSpatialIndex.insert({
+        pid: platform.pid,
+        x: platform.x,
+        z: platform.z,
+        halfX: platform.halfX,
+        halfZ: platform.halfZ
+      });
     }
   }
 
@@ -564,10 +704,25 @@ export class GameSimulation {
     const preferredVerticalTolerance = 0.45;
     const maxBelowTopTolerance = 0.2;
     const horizontalMargin = PLAYER_CAPSULE_RADIUS * 0.75;
+    this.platformSpatialIndex.queryAabb(
+      bodyX,
+      bodyZ,
+      horizontalMargin,
+      horizontalMargin,
+      this.platformQueryScratch
+    );
+    if (preferredPid !== null && !this.platformQueryScratch.includes(preferredPid)) {
+      this.platformQueryScratch.push(preferredPid);
+      this.platformQueryScratch.sort((a, b) => a - b);
+    }
     let selectedPid: number | null = null;
     let closestVerticalGapAbs = Number.POSITIVE_INFINITY;
 
-    for (const platform of this.platformsByPid.values()) {
+    for (const platformPid of this.platformQueryScratch) {
+      const platform = this.platformsByPid.get(platformPid);
+      if (!platform) {
+        continue;
+      }
       const local = toPlatformLocal(platform, bodyX, bodyZ);
       const withinX = Math.abs(local.x) <= platform.halfX + horizontalMargin;
       const withinZ = Math.abs(local.z) <= platform.halfZ + horizontalMargin;
@@ -600,10 +755,75 @@ export class GameSimulation {
     return selectedPid;
   }
 
+  private processLoadoutCommand(
+    user: UserLike,
+    player: PlayerEntity,
+    command: Partial<LoadoutWireCommand>
+  ): void {
+    const applySelectedHotbarSlot = Boolean(command.applySelectedHotbarSlot);
+    const applyAssignment = Boolean(command.applyAssignment);
+    if (!applySelectedHotbarSlot && !applyAssignment) {
+      return;
+    }
+
+    const previousActiveHotbarSlot = player.activeHotbarSlot;
+    const activeSlot = this.sanitizeHotbarSlot(player.activeHotbarSlot, 0);
+    const previousAssignedAbilityId = player.hotbarAbilityIds[activeSlot] ?? ABILITY_ID_NONE;
+    let requiresLoadoutResync = false;
+    let didAssignMutation = false;
+
+    if (applySelectedHotbarSlot) {
+      const requestedSlot =
+        typeof command.selectedHotbarSlot === "number" && Number.isFinite(command.selectedHotbarSlot)
+          ? Math.max(0, Math.floor(command.selectedHotbarSlot))
+          : null;
+      const sanitizedSlot = this.sanitizeHotbarSlot(command.selectedHotbarSlot, player.activeHotbarSlot);
+      if (requestedSlot !== null && requestedSlot !== sanitizedSlot) {
+        requiresLoadoutResync = true;
+      }
+      player.activeHotbarSlot = sanitizedSlot;
+    }
+
+    if (applyAssignment) {
+      const targetSlot = this.sanitizeHotbarSlot(command.assignTargetSlot, player.activeHotbarSlot);
+      const fallbackAbilityId = player.hotbarAbilityIds[targetSlot] ?? ABILITY_ID_NONE;
+      const requestedAbilityId =
+        typeof command.assignAbilityId === "number" && Number.isFinite(command.assignAbilityId)
+          ? Math.max(0, Math.floor(command.assignAbilityId))
+          : null;
+      const sanitizedAbilityId = this.sanitizeSelectedAbilityId(
+        command.assignAbilityId,
+        fallbackAbilityId,
+        player
+      );
+      if (requestedAbilityId !== null && requestedAbilityId !== sanitizedAbilityId) {
+        requiresLoadoutResync = true;
+      }
+      if (player.hotbarAbilityIds[targetSlot] !== sanitizedAbilityId) {
+        player.hotbarAbilityIds[targetSlot] = sanitizedAbilityId;
+        didAssignMutation = true;
+      }
+    }
+
+    const nextActiveSlot = this.sanitizeHotbarSlot(player.activeHotbarSlot, 0);
+    const nextAssignedAbilityId = player.hotbarAbilityIds[nextActiveSlot] ?? ABILITY_ID_NONE;
+    const loadoutChanged =
+      previousActiveHotbarSlot !== nextActiveSlot ||
+      previousAssignedAbilityId !== nextAssignedAbilityId ||
+      didAssignMutation;
+    if (loadoutChanged || requiresLoadoutResync) {
+      this.markPlayerDirty(player, {
+        dirtyCharacter: false,
+        dirtyAbilityState: true
+      });
+      this.queueLoadoutStateMessage(user, player);
+    }
+  }
+
   private processAbilityCreateCommand(
     user: UserLike,
     player: PlayerEntity,
-    command: Partial<AbilityCreateCommand>
+    command: Partial<AbilityCreateWireCommand>
   ): void {
     if (typeof command.submitNonce !== "number") {
       return;
@@ -620,7 +840,22 @@ export class GameSimulation {
       return;
     }
 
-    const abilityDefinition = createAbilityDefinitionFromDraft(this.allocateRuntimeAbilityId(), {
+    let allocatedAbilityId = ABILITY_ID_NONE;
+    try {
+      allocatedAbilityId = this.persistence.allocateRuntimeAbilityId();
+    } catch (error) {
+      console.error("[server] allocateRuntimeAbilityId failed", error);
+      this.queueAbilityCreateResultMessage(
+        user,
+        submitNonce,
+        false,
+        ABILITY_ID_NONE,
+        "Ability allocation unavailable."
+      );
+      return;
+    }
+
+    const abilityDefinition = createAbilityDefinitionFromDraft(allocatedAbilityId, {
       name: typeof command.name === "string" ? command.name : "",
       category,
       points: {
@@ -655,6 +890,10 @@ export class GameSimulation {
     player.hotbarAbilityIds[targetSlot] = abilityDefinition.id;
     player.activeHotbarSlot = targetSlot;
 
+    this.markPlayerDirty(player, {
+      dirtyCharacter: false,
+      dirtyAbilityState: true
+    });
     this.queueAbilityDefinitionMessage(user, abilityDefinition);
     this.queueLoadoutStateMessage(user, player);
     this.queueAbilityCreateResultMessage(
@@ -679,6 +918,10 @@ export class GameSimulation {
 
   private queueAbilityDefinitionMessage(user: UserLike, ability: AbilityDefinition): void {
     const projectile = ability.projectile;
+    const melee = ability.melee;
+    const damage = projectile?.damage ?? melee?.damage ?? 0;
+    const radius = projectile?.radius ?? melee?.radius ?? 0;
+    const cooldownSeconds = projectile?.cooldownSeconds ?? melee?.cooldownSeconds ?? 0;
     user.queueMessage({
       ntype: NType.AbilityDefinitionMessage,
       abilityId: ability.id,
@@ -691,12 +934,14 @@ export class GameSimulation {
       attributeMask: encodeAbilityAttributeMask(ability.attributes),
       kind: projectile?.kind ?? 0,
       speed: projectile?.speed ?? 0,
-      damage: projectile?.damage ?? 0,
-      radius: projectile?.radius ?? 0,
-      cooldownSeconds: projectile?.cooldownSeconds ?? 0,
+      damage,
+      radius,
+      cooldownSeconds,
       lifetimeSeconds: projectile?.lifetimeSeconds ?? 0,
       spawnForwardOffset: projectile?.spawnForwardOffset ?? 0,
-      spawnVerticalOffset: projectile?.spawnVerticalOffset ?? 0
+      spawnVerticalOffset: projectile?.spawnVerticalOffset ?? 0,
+      meleeRange: melee?.range ?? 0,
+      meleeArcDegrees: melee?.arcDegrees ?? 0
     });
   }
 
@@ -726,21 +971,6 @@ export class GameSimulation {
       createdAbilityId: Math.max(0, Math.min(0xffff, Math.floor(createdAbilityId))),
       message
     });
-  }
-
-  private allocateRuntimeAbilityId(): number {
-    while (this.runtimeAbilitiesById.has(this.nextRuntimeAbilityId) || getAbilityDefinitionById(this.nextRuntimeAbilityId)) {
-      this.nextRuntimeAbilityId += 1;
-      if (this.nextRuntimeAbilityId > 0xffff) {
-        this.nextRuntimeAbilityId = ABILITY_DYNAMIC_ID_START;
-      }
-    }
-    const allocated = this.nextRuntimeAbilityId;
-    this.nextRuntimeAbilityId += 1;
-    if (this.nextRuntimeAbilityId > 0xffff) {
-      this.nextRuntimeAbilityId = ABILITY_DYNAMIC_ID_START;
-    }
-    return allocated;
   }
 
   private removeRuntimeAbilitiesByOwner(ownerNid: number): void {
@@ -800,12 +1030,79 @@ export class GameSimulation {
     return this.getAbilityDefinitionForPlayer(player, normalized) ? normalized : fallbackAbilityId;
   }
 
-  private createInitialHotbar(): number[] {
+  private createInitialHotbar(savedHotbar?: number[]): number[] {
     const hotbar = new Array<number>(HOTBAR_SLOT_COUNT).fill(ABILITY_ID_NONE);
     for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+      if (savedHotbar && typeof savedHotbar[slot] === "number" && Number.isFinite(savedHotbar[slot])) {
+        hotbar[slot] = Math.max(ABILITY_ID_NONE, Math.floor(savedHotbar[slot] as number));
+        continue;
+      }
       hotbar[slot] = DEFAULT_HOTBAR_ABILITY_IDS[slot] ?? ABILITY_ID_NONE;
     }
     return hotbar;
+  }
+
+  private ensurePunchAssigned(player: PlayerEntity): void {
+    if (!player.unlockedAbilityIds.has(ABILITY_ID_PUNCH)) {
+      return;
+    }
+    if (player.hotbarAbilityIds.includes(ABILITY_ID_PUNCH)) {
+      return;
+    }
+    const emptySlot = player.hotbarAbilityIds.findIndex((abilityId) => abilityId === ABILITY_ID_NONE);
+    if (emptySlot >= 0) {
+      player.hotbarAbilityIds[emptySlot] = ABILITY_ID_PUNCH;
+      return;
+    }
+    player.hotbarAbilityIds[0] = ABILITY_ID_PUNCH;
+  }
+
+  private clampHealth(value: number): number {
+    if (!Number.isFinite(value)) {
+      return PLAYER_MAX_HEALTH;
+    }
+    return Math.max(0, Math.min(PLAYER_MAX_HEALTH, Math.floor(value)));
+  }
+
+  private markPlayerDirty(
+    player: PlayerEntity,
+    options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean }
+  ): void {
+    const dirtyCharacter = options?.dirtyCharacter ?? true;
+    const dirtyAbilityState = options?.dirtyAbilityState ?? true;
+    if (dirtyCharacter) {
+      this.dirtyCharacterAccountIds.add(player.accountId);
+    }
+    if (dirtyAbilityState) {
+      this.dirtyAbilityStateAccountIds.add(player.accountId);
+    }
+  }
+
+  private capturePlayerSnapshot(player: PlayerEntity): PlayerSnapshot {
+    const runtimeAbilities: AbilityDefinition[] = [];
+    for (const runtimeAbility of this.runtimeAbilitiesById.values()) {
+      if (runtimeAbility.ownerNid !== player.nid) {
+        continue;
+      }
+      runtimeAbilities.push(runtimeAbility.definition);
+    }
+    runtimeAbilities.sort((a, b) => a.id - b.id);
+
+    return {
+      accountId: player.accountId,
+      x: player.x,
+      y: player.y,
+      z: player.z,
+      yaw: player.yaw,
+      pitch: player.pitch,
+      vx: player.vx,
+      vy: player.vy,
+      vz: player.vz,
+      health: player.health,
+      activeHotbarSlot: this.sanitizeHotbarSlot(player.activeHotbarSlot, 0),
+      hotbarAbilityIds: [...player.hotbarAbilityIds],
+      runtimeAbilities
+    };
   }
 
   private tryUsePrimaryAbility(player: PlayerEntity): void {
@@ -857,23 +1154,20 @@ export class GameSimulation {
     const spawnY = player.y + projectileProfile.spawnVerticalOffset + dirY * projectileProfile.spawnForwardOffset;
     const spawnZ = player.z + dirZ * projectileProfile.spawnForwardOffset;
 
-    const projectile: ProjectileEntity = {
-      nid: 0,
-      ntype: NType.ProjectileEntity,
-      ownerNid: player.nid,
-      kind: projectileProfile.kind,
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      serverTick: this.tickNumber,
-      vx: dirX * projectileProfile.speed,
-      vy: dirY * projectileProfile.speed,
-      vz: dirZ * projectileProfile.speed,
-      radius: projectileProfile.radius,
-      damage: projectileProfile.damage,
-      ttlSeconds: projectileProfile.lifetimeSeconds,
-      remainingRange: PROJECTILE_MAX_RANGE
-    };
+    const projectile = this.acquireProjectile();
+    projectile.ownerNid = player.nid;
+    projectile.kind = projectileProfile.kind;
+    projectile.x = spawnX;
+    projectile.y = spawnY;
+    projectile.z = spawnZ;
+    projectile.serverTick = this.tickNumber;
+    projectile.vx = dirX * projectileProfile.speed;
+    projectile.vy = dirY * projectileProfile.speed;
+    projectile.vz = dirZ * projectileProfile.speed;
+    projectile.radius = projectileProfile.radius;
+    projectile.damage = projectileProfile.damage;
+    projectile.ttlSeconds = projectileProfile.lifetimeSeconds;
+    projectile.remainingRange = PROJECTILE_MAX_RANGE;
 
     this.spatialChannel.addEntity(projectile);
     this.projectilesByNid.set(projectile.nid, projectile);
@@ -884,36 +1178,38 @@ export class GameSimulation {
     if (!hitTarget) {
       return;
     }
-    this.applyProjectileDamage(hitTarget, meleeProfile.damage);
+    this.applyCombatDamage(hitTarget, meleeProfile.damage);
   }
 
   private findMeleeHitTarget(
     attacker: PlayerEntity,
     meleeProfile: MeleeAbilityProfile
-  ): PlayerEntity | null {
+  ): CombatTarget | null {
     const direction = this.computeViewDirection(attacker.yaw, attacker.pitch);
-    const originX = attacker.x;
-    const originY = attacker.y;
-    const originZ = attacker.z;
+    const attackerBody = attacker.body.translation();
+    const originX = attackerBody.x;
+    const originY = attackerBody.y;
+    const originZ = attackerBody.z;
     const range = Math.max(0.1, meleeProfile.range);
     const halfArcRadians = (Math.max(5, Math.min(175, meleeProfile.arcDegrees)) * Math.PI) / 360;
     const minFacingDot = Math.cos(halfArcRadians);
-    const maxCenterDistance = range + PLAYER_CAPSULE_RADIUS * 2 + meleeProfile.radius;
+    const maxCenterDistance = range + PLAYER_CAPSULE_RADIUS * 2 + meleeProfile.radius + TRAINING_DUMMY_RADIUS;
     const maxCenterDistanceSq = maxCenterDistance * maxCenterDistance;
     const attackEndX = originX + direction.x * range;
     const attackEndY = originY + direction.y * range;
     const attackEndZ = originZ + direction.z * range;
-    const combinedRadius = meleeProfile.radius + PLAYER_CAPSULE_RADIUS;
-    const combinedRadiusSq = combinedRadius * combinedRadius;
-    let bestTarget: PlayerEntity | null = null;
+    let bestTarget: CombatTarget | null = null;
     let bestForwardDistance = Number.POSITIVE_INFINITY;
 
-    for (const candidate of this.playersByUserId.values()) {
-      if (candidate.nid === attacker.nid) {
+    for (const target of this.combatTargetsByColliderHandle.values()) {
+      if (target.kind === "player" && target.player.nid === attacker.nid) {
         continue;
       }
 
-      const bodyPos = candidate.body.translation();
+      const targetBody = this.getCombatTargetBody(target);
+      const targetRadius = this.getCombatTargetRadius(target);
+      const targetHalfHeight = this.getCombatTargetHalfHeight(target);
+      const bodyPos = targetBody.translation();
       const centerDx = bodyPos.x - originX;
       const centerDy = bodyPos.y - originY;
       const centerDz = bodyPos.z - originZ;
@@ -931,8 +1227,10 @@ export class GameSimulation {
         }
       }
 
-      const segmentMinY = bodyPos.y - PLAYER_CAPSULE_HALF_HEIGHT;
-      const segmentMaxY = bodyPos.y + PLAYER_CAPSULE_HALF_HEIGHT;
+      const segmentMinY = bodyPos.y - targetHalfHeight;
+      const segmentMaxY = bodyPos.y + targetHalfHeight;
+      const combinedRadius = meleeProfile.radius + targetRadius;
+      const combinedRadiusSq = combinedRadius * combinedRadius;
       const distanceSq = this.segmentSegmentDistanceSq(
         originX,
         originY,
@@ -953,13 +1251,40 @@ export class GameSimulation {
 
       const forwardDistance =
         centerDx * direction.x + centerDy * direction.y + centerDz * direction.z;
-      if (forwardDistance < bestForwardDistance) {
+      if (forwardDistance < bestForwardDistance && this.hasMeleeLineOfSight(attacker, target, range)) {
         bestForwardDistance = forwardDistance;
-        bestTarget = candidate;
+        bestTarget = target;
       }
     }
 
     return bestTarget;
+  }
+
+  private hasMeleeLineOfSight(attacker: PlayerEntity, target: CombatTarget, range: number): boolean {
+    const targetBody = this.getCombatTargetBody(target);
+    const start = attacker.body.translation();
+    const end = targetBody.translation();
+    const deltaX = end.x - start.x;
+    const deltaY = end.y - start.y;
+    const deltaZ = end.z - start.z;
+    const distance = Math.hypot(deltaX, deltaY, deltaZ);
+    if (distance <= 1e-6) {
+      return true;
+    }
+    const dir = { x: deltaX / distance, y: deltaY / distance, z: deltaZ / distance };
+    const castDistance = Math.min(range + this.getCombatTargetRadius(target), distance);
+    const hit = this.world.castRay(
+      new RAPIER.Ray({ x: start.x, y: start.y, z: start.z }, dir),
+      castDistance,
+      true,
+      undefined,
+      undefined,
+      attacker.collider
+    );
+    if (!hit) {
+      return true;
+    }
+    return hit.collider.handle === this.getCombatTargetCollider(target).handle;
   }
 
   private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
@@ -977,6 +1302,22 @@ export class GameSimulation {
       y: y * invMagnitude,
       z: z * invMagnitude
     };
+  }
+
+  private getCombatTargetBody(target: CombatTarget): RAPIER.RigidBody {
+    return target.kind === "player" ? target.player.body : target.dummy.body;
+  }
+
+  private getCombatTargetCollider(target: CombatTarget): RAPIER.Collider {
+    return target.kind === "player" ? target.player.collider : target.dummy.collider;
+  }
+
+  private getCombatTargetRadius(target: CombatTarget): number {
+    return target.kind === "player" ? PLAYER_CAPSULE_RADIUS : TRAINING_DUMMY_RADIUS;
+  }
+
+  private getCombatTargetHalfHeight(target: CombatTarget): number {
+    return target.kind === "player" ? PLAYER_CAPSULE_HALF_HEIGHT : TRAINING_DUMMY_HALF_HEIGHT;
   }
 
   private segmentSegmentDistanceSq(
@@ -1061,6 +1402,13 @@ export class GameSimulation {
     return Math.max(0, Math.min(1, value));
   }
 
+  private clampAxis(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    return Math.max(-1, Math.min(1, value));
+  }
+
   private updateProjectiles(delta: number): void {
     for (const [nid, projectile] of this.projectilesByNid) {
       projectile.ttlSeconds -= delta;
@@ -1069,100 +1417,113 @@ export class GameSimulation {
         continue;
       }
 
-      const nextX = projectile.x + projectile.vx * delta;
-      const nextY = projectile.y + projectile.vy * delta;
-      const nextZ = projectile.z + projectile.vz * delta;
-      const traveledDistance = Math.hypot(
-        projectile.vx * delta,
-        projectile.vy * delta,
-        projectile.vz * delta
-      );
+      const speed = Math.hypot(projectile.vx, projectile.vy, projectile.vz);
+      if (speed <= PROJECTILE_SPEED_EPSILON) {
+        this.removeProjectile(nid, projectile);
+        continue;
+      }
+      const maxTravelTime = this.resolveProjectileMaxTravelTime(delta, projectile.remainingRange, speed);
+      const collision = this.castProjectileCollision(projectile, maxTravelTime);
+      const traveledTime = collision ? collision.timeOfImpact : maxTravelTime;
+      const traveledDistance = speed * traveledTime;
       projectile.remainingRange -= traveledDistance;
       if (projectile.remainingRange <= 0) {
         this.removeProjectile(nid, projectile);
         continue;
       }
-
-      if (this.isProjectileBlockedByWorld(nextX, nextY, nextZ, projectile.radius)) {
+      if (collision) {
+        if (collision.target) {
+          this.applyCombatDamage(collision.target, projectile.damage);
+        }
         this.removeProjectile(nid, projectile);
         continue;
       }
 
-      const hitPlayer = this.findProjectileHitPlayer(projectile, nextX, nextY, nextZ);
-      if (hitPlayer) {
-        this.applyProjectileDamage(hitPlayer, projectile.damage);
-        this.removeProjectile(nid, projectile);
-        continue;
-      }
-
-      projectile.x = nextX;
-      projectile.y = nextY;
-      projectile.z = nextZ;
+      projectile.x += projectile.vx * traveledTime;
+      projectile.y += projectile.vy * traveledTime;
+      projectile.z += projectile.vz * traveledTime;
       projectile.serverTick = this.tickNumber;
     }
   }
 
-  private isProjectileBlockedByWorld(x: number, y: number, z: number, radius: number): boolean {
-    if (y - radius <= 0) {
-      return true;
+  private resolveProjectileMaxTravelTime(
+    tickDeltaSeconds: number,
+    remainingRange: number,
+    speed: number
+  ): number {
+    if (speed <= PROJECTILE_SPEED_EPSILON || remainingRange <= 0) {
+      return 0;
     }
-
-    for (const block of STATIC_WORLD_BLOCKS) {
-      const withinX = Math.abs(x - block.x) <= block.halfX + radius;
-      const withinY = Math.abs(y - block.y) <= block.halfY + radius;
-      const withinZ = Math.abs(z - block.z) <= block.halfZ + radius;
-      if (withinX && withinY && withinZ) {
-        return true;
-      }
-    }
-
-    for (const platform of this.platformsByPid.values()) {
-      const local = toPlatformLocal(platform, x, z);
-      const withinX = Math.abs(local.x) <= platform.halfX + radius;
-      const withinY = Math.abs(y - platform.y) <= platform.halfY + radius;
-      const withinZ = Math.abs(local.z) <= platform.halfZ + radius;
-      if (withinX && withinY && withinZ) {
-        return true;
-      }
-    }
-
-    return false;
+    const rangeLimitedTime = remainingRange / speed;
+    return Math.max(0, Math.min(tickDeltaSeconds, rangeLimitedTime));
   }
 
-  private findProjectileHitPlayer(
+  private castProjectileCollision(
     projectile: ProjectileEntity,
-    x: number,
-    y: number,
-    z: number
-  ): PlayerEntity | null {
-    const combinedRadius = PLAYER_CAPSULE_RADIUS + projectile.radius;
-    const combinedRadiusSq = combinedRadius * combinedRadius;
-
-    for (const candidate of this.playersByUserId.values()) {
-      if (candidate.nid === projectile.ownerNid) {
-        continue;
-      }
-      const bodyPos = candidate.body.translation();
-      const segmentMinY = bodyPos.y - PLAYER_CAPSULE_HALF_HEIGHT;
-      const segmentMaxY = bodyPos.y + PLAYER_CAPSULE_HALF_HEIGHT;
-      const closestY = Math.max(segmentMinY, Math.min(segmentMaxY, y));
-      const dx = x - bodyPos.x;
-      const dy = y - closestY;
-      const dz = z - bodyPos.z;
-      if (dx * dx + dy * dy + dz * dz <= combinedRadiusSq) {
-        return candidate;
-      }
+    maxTravelTime: number
+  ): { timeOfImpact: number; target: CombatTarget | null } | null {
+    if (maxTravelTime <= 0) {
+      return null;
     }
-
-    return null;
+    const ownerCollider = this.playersByNid.get(projectile.ownerNid)?.collider;
+    const shape = this.getProjectileCastShape(projectile.radius);
+    const hit = this.world.castShape(
+      { x: projectile.x, y: projectile.y, z: projectile.z },
+      this.identityRotation,
+      { x: projectile.vx, y: projectile.vy, z: projectile.vz },
+      shape,
+      0,
+      maxTravelTime,
+      true,
+      undefined,
+      undefined,
+      ownerCollider
+    );
+    if (!hit) {
+      return null;
+    }
+    const timeOfImpact = Math.max(0, Math.min(maxTravelTime, hit.time_of_impact));
+    const hitTarget = this.combatTargetsByColliderHandle.get(hit.collider.handle) ?? null;
+    return {
+      timeOfImpact,
+      target: hitTarget
+    };
   }
 
-  private applyProjectileDamage(target: PlayerEntity, damage: number): void {
-    target.health = Math.max(0, target.health - Math.max(0, Math.floor(damage)));
-    if (target.health > 0) {
+  private getProjectileCastShape(radius: number): RAPIER.Ball {
+    const clampedRadius = Math.max(PROJECTILE_MIN_RADIUS, radius);
+    const cacheKey = Math.max(1, Math.round(clampedRadius * PROJECTILE_RADIUS_CACHE_SCALE));
+    let shape = this.projectileCastShapeCache.get(cacheKey);
+    if (!shape) {
+      shape = new RAPIER.Ball(cacheKey / PROJECTILE_RADIUS_CACHE_SCALE);
+      this.projectileCastShapeCache.set(cacheKey, shape);
+    }
+    return shape;
+  }
+
+  private applyCombatDamage(target: CombatTarget, damage: number): void {
+    const appliedDamage = Math.max(0, Math.floor(damage));
+    if (appliedDamage <= 0) {
       return;
     }
-    this.respawnPlayer(target);
+    if (target.kind === "player") {
+      const player = target.player;
+      player.health = Math.max(0, player.health - appliedDamage);
+      this.markPlayerDirty(player, {
+        dirtyCharacter: true,
+        dirtyAbilityState: false
+      });
+      if (player.health <= 0) {
+        this.respawnPlayer(player);
+      }
+      return;
+    }
+    const dummy = target.dummy;
+    dummy.health = Math.max(0, dummy.health - appliedDamage);
+    dummy.serverTick = this.tickNumber;
+    if (dummy.health <= 0) {
+      dummy.health = dummy.maxHealth;
+    }
   }
 
   private respawnPlayer(player: PlayerEntity): void {
@@ -1181,6 +1542,10 @@ export class GameSimulation {
     player.y = PLAYER_BODY_CENTER_HEIGHT + PLAYER_CAMERA_OFFSET_Y;
     player.z = spawn.z;
     player.serverTick = this.tickNumber;
+    this.markPlayerDirty(player, {
+      dirtyCharacter: true,
+      dirtyAbilityState: false
+    });
   }
 
   private removeProjectilesByOwner(ownerNid: number): void {
@@ -1194,6 +1559,73 @@ export class GameSimulation {
   private removeProjectile(nid: number, projectile: ProjectileEntity): void {
     this.spatialChannel.removeEntity(projectile);
     this.projectilesByNid.delete(nid);
+    this.releaseProjectile(projectile);
+  }
+
+  private prewarmProjectilePool(count: number): void {
+    for (let i = this.projectilePool.length; i < count; i += 1) {
+      this.projectilePool.push(this.createPooledProjectile());
+    }
+  }
+
+  private acquireProjectile(): ProjectileEntity {
+    const projectile = this.projectilePool.pop() ?? this.createPooledProjectile();
+    projectile.nid = 0;
+    projectile.ntype = NType.ProjectileEntity;
+    projectile.ownerNid = 0;
+    projectile.kind = 0;
+    projectile.x = 0;
+    projectile.y = 0;
+    projectile.z = 0;
+    projectile.serverTick = this.tickNumber;
+    projectile.vx = 0;
+    projectile.vy = 0;
+    projectile.vz = 0;
+    projectile.radius = 0;
+    projectile.damage = 0;
+    projectile.ttlSeconds = 0;
+    projectile.remainingRange = 0;
+    return projectile;
+  }
+
+  private releaseProjectile(projectile: ProjectileEntity): void {
+    if (this.projectilePool.length >= PROJECTILE_POOL_MAX) {
+      return;
+    }
+    projectile.nid = 0;
+    projectile.ownerNid = 0;
+    projectile.kind = 0;
+    projectile.x = 0;
+    projectile.y = -1000;
+    projectile.z = 0;
+    projectile.vx = 0;
+    projectile.vy = 0;
+    projectile.vz = 0;
+    projectile.radius = 0;
+    projectile.damage = 0;
+    projectile.ttlSeconds = 0;
+    projectile.remainingRange = 0;
+    this.projectilePool.push(projectile);
+  }
+
+  private createPooledProjectile(): ProjectileEntity {
+    return {
+      nid: 0,
+      ntype: NType.ProjectileEntity,
+      ownerNid: 0,
+      kind: 0,
+      x: 0,
+      y: -1000,
+      z: 0,
+      serverTick: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      radius: 0,
+      damage: 0,
+      ttlSeconds: 0,
+      remainingRange: 0
+    };
   }
 
   private queueInputAck(userId: number, player: PlayerEntity, platformYawDelta: number): void {

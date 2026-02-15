@@ -21,13 +21,14 @@ This file defines the role of each top-level Markdown file so context stays clea
 
 - `progress.md`
   - What it is: short-lived working memory for current status and near-term TODOs.
-  - Include: what changed recently, what is verified, open tasks, handoff notes.
+  - Include: recent verifications, active priorities, current blockers, handoff notes.
   - Exclude: timeless architecture explanations and permanent operating policy.
+  - Hygiene: keep it short and rolling; prune stale entries aggressively instead of preserving a full historical log.
 
 - `overview.md`
   - What it is: canonical high-level description of what the project is and how it works.
   - Include: architecture, stack, core modules, netcode model, key workflows.
-  - Exclude: step-by-step session logs and agent-behavior policy.
+  - Exclude: step-by-step session logs, agent-behavior policy, and transient one-session status notes.
 
 - `vision.md`
   - What it is: product direction and gameplay/aesthetic goals.

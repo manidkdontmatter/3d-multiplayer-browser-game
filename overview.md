@@ -5,17 +5,17 @@
 This repository is a production-oriented foundation for a first-person, authoritative, multiplayer 3D browser game.
 
 Core goals:
-- Server-authoritative simulation and anti-cheat-friendly trust boundaries.
+- Server-authoritative simulation with anti-cheat-friendly trust boundaries.
 - High-performance netcode using nengi 2.0 patterns.
-- Browser rendering with Three.js and gameplay physics with Rapier.
-- Scalable architecture targeting persistent worlds and high player counts over time.
+- Three.js rendering + Rapier physics in the browser.
+- Scalable architecture for persistent worlds and high player counts.
 
 ## Current Stack
 
 - Language/runtime: TypeScript + Node.js 20.19.x
 - Build/dev: Vite
 - Networking: `nengi@2.0.0-alpha.173`
-- Preferred server transport: `nengi-uws-instance-adapter` (`uWebSockets.js`)
+- Server transport: `nengi-uws-instance-adapter` (`uWebSockets.js`)
 - Client networking: `nengi-websocket-client-adapter`
 - Rendering: `three`
 - Physics: `@dimforge/rapier3d-compat`
@@ -24,105 +24,76 @@ Core goals:
 ## High-Level Architecture
 
 - Strict client/server separation.
-- Server owns authoritative world state and simulation.
-- Client sends intent/commands, not authoritative state.
-- Client renders local prediction and reconciles against server snapshots.
-- Shared protocol/types live under `src/shared`.
+- Server owns authoritative world state + simulation.
+- Client sends intent/commands only.
+- Client runs local prediction and reconciles to authoritative snapshots.
+- Shared schemas/protocol/helpers live in `src/shared`.
 
-Entry points:
+Runtime entry points:
 - Client: `src/client/main.ts`
 - Server: `src/server/main.ts`
 
-Key runtime modules:
-- `src/server/GameServer.ts`: server lifecycle and networking setup.
-- `src/server/GameSimulation.ts`: authoritative simulation/tick behavior.
-- `src/client/bootstrap.ts`: staged startup orchestration (asset preload + subsystem init).
+Core modules:
+- `src/server/GameServer.ts`: server lifecycle + networking setup.
+- `src/server/GameSimulation.ts`: authoritative tick/simulation.
+- `src/server/persistence/PersistenceService.ts`: SQLite-backed auth + character/loadout/runtime-ability persistence.
+- `src/client/bootstrap.ts`: staged startup orchestration.
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
-- `src/client/runtime/WorldRenderer.ts`: Three.js scene/render integration.
-- `src/client/runtime/CharacterAnimationController.ts`: layered humanoid animation blending/masking runtime.
-- `src/client/assets/assetLoader.ts`: Three.js loader-based manifest preloading and runtime asset cache.
+- `src/client/runtime/WorldRenderer.ts`: Three.js scene/render runtime.
+- `src/client/runtime/CharacterAnimationController.ts`: layered humanoid animation blending/masking.
+- `src/client/ui/AbilityHud.ts`: hotbar + loadout + creator panels.
 
 ## Netcode Model
 
 - Fixed server tick cadence with deterministic ordering.
-- AOI/visibility via nengi spatial channels (`ChannelAABB3D` + per-user `AABB3D` views).
-- Snapshot replication from server to clients, including `serverTick` stamping on replicated player/platform entities.
-- Client input commands include rotation deltas and movement intent.
-- Client input commands also carry primary-action press events (`usePrimaryPressed`) for replicated upper-body action triggering.
-- Client input commands now also carry selected hotbar ability intent (`activeHotbarSlot` + `selectedAbilityId`), while server validates/evaluates actual ability execution authority.
-- Server movement integration is tick-owned (`SERVER_TICK_SECONDS`) rather than client-timed.
-- Client-side prediction uses Rapier KCC path to mirror server movement/collision as closely as possible.
+- AOI/visibility via nengi spatial channels.
+- Snapshot replication includes authoritative timing data.
+- Input command stream carries movement/look and primary-action intents.
+- Low-frequency loadout/equip changes use explicit `LoadoutCommand`.
+- Server movement integration is tick-owned (`SERVER_TICK_SECONDS`).
+- Client prediction mirrors server movement/collision as closely as possible.
 
-## Current Behavioral Notes
+Authoritative combat and physics highlights:
+- Projectile abilities: pooled server projectile objects.
+- Projectile collision: authoritative Rapier swept shape-cast queries.
+- Melee abilities: server-side range/radius/arc checks.
 
-- Runtime character assets now live under `public/assets/models/characters/**` and are loaded via the manifest in `src/client/assets/assetManifest.ts`.
-- Remote player rendering now uses the preloaded male GLTF rig by default, with capsule fallback if the asset is unavailable.
-- Local first-person rendering now uses the same male GLTF rig as a local presentation mesh (no separate FPS-arms model):
-  - head/neck are suppressed locally to avoid camera obstruction
-  - upper-body first-person offsets keep arms visible in-frame when looking down
-  - world/remote representation remains authoritative and separate
-- Remote player animation now uses a layered runtime controller:
-  - base locomotion blends idle/walk/run from measured speed
-  - jump pose activates while server-replicated grounded state is false
-  - upper-body overlay action is independently triggered from replicated action nonce/events
-- Upper-body masking is now resilient to rig naming differences and falls back to unmasked playback with a warning if no upper-body tracks are matched.
-- Mixamo clips (`Idle`, `Walking`, `Running`, `Jump`, `Punching`) are now preloaded from `public/assets/animations/mixamo/` and retargeted at runtime onto the male rig skeleton before being fed into the animation controller.
-- Procedural clips remain only as an internal fallback path if imported/retargeted clips are unavailable.
-- Root motion is disabled by default in animation policy so physics/netcode remain movement-authoritative; per-clip root-motion opt-in is supported for future specific clips.
-- Ability/shared gameplay scaffolding in `src/shared/abilities.ts` now includes creator draft validation + profile synthesis logic (category, stat-point budget, attributes, projectile+melee profile synthesis, wire helpers).
-- Client now includes separated in-game ability UIs (`src/client/ui/AbilityHud.ts`):
-  - persistent hotbar slots (`1-5`), slot selection, and drag/drop assignment
-  - inventory/loadout panel (`B`) for assigning equipped abilities
-  - creator panel (`N`) for stat-point allocation, attributes, and create/equip submission
-  - focused menu behavior: opening one panel closes the other to keep interaction flow uncluttered
-  - server result status feedback reflected in creator UI
-- Server now runs a basic authoritative combat loop in `src/server/GameSimulation.ts`:
-  - projectile abilities (spawn, travel, collision, damage, despawn, respawn)
-  - melee abilities (server-side range/radius/arc hit checks against player capsules)
-- Ability creation is now server-authoritative: client submits drafts as `AbilityCreateCommand`; server validates/builds runtime abilities, then sends authoritative catalog/loadout/result messages back to the owning client.
-- Client startup now uses a staged boot pipeline:
-  - optional manifest-driven preload pass (`ASSET_MANIFEST`) through Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`)
-  - physics/network initialization progress phases
-  - boot overlay/progress bar hidden once gameplay loop starts
-- CSP is currently default OFF at runtime due to remaining on-platform jitter under real play.
-- CSP can be toggled at runtime with `C` for testing.
-- If CSP is user-enabled, it auto-suppresses while server reports platform-grounded state and resumes automatically after dismount.
-- When CSP is enabled, client reconciliation uses a position-only render-side smoothing layer with correction-offset decay; yaw/pitch stay authoritative to keep camera-forward input alignment stable.
-- Interpolation delay is adaptive at runtime (based on observed ack jitter + latency) rather than fixed at a single static value.
-- Platform carry yaw reconciliation is now explicit: server acks include `platformYawDelta` so client can compose platform rotation without conflating it with player mouse-look yaw.
-- Client CSP also predicts platform yaw carry each local step and applies only residual correction from acks, improving on-platform rotation smoothness.
-- Reconciliation metrics are exposed in runtime status text and `window.render_game_to_text` for diagnostics and automated artifact review.
-- Core verification commands currently passing are recorded in `progress.md`.
+## Key Gameplay Systems (Current)
+
+- Shared full-body local first-person presentation rig (no separate FPS-arms asset).
+- Layered humanoid animation system with locomotion + jump + upper-body action overlay.
+- Runtime ability pipeline with server-authoritative creation/validation/execution.
+- Access-key-based auth (`#k=...` URL fragment + local storage fallback).
+- SQLite persistence for account/character/loadout/runtime-ability state.
 
 ## Common Commands
 
 - `npm run dev`: start server + client
 - `npm run dev:server`: start server only
 - `npm run dev:client`: start client only
-- `npm run typecheck`: run TS checks
+- `npm run typecheck`: run all TS checks
 - `npm run verify:quick`: fast local loop (`typecheck:client` + `test:smoke:fast`, expects running services)
 - `npm run test:smoke`: Playwright smoke validation
 - `npm run test:multiplayer`: two-client replication validation
-- `npm run test:multiplayer:quick`: faster replication sanity run (core movement checks only)
-- `npm run test:multiplayer:csp`: multiplayer validation in CSP-enabled mode
-- `npm run test:multiplayer:chaos`: CSP multiplayer validation under simulated ack drop/reorder jitter
+- `npm run test:multiplayer:quick`: faster multiplayer sanity run
+- `npm run test:multiplayer:csp`: multiplayer validation with CSP enabled
+- `npm run test:multiplayer:chaos`: CSP validation under simulated ack drop/reorder jitter
 
 ## Directory Guide
 
-- `src/client`: browser client runtime and rendering
-- `src/client/assets`: asset manifest and preload/cache utilities
-- `public/assets`: browser-served runtime assets (models/textures/audio)
-- `src/server`: authoritative simulation and network server
-- `src/shared`: shared schemas/config/gameplay helpers
+- `src/client`: browser runtime + rendering
+- `src/client/assets`: asset manifest + preload/cache utilities
+- `public/assets`: browser-served runtime assets
+- `src/server`: authoritative simulation + network server
+- `src/shared`: shared schemas/config/helpers
 - `scripts`: test/automation scripts
-- `docs`: local reference docs for nengi 2.0, Three.js, Rapier
-- `progress.md`: active status, TODOs, and session handoff notes
-- `AGENTS.md`: persistent agent instructions and memory rules
-- `.codex/config.toml`: project-scoped Codex CLI defaults/profiles for this workspace
-- `vision.md`: long-range product/gameplay/aesthetic direction
-- `docs-map.md`: markdown file responsibilities and session read order
+- `docs`: local reference docs for nengi/Three.js/Rapier
+- `AGENTS.md`: persistent operating instructions/memory rules
+- `progress.md`: active short-lived status + priorities
+- `vision.md`: product/game direction
+- `docs-map.md`: markdown file responsibilities/read order
 
 ## Maintenance Rule
 
-Keep this file current whenever architecture, core runtime behavior, tech stack, or core workflows materially change.
+Update this file when architecture, core runtime behavior, stack, or primary workflows materially change.

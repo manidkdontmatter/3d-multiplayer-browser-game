@@ -12,6 +12,8 @@ import { LocalPhysicsWorld } from "./LocalPhysicsWorld";
 import { WorldRenderer } from "./WorldRenderer";
 import type { MovementInput, PlayerPose } from "./types";
 import { AbilityHud } from "../ui/AbilityHud";
+import { resolveAccessKey, storeAccessKey, writeAccessKeyToFragment } from "../auth/accessKey";
+import { AuthPanel } from "../ui/AuthPanel";
 
 const FIXED_STEP = 1 / 60;
 const YAW_RECONCILE_EPSILON = 0.03;
@@ -28,6 +30,7 @@ export class GameClientApp {
   private readonly input: InputController;
   private readonly renderer: WorldRenderer;
   private readonly abilityHud: AbilityHud;
+  private readonly authPanel: AuthPanel;
   private readonly network = new NetworkClient();
   private readonly clock = new Clock();
   private readonly physics: LocalPhysicsWorld;
@@ -55,12 +58,17 @@ export class GameClientApp {
   private localUpperBodyActionNonce = 0;
   private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
   private lastAbilityCreateMessage = "Ready.";
+  private lastQueuedHotbarSlot = 0;
+  private queuedTestPrimaryActionCount = 0;
+  private testPrimaryHeld = false;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
     statusNode: HTMLElement | null,
     physics: LocalPhysicsWorld,
-    cspEnabled: boolean
+    cspEnabled: boolean,
+    private readonly serverUrl: string,
+    initialAccessKey: string
   ) {
     this.statusNode = statusNode;
     this.physics = physics;
@@ -71,17 +79,26 @@ export class GameClientApp {
       initialSelectedSlot: this.input.getSelectedHotbarSlot(),
       onHotbarSlotSelected: (slot) => {
         this.input.setSelectedHotbarSlot(slot);
+        this.network.queueLoadoutSelection(slot);
+        this.lastQueuedHotbarSlot = slot;
       },
       onHotbarAssignmentChanged: (slot, abilityId) => {
         this.hotbarAbilityIds[slot] = abilityId;
         this.input.setSelectedHotbarSlot(slot);
         this.abilityHud.setSelectedSlot(slot, false);
+        this.network.queueLoadoutSelection(slot);
+        this.network.queueLoadoutAssignment(slot, abilityId);
+        this.lastQueuedHotbarSlot = slot;
       },
       onCreateAbilityRequested: (draft) => {
         const submitNonce = this.network.queueAbilityCreateDraft(draft);
         this.lastAbilityCreateMessage = `Create request #${submitNonce} queued`;
         this.abilityHud.setCreatorStatus(this.lastAbilityCreateMessage);
       }
+    });
+    this.authPanel = AuthPanel.mount(document, {
+      serverUrl: this.serverUrl,
+      initialAccessKey
     });
     this.renderer = new WorldRenderer(canvas);
   }
@@ -93,9 +110,20 @@ export class GameClientApp {
   ): Promise<GameClientApp> {
     onCreatePhase?.("physics");
     const physics = await LocalPhysicsWorld.create();
-    const app = new GameClientApp(canvas, statusNode, physics, GameClientApp.resolveCspEnabled());
+    const serverUrl = GameClientApp.resolveServerUrl();
+    const resolvedAccessKey = resolveAccessKey(serverUrl);
+    storeAccessKey(serverUrl, resolvedAccessKey.key);
+    writeAccessKeyToFragment(resolvedAccessKey.key);
+    const app = new GameClientApp(
+      canvas,
+      statusNode,
+      physics,
+      GameClientApp.resolveCspEnabled(),
+      serverUrl,
+      resolvedAccessKey.key
+    );
     onCreatePhase?.("network");
-    await app.network.connect(GameClientApp.resolveServerUrl());
+    await app.network.connect(serverUrl, resolvedAccessKey.key);
     onCreatePhase?.("ready");
     app.updateStatus();
     app.registerTestingHooks();
@@ -152,7 +180,12 @@ export class GameClientApp {
     if (shouldReleasePointerLock && document.pointerLockElement === this.canvas) {
       void document.exitPointerLock();
     }
-    this.abilityHud.setSelectedSlot(this.input.getSelectedHotbarSlot(), false);
+    const selectedSlot = this.input.getSelectedHotbarSlot();
+    if (selectedSlot !== this.lastQueuedHotbarSlot) {
+      this.network.queueLoadoutSelection(selectedSlot);
+      this.lastQueuedHotbarSlot = selectedSlot;
+    }
+    this.abilityHud.setSelectedSlot(selectedSlot, false);
 
     this.accumulator += seconds;
     while (this.accumulator >= FIXED_STEP) {
@@ -169,7 +202,8 @@ export class GameClientApp {
     });
     this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
     this.renderer.syncPlatforms(this.network.getPlatforms());
-    this.renderer.syncProjectiles(this.network.getProjectiles());
+    this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
+    this.renderer.syncProjectiles(this.network.getProjectiles(), seconds);
     this.renderer.render(pose);
     this.updateStatus();
   }
@@ -178,9 +212,9 @@ export class GameClientApp {
     const movement = this.testMovementOverride ?? this.input.sampleMovement();
     let yaw = this.input.getYaw();
     const pitch = this.input.getPitch();
-    const activeHotbarSlot = this.input.getSelectedHotbarSlot();
-    const selectedAbilityId = this.hotbarAbilityIds[activeHotbarSlot] ?? ABILITY_ID_NONE;
-    const usePrimaryPressed = this.input.consumePrimaryActionTrigger();
+    const usePrimaryPressed =
+      this.input.consumePrimaryActionTrigger() || this.consumeTestPrimaryActionTrigger();
+    const usePrimaryHeld = this.input.isPrimaryActionHeld() || this.testPrimaryHeld;
     if (usePrimaryPressed) {
       this.localUpperBodyActionNonce = (this.localUpperBodyActionNonce + 1) & 0xffff;
     }
@@ -191,8 +225,7 @@ export class GameClientApp {
       { yaw, pitch },
       {
         usePrimaryPressed,
-        activeHotbarSlot,
-        selectedAbilityId
+        usePrimaryHeld
       }
     );
 
@@ -296,6 +329,7 @@ export class GameClientApp {
     if (events.loadout) {
       this.hotbarAbilityIds = [...events.loadout.abilityIds];
       this.input.setSelectedHotbarSlot(events.loadout.selectedHotbarSlot);
+      this.lastQueuedHotbarSlot = events.loadout.selectedHotbarSlot;
       this.abilityHud.setHotbarAssignments(this.hotbarAbilityIds);
       this.abilityHud.setSelectedSlot(events.loadout.selectedHotbarSlot, false);
     }
@@ -362,7 +396,8 @@ export class GameClientApp {
       });
       this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
       this.renderer.syncPlatforms(this.network.getPlatforms());
-      this.renderer.syncProjectiles(this.network.getProjectiles());
+      this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
+      this.renderer.syncProjectiles(this.network.getProjectiles(), FIXED_STEP);
       this.renderer.render(this.getRenderPose());
       this.updateStatus();
     };
@@ -398,6 +433,16 @@ export class GameClientApp {
           z: projectile.z,
           serverTick: projectile.serverTick
         })),
+        trainingDummies: this.network.getTrainingDummies().map((dummy) => ({
+          nid: dummy.nid,
+          x: dummy.x,
+          y: dummy.y,
+          z: dummy.z,
+          yaw: dummy.yaw,
+          serverTick: dummy.serverTick,
+          health: dummy.health,
+          maxHealth: dummy.maxHealth
+        })),
         remotePlayers: this.network.getRemotePlayers().map((p) => ({
           nid: p.nid,
           x: p.x,
@@ -429,7 +474,8 @@ export class GameClientApp {
             id: ability.id,
             name: ability.name,
             category: ability.category,
-            hasProjectile: Boolean(ability.projectile)
+            hasProjectile: Boolean(ability.projectile),
+            hasMelee: Boolean(ability.melee)
           }))
         },
         netTiming: {
@@ -469,6 +515,22 @@ export class GameClientApp {
         jump: movement.jump,
         sprint: movement.sprint
       };
+    };
+    window.trigger_test_primary_action = (count = 1) => {
+      const normalized = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+      this.queuedTestPrimaryActionCount = Math.min(
+        this.queuedTestPrimaryActionCount + normalized,
+        1024
+      );
+    };
+    window.set_test_primary_hold = (held) => {
+      this.testPrimaryHeld = Boolean(held);
+    };
+    window.set_test_look_angles = (yaw, pitch) => {
+      if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) {
+        return;
+      }
+      this.input.setLookAngles(yaw, pitch);
     };
   }
 
@@ -579,6 +641,14 @@ export class GameClientApp {
     return (
       this.network.getAbilityById(abilityId)?.name ?? getAbilityDefinitionById(abilityId)?.name ?? "Empty"
     );
+  }
+
+  private consumeTestPrimaryActionTrigger(): boolean {
+    if (this.queuedTestPrimaryActionCount <= 0) {
+      return false;
+    }
+    this.queuedTestPrimaryActionCount -= 1;
+    return true;
   }
 
   private static resolveServerUrl(): string {

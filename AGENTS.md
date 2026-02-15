@@ -2,125 +2,80 @@
 
 ## Platform and Stack
 
-- Develop on Windows (not Linux) for this project.
-- Project type: production-grade 3D browser game using TypeScript/Node.js/npm.
-- Netcode stack is nengi 2.0; do not mix in nengi 1.x patterns.
-- Rendering uses Three.js; physics uses Rapier.
+- Develop on Windows (not Linux) in PowerShell by default.
+- Use `cmd` chaining only when needed (example: `nvm use ... && npm ...`).
+- Project target: production-grade TypeScript/Node.js 3D browser game.
+- Networking: nengi 2.0 patterns only (no nengi 1.x).
+- Rendering: Three.js. Physics: Rapier.
 
 ## Session Bootstrap
 
-- At the beginning of each new session:
-  - read `AGENTS.md` first
-  - read `docs-map.md` (if it exists)
-  - if `progress.md` exists, read it before plans/code changes
-  - read `overview.md` (if it exists)
-  - read `vision.md` (if it exists)
-  - read the curated docs index files first (`docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` when present)
-  - then read only the specific files in `docs/` needed for the current task; avoid bulk-reading vendored reference trees unless required
+- At session start, read in this order:
+  1. `AGENTS.md`
+  2. `docs-map.md` (if present)
+  3. `progress.md` (if present, before planning/coding)
+  4. `overview.md` (if present)
+  5. `vision.md` (if present)
+  6. Curated indexes: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` (when present)
+- Then load only task-relevant files in `docs/`; avoid bulk-reading vendored trees.
 
 ## Workflow and Tooling
 
-- Git workflow note: commit locally after meaningful, verified changes, but push to GitHub at milestone boundaries (larger feature chunks, explicit handoff points, or when the user asks) to keep iteration speed high.
-- Dependency governance note: before installing, adding, or upgrading any library/package (npm or otherwise), ask the user for explicit approval first; do not proceed on package changes until approved.
-- Network note: internet speed can be slow (~3 mbps). Use longer timeouts, retry failed downloads, and avoid unnecessary reinstall/download work.
-- Testing note: use Playwright for browser automation/testing when relevant (including develop-web-game workflow if available).
-- Runtime note: use Node 20.x (pinned to `20.19.0` via `.nvmrc`).
-- Runtime note: run `nvm use 20.19.0` before development/testing so `nengi-uws-instance-adapter` can use `uWebSockets.js` correctly.
-- Runtime note: on this Windows setup, PATH can desync after `nvm use` across separate/parallel shells; run `nvm use ... && npm ...` in the same `cmd` process.
-- Tooling note: keep Node at `>=20.19.x` because current Vite requires at least Node 20.19.
-- Automation note: prefer `npm run test:smoke` and `npm run test:multiplayer` for validation.
-- Automation note: do not run `test:smoke` and `test:multiplayer` in parallel; they share ports `5173`/`9001`.
-- Iteration note: during active development, prefer faster checks first (`typecheck:client`/`typecheck:server`, `test:smoke:fast`, `verify:quick`) and reserve full multiplayer suites for milestone gates.
+- Commit locally after meaningful verified changes; push at milestones or on request.
+- Ask user approval before any dependency add/install/upgrade.
+- Network can be slow (~3 mbps): prefer retries/longer timeouts and avoid unnecessary downloads.
+- Use Playwright when browser automation/testing is relevant.
+- Runtime is Node `20.19.0`; run `nvm use 20.19.0` before dev/test.
+- On this Windows setup, run `nvm use ... && npm ...` in the same `cmd` process to avoid PATH desync.
+- Keep Node `>=20.19.x` (Vite requirement).
+- Validation defaults: `test:smoke` and `test:multiplayer`; never run them in parallel (ports `5173`/`9001`).
+- During active iteration, prefer fast checks first (`typecheck:*`, `test:smoke:fast`, `verify:quick`) and reserve full multiplayer suites for gates.
 
 ## Architecture Rules
 
-- Follow production-grade authoritative multiplayer best practices:
-  - server-authoritative simulation
-  - client sends intent only
-  - client prediction + reconciliation
-  - deterministic tick/update ordering
-  - strict client/server separation
-  - anti-cheat-friendly trust boundaries
-- Client-side prediction movement/collision must mirror the server authoritative solver and step order as closely as possible; avoid divergent physics models.
-- The game should preserve deterministic module loading with ESM modules and a clear top-down entry hierarchy per runtime (`src/client/main.ts` and `src/server/main.ts`).
+- Maintain authoritative multiplayer fundamentals: server-authoritative simulation, client intent-only input, client prediction + reconciliation, deterministic tick/order, strict client/server separation, anti-cheat boundaries.
+- Keep client prediction movement/collision step order aligned with server as closely as possible.
+- Preserve deterministic ESM loading and clear runtime entry hierarchy (`src/client/main.ts`, `src/server/main.ts`).
+- Keep first-person owner-view presentation changes strictly client-side/non-authoritative.
+- Replicate only gameplay-relevant state/events; do not replicate local-only first-person cosmetics.
 
 ## Decision and Quality Heuristics
 
-- Keep the overarching objective in mind: a full-fledged, high-quality, production-grade 3D first-person multiplayer browser game following best practices.
-- Netcode-priority note: optimize for scalability/high CCU and immersive-sim style consistency rather than esports-competitive shooter requirements; when tradeoffs appear, prefer robustness, predictable world behavior, and throughput over costly competitive lag-compensation features.
-- Combat/netcode intent note: gameplay is first-person immersive-sim flavored (melee + slower energy/magic projectiles, including some homing behavior), so ultra-precise competitive hitscan fidelity is not a primary requirement.
-- Lag-comp scope note: keep full rewind lag-compensation out of near-term scope unless future gameplay evidence shows it is necessary; prioritize scalable authoritative simulation and stability first.
-- Project-management note: operate as the project manager by default; proactively plan, prioritize, and drive execution, while treating user input as high-value collaborator guidance, ideas, and review unless the user explicitly redirects scope or priority.
-- Agency-under-constraints note: hard platform/safety constraints are real, but within those bounds operate with maximum initiative, breadth of reasoning, and ownership; do not use constraints as a reason to be passive.
-- Candor note: do not give performative agreement. If a user idea is weak, inconsistent, or high-risk, say so directly, explain why, and present a better alternative with tradeoffs.
-- Infer likely user intent beyond literal phrasing when ambiguity exists; surface assumptions/risks early.
-- Thinking note: do not execute requests in an overly literal way when broader project goals imply a better path; infer intent and choose the most technically sound option.
-- User-communication note: user requests are often intentionally high-level/vague; infer aggressively from proven industry standards and production-game best practices, and prioritize that inferred intent over literal phrasing unless the user gives explicit constraints.
-- Sanity-check architecture periodically to avoid drift or avoidable technical debt.
-- Prefer existing high-quality solutions (often packages) over rolling custom systems, but validate quality/currentness before adoption.
-- Check for latest package/tool versions before installing/upgrading.
-- Challenge weak assumptions and propose better technical approaches directly.
-- Contradiction note: proactively detect and resolve contradictions across instruction/memory docs; when conflicts appear, choose the interpretation that best serves production quality and consistency, then update files to remove ambiguity.
+- Optimize for a high-quality production 3D first-person multiplayer browser game.
+- Treat this game as desktop-first (mouse/keyboard) and do not optimize for mobile as a target platform unless explicitly requested.
+- Prioritize scalability/high CCU + immersive-sim consistency over esports-grade lag-comp complexity.
+- Combat intent is melee + slower projectiles; full rewind lag compensation stays out of near-term scope unless evidence proves need.
+- Operate as project manager by default: proactively plan/prioritize/execute unless user redirects.
+- Infer user intent beyond literal phrasing, surface assumptions early, and prefer technically sound outcomes.
+- Challenge weak assumptions directly and propose better alternatives with tradeoffs.
+- Periodically sanity-check architecture for drift/debt.
+- Prefer high-quality existing solutions when justified; verify latest versions before package changes.
 
-## UI/UX Standards
+## UI and Feature Standards
 
-- Build UI to production game standards: high quality, deliberate, and maintainable; avoid placeholder-looking or low-effort layouts.
-- UI must ship as game-ready production UI for appearance, usability, and layout quality; do not deliver test-only/dev-only presentation quality as final implementation.
-- Follow proven game UI conventions and patterns seen in top-quality titles, adapted to this project's specific needs instead of copying blindly.
-- Prioritize player UX first: clear information hierarchy, low interaction friction, predictable controls, and fast, obvious feedback to user actions.
-- Design for flow and non-clunky operation: minimize unnecessary clicks/toggles, reduce context switching, and keep high-frequency actions near primary focus areas.
-- Ensure visual quality and cohesion: consistent spacing, typography, color usage, panel sizing, and component behavior across all game UIs.
-- Keep gameplay readability strong: critical combat/state info must remain legible and easy to parse during movement/action.
-- Use clear interaction affordances: buttons, slots, drag targets, hover/active/disabled states, and error/success states must be visually unambiguous.
-- Treat layout as intentional systems design: each UI's purpose, ownership, and boundaries should be explicit (e.g., creator vs inventory/loadout are separate systems unless design intent says otherwise).
-- Preserve responsiveness and device fit: support common desktop resolutions first, with sensible responsive behavior for smaller viewports.
-- Respect performance constraints of browser games: lightweight DOM/CSS/JS, avoid unnecessary reflow-heavy patterns, and keep runtime UI updates efficient.
-- Implement UI with native web stack only for this project (TypeScript/JavaScript + CSS + HTML), no UI frameworks unless explicitly approved by the user.
-- Enforce consistency through reusable primitives and patterns inside the codebase (shared classes/components/utilities), not ad-hoc one-off implementations.
-- Validate UX in runtime, not just by inspection: verify control flow, readability, and interaction behavior with Playwright/smoke checks whenever UI behavior changes materially.
+- Ship production-grade player-facing systems (not prototype quality), with clear UX, readability in action, responsive behavior, and strong interaction affordances/states.
+- Keep UI implementation native web stack (TS/JS/CSS/HTML) unless user explicitly approves frameworks.
+- Reuse shared primitives/tokens and validate material UI/feature changes in runtime (Playwright/smoke), not inspection alone.
+- If temporary scaffolding is necessary, label with `TODO` + rationale + follow-up.
+- Default feature exit criteria: correct behavior, strong UX, authoritative boundaries, and no obvious reliability regressions.
 
 ## UI Style System (Persistent)
 
-- Maintain a single cohesive visual language across all game UI screens/menus/HUDs; new UI work must extend this system, not invent a new one.
-- Current style direction: clean sci-fi tactical UI with cool sky/teal accents over deep navy translucent surfaces (high readability, low visual noise).
-- Use shared design tokens (color, spacing, radius, border, shadow, transition) from one central CSS token set; avoid hardcoded one-off values when tokens exist.
-- Panel chrome standard:
-  - translucent dark surface with subtle gradient
-  - soft cool border + medium blur
-  - consistent corner radii and shadow depth tiers
-- Typography standard:
-  - clear hierarchy (`title` > `section label` > `body` > `meta`)
-  - strong contrast for primary text, muted secondary text
-  - avoid tiny unreadable text for core interactions
-- Control standard (buttons/slots/cards/inputs):
-  - explicit hover/active/selected/disabled states
-  - selected state must be obvious at a glance (accent border + focus ring/shadow)
-  - interactables should have consistent sizing rhythm and hit areas
-- Layout standard:
-  - predictable anchors (HUD top-left, hotbar bottom-center, contextual panels side/bottom zones)
-  - consistent spacing scale and grouping
-  - mobile/smaller viewports should preserve hierarchy and usability, not just shrink everything
-- Status feedback standard:
-  - consistent semantic colors for info/pending/success/error
-  - message components should use the same shape, padding, and border treatment across systems
-- When updating an existing UI, align neighboring/related UI to these standards in the same pass when practical so the project converges instead of fragmenting.
-
-## Feature Quality Standards
-
-- Apply production-quality expectations to all player-facing systems, not just UI: features should feel intentional, robust, and game-ready in behavior and usability.
-- Do not treat test-only/prototype-quality implementations as finished features unless explicitly marked as temporary scaffolding.
-- When temporary scaffolding is necessary, label it clearly in code/docs (`TODO` + rationale) and track a concrete follow-up to reach production quality.
-- Default feature exit criteria should include: correct behavior, good player UX, authoritative multiplayer boundaries, and no obvious reliability regressions.
-- Prefer implementations that match real-game usage patterns and scale goals (high CCU, stable server authority, predictable simulation), not one-off hacks that only pass local tests.
-- Validate major feature changes with runtime checks (automated where possible) plus practical play-feel sanity checks from the player perspective.
-- Keep systems cohesive: new features should integrate cleanly with existing architecture, controls, and presentation standards rather than feeling bolted-on.
+- Maintain one cohesive visual language across HUD/menus/screens.
+- Current direction: clean sci-fi tactical UI with cool sky/teal accents over deep navy translucent surfaces.
+- Use central design tokens for color/spacing/radius/border/shadow/transition.
+- Standardize panel chrome, typography hierarchy, selected/interactive states, layout anchors/rhythm, and semantic status colors.
+- When practical, align nearby legacy UI during changes to reduce style fragmentation.
 
 ## Memory and Documentation Rules
 
-- Memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions.
-- Memory hygiene note: periodically sanity-check agent memory docs (`AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, `progress.md`) to remove stale/contradictory/false guidance and keep behavior coherent over time.
-- Ownership note: treat `AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, and `progress.md` as agent-managed working memory docs; freely restructure/edit them whenever that improves clarity, execution quality, or progress toward the production game goal, even if the user originally authored parts of them.
-- Use `progress.md` for active TODOs, current-session status, and handoff notes only.
-- Maintain `overview.md` as the canonical high-level summary of what the project is and how it works.
-- Maintain `vision.md` as product/game direction (experience goals and style pillars).
-- Maintain `docs-map.md` as the canonical map of Markdown file responsibilities and read order.
+- Memory write rule: when user says "remember" (or equivalent), or when adding memory proactively, persist it in `AGENTS.md`.
+- Memory consistency rule: every memory write/update must include immediate contradiction checks across `AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, and `progress.md`; resolve in the same pass and ask user only if ambiguity is real.
+- Project authorship rule: treat this repository as agent-authored for decision-making; default to full authority to refactor/replace code and structure when it improves production outcomes.
+- Structure policy: preserve current structure only when technically justified or explicitly constrained by user.
+- Ownership rule: treat `AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, and `progress.md` as agent-managed working memory docs and improve/restructure freely when it increases execution quality.
+- Scope boundaries:
+  - `progress.md`: active priorities, recent verifications, blockers, handoff notes.
+  - `overview.md`: canonical high-level architecture/workflows.
+  - `vision.md`: product direction and experience/style pillars.
+  - `docs-map.md`: markdown responsibilities and read order.

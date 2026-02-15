@@ -50,3 +50,14 @@ export interface ProjectileState {
   z: number;
   serverTick: number;
 }
+
+export interface TrainingDummyState {
+  nid: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  serverTick: number;
+  health: number;
+  maxHealth: number;
+}
