@@ -77,6 +77,16 @@
 - Enforce consistency through reusable primitives and patterns inside the codebase (shared classes/components/utilities), not ad-hoc one-off implementations.
 - Validate UX in runtime, not just by inspection: verify control flow, readability, and interaction behavior with Playwright/smoke checks whenever UI behavior changes materially.
 
+## Feature Quality Standards
+
+- Apply production-quality expectations to all player-facing systems, not just UI: features should feel intentional, robust, and game-ready in behavior and usability.
+- Do not treat test-only/prototype-quality implementations as finished features unless explicitly marked as temporary scaffolding.
+- When temporary scaffolding is necessary, label it clearly in code/docs (`TODO` + rationale) and track a concrete follow-up to reach production quality.
+- Default feature exit criteria should include: correct behavior, good player UX, authoritative multiplayer boundaries, and no obvious reliability regressions.
+- Prefer implementations that match real-game usage patterns and scale goals (high CCU, stable server authority, predictable simulation), not one-off hacks that only pass local tests.
+- Validate major feature changes with runtime checks (automated where possible) plus practical play-feel sanity checks from the player perspective.
+- Keep systems cohesive: new features should integrate cleanly with existing architecture, controls, and presentation standards rather than feeling bolted-on.
+
 ## Memory and Documentation Rules
 
 - Memory note: when the user says "remember" or "remember that", treat it as an instruction to persist that item in `AGENTS.md` for future sessions.
