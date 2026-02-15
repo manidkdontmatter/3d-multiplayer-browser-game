@@ -9,7 +9,8 @@ This file defines the role of each top-level Markdown file so context stays clea
 3. `progress.md` (active status/TODO/handoff)
 4. `overview.md` (canonical system/architecture summary)
 5. `vision.md` (product/game direction)
-6. `docs/` (local technical reference docs; recurse per AGENTS rules)
+6. `docs/*-index.md` (curated technical entry points)
+7. Task-targeted files in `docs/` only as needed (avoid bulk-loading vendored docs trees by default)
 
 ## File Responsibilities
 

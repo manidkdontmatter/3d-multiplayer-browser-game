@@ -1,132 +1,48 @@
 Original prompt: we will add animations next. where do you think i can source some? you can't generate animations can you?
 
-## Current Status
+## Current Snapshot (2026-02-15)
 
-- Core stack is running: authoritative nengi server + three.js client + Rapier physics.
-- AOI is active via `ChannelAABB3D` and per-user `AABB3D` views.
-- Client/server movement uses shared FPS movement helpers.
-- Deterministic moving/rotating platforms are implemented and replicated.
-- CSP is platform-aware: on-platform local rendering uses server local pose; off-platform CSP prediction/replay resumes.
-- Input netcode now sends `yawDelta` (not absolute yaw) so platform yaw carry and look input compose correctly.
-- Remote player capsules now include a visor cube to indicate facing direction.
-- Fast iteration check is available: `npm run test:smoke:fast` (expects server/client already running).
-- Client netcode inbound processing is now FIFO, and input-ack trimming is wrap-safe for UInt16 sequence rollover.
-- Server tick interval metrics sampling is now bounded (ring buffer) to avoid unbounded long-run memory growth.
-- Server per-second tick summary logging can now be disabled with `SERVER_TICK_LOG=0` (test scripts set this by default).
-- Smoke/multiplayer e2e artifact policy is now speed-oriented by default: write artifacts on failure, optional on pass via `E2E_ARTIFACTS_ON_PASS=1`.
-- Join spawn is now occupancy-based, so newly connecting players do not spawn inside existing player capsules.
-- Multiplayer test now enforces spawn non-overlap directly using the player capsule diameter threshold (old "move player B away from overlap" workaround removed).
-- Client CSP prediction now uses Rapier KCC (kinematic collider + `computeColliderMovement`) to mirror server collision path and reduce reconciliation jitter against static geometry.
-- Server moving-platform carry regression fixed after KCC refactor: platform attachment no longer drops during upward motion, and rotating-platform yaw carry remains stable.
-- Fixed post-platform `WASD` direction drift by synchronizing input look angles with authoritative yaw while platform-carried and resetting `NetworkClient` yaw-delta baseline (`lastSentYaw`) when look is externally realigned.
-- Refined platform yaw handling: switched from per-ack absolute look snapping to additive authoritative platform yaw deltas + thresholded exit reconcile to reduce camera/input discontinuities.
-- Removed the client platform-CSP bypass: CSP now runs on-platform too, with LocalPhysicsWorld applying platform carry and grounded-platform attachment logic mirroring server behavior.
-- CSP reconciliation now preserves camera/input alignment by shifting queued replay input yaw when external yaw corrections are applied (platform carry + dismount reconcile).
-- CSP reconciliation smoothing is now position-only (no render yaw/pitch offsets), while still tracking yaw/pitch error metrics and hard-snap thresholds.
-- Fixed on-platform CSP look/movement drift: server input-ack now sends explicit `platformYawDelta`, and client applies only that carry delta (instead of inferring carry from total ack yaw change that also includes mouse-look).
-- Added client-side predicted platform yaw carry on CSP frames with residual ack correction (`ack.platformYawDelta - predictedCarrySinceAck`) to reduce visible on-platform rotational jitter.
-- Server authority hardening: `GameSimulation.applyCommands` now ignores client-provided `delta` for movement integration, merges only fresh command sequences, and integrates velocity updates using `SERVER_TICK_SECONDS`.
-- Client reconciliation hardening: `NetworkClient` now accepts only strictly newer ack sequences (wrap-safe), dropping stale/out-of-order acks that could rewind CSP state.
-- Runtime policy update: when CSP is user-enabled, it is now auto-suppressed while server-authoritatively platform-grounded (`csp=auto-off` in HUD), then automatically resumes after dismount.
-- Adaptive interpolation delay is now runtime-tuned from observed ack inter-arrival jitter + latency (replacing the fixed 100ms interpolation delay).
-- Snapshot tick stamping added to replicated `PlayerEntity` and `PlatformEntity` (`serverTick`) to improve frame-age visibility and interpolation diagnostics.
-- Added opt-in ack chaos simulation in client netcode (`?netsim=1&ackDrop=...&ackDelayMs=...&ackJitterMs=...`) for out-of-order/drop resilience testing.
-- Added `npm run test:multiplayer:chaos` for CSP multiplayer validation under simulated ack drop/reorder conditions.
-- Added reconciliation observability in client status + `render_game_to_text` payload (last correction error, smoothing offset magnitude, replay depth, hard-snap counts).
-- Primary action netcode now uses edge-triggered command events (`usePrimaryPressed`) instead of held-state merging, preventing quick click drops when multiple input commands are batched server-side.
-- Multiplayer automation now explicitly validates remote upper-body action replication by waiting for `upperBodyActionNonce` to advance after a primary click.
-- Animation masking hardening: upper-body mask selection now supports broader rig naming patterns and logs/falls back to unmasked clip playback if no tracks are matched.
-- Added project-scoped Codex config at `.codex/config.toml` with workspace-write sandbox defaults, live web search, official OpenAI docs MCP server wiring, and opt-in `full_auto` / `safe_audit` profiles.
-- Updated project-scoped Codex config defaults for higher throughput: `approval_policy = "never"` with `sandbox_mode = "workspace-write"`, plus a `profiles.yolo` alias for explicit danger-full-access runs.
-- Expanded `test:multiplayer` assertions: sprint movement, jump height gain, and disconnect/reconnect remote reappearance are now validated and recorded in `output/multiplayer/state.json`.
-- Added `test:multiplayer:csp` command and validated the multiplayer suite under `E2E_CSP=1`.
-- Multiplayer automation now includes a post-connect warmup window and bounded retry windows for remote movement/jump checks to reduce startup/throttling false negatives.
-- Tooling note captured: on Windows `nvm use` PATH updates are shell-scoped; run `nvm use ... && npm ...` in one `cmd` invocation for reliable automation commands.
-- Latest verification (2026-02-13): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer`, `npm run test:multiplayer:csp`, and `npm run test:multiplayer:chaos` all pass after adaptive interpolation + snapshot tick stamping + chaos-net simulation updates.
-- Client boot now has a staged loading overlay with progress bar (`#boot-overlay`) that tracks manifest preload and startup phases (physics -> network -> ready).
-- Asset pipeline now uses Three.js loaders (`GLTFLoader`, `TextureLoader`, `AudioLoader`, `FileLoader`) through `src/client/assets/assetLoader.ts`, with a runtime cache for preloaded assets.
-- Latest verification (2026-02-13, asset-loading pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after boot overlay + asset preloader integration.
-- Incoming root-level `3d-models/` pack was reorganized into `public/assets/models/characters/male/` so runtime URLs are stable and root stays clean.
-- Added a runtime asset structure note at `public/assets/README.md`.
-- `ASSET_MANIFEST` now registers the active male rig for preload/use.
-- Character texture budget was reduced to max `720x720` for browser suitability.
-- Safe color/albedo textures were converted from PNG to JPG; normal/roughness maps remained PNG to preserve data fidelity.
-- Remote players now render with the preloaded male GLTF rig (static T-pose for now) and fall back to capsule meshes if model load/template setup fails.
-- Applied a fixed `Math.PI` model yaw offset in renderer template setup so character facing aligns with gameplay yaw (model no longer appears backward).
-- Added a runtime layered animation controller for humanoid remote players (`CharacterAnimationController`) with:
-  - locomotion blending (`idle` <-> `walk` <-> `run`) driven by measured movement speed
-  - airborne jump pose gating driven by replicated grounded state
-  - masked upper-body overlay action channel (`upperCast`) independent of lower-body locomotion
-- Wired upper-body action intent through netcode:
-  - client input now sends `usePrimary` (LMB hold state)
-  - server detects rising-edge primary intent and increments replicated `upperBodyActionNonce`
-  - clients trigger upper-body one-shot overlay from `upperBodyAction` + `upperBodyActionNonce`
-- Root motion policy is now explicit in the animation system:
-  - default is OFF (physics/netcode authoritative movement remains source of truth)
-  - per-clip root-motion opt-in is supported via clip policy map (currently empty)
-- Fixed Three.js animation binding errors by using direct bone-name quaternion tracks (instead of `.bones[...]` binding paths at group root).
-- Cleaned model package references by updating glTF URIs to canonical texture names and removing unneeded filename-alias duplicates.
-- Validation loop optimized for faster iteration:
-  - Typecheck now uses incremental TS build info caching (`tsconfig.client.tsbuildinfo`, `tsconfig.server.tsbuildinfo`).
-  - `smoke-e2e` and `multiplayer-e2e` now wait on actual port readiness instead of fixed startup sleeps.
-  - `smoke-fast` now waits for connected state instead of fixed client-side timeout.
-  - Added `verify:quick`, `verify:quick:standalone`, and `test:multiplayer:quick` scripts.
-  - Multiplayer script now supports skipping sprint/jump/reconnect checks for quick passes via env flags.
-- Latest verification (2026-02-14, test-optimization pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, `npm run test:multiplayer`, and `npm run verify:quick:standalone` all pass.
-- Latest verification (2026-02-14, character-asset integration pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer:quick` pass after folder reorg + male GLTF remote rendering integration.
-- Latest verification (2026-02-14, animation layering pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, and `npm run test:multiplayer` pass after layered animation integration.
-- Asset naming was normalized from `superhero` to `male` across runtime paths, asset IDs, labels, and docs.
-- Model files now live at `public/assets/models/characters/male/Male_FullBody.gltf` (+ `Male_FullBody.bin`) with renamed male texture filenames.
-- Added Mixamo clip intake path `public/assets/animations/mixamo/` and preloaded FBX assets (`Idle`, `Walking`, `Running`, `Jump`, `Punching`) via `ASSET_MANIFEST`.
-- `assetLoader` now supports `fbx` kind using Three.js `FBXLoader`.
-- `WorldRenderer` now retargets Mixamo clips onto the male rig at runtime and injects them into `CharacterAnimationController` clip overrides.
-- Imported `Idle.fbx` is now retargeted and used as the runtime idle clip; procedural idle remains only as fallback if imported clips are missing.
-- Latest verification (2026-02-14, mixamo-retarget + rename pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass.
-- Latest verification (2026-02-14, imported-idle integration pass): `npm run typecheck` and `npm run test:multiplayer:quick` pass; pass artifacts show remote players in non-T-pose idle.
-- Latest verification (2026-02-14, animation-netcode reliability pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` pass after switching to `usePrimaryPressed` and adding remote nonce assertions.
-- Added shared ability definitions (`src/shared/abilities.ts`) with category/points/attribute metadata and default hotbar/unlocked sets, aligned with the future ability-creator pipeline.
-- Added first-pass ability HUD (`src/client/ui/AbilityHud.ts`) with:
-  - bottom hotbar UI (slots 1-5)
-  - `B`-toggle loadout panel and `N`-toggle creator panel
-  - drag-and-drop and click-to-assign ability cards
-  - right-click clear slot behavior
-- Client netcode now sends `selectedAbilityId` with `InputCommand` and clamps command payload values before serialization.
-- Server command intake now explicitly filters by `NType.InputCommand`, sanitizes selected ability IDs against server-unlocked abilities, and keeps slot selection + cast execution authoritative.
-- Added server-authoritative projectile lifecycle scaffolding in `GameSimulation` with health damage/respawn, world collision checks, and deterministic TTL/range cleanup.
-- Fixed projectile max-range bookkeeping bug: range is now measured by traveled distance from spawn (`remainingRange`) instead of distance from world origin.
-- `render_game_to_text` now exposes local hotbar/selected ability state for deterministic automation assertions.
-- Latest verification (2026-02-14, ability-hud + projectile-authority pass): `npm run typecheck`, `npm run test:smoke`, `npm run test:multiplayer:quick`, and `npm run test:multiplayer` all pass.
-- Ability creator is now server-authoritative end-to-end:
-  - client sends `AbilityCreateCommand` drafts (name/category/points/attributes/target slot)
-  - server validates and builds runtime abilities via shared draft-validation logic
-  - server returns authoritative `AbilityDefinitionMessage`, `LoadoutStateMessage`, and `AbilityCreateResultMessage`
-  - client HUD consumes those messages and updates creator status + available ability cards.
-- Netcode schema now includes creator/loadout message types (`AbilityCreateCommand`, `AbilityDefinitionMessage`, `LoadoutStateMessage`, `AbilityCreateResultMessage`).
-- Added runtime ability registry on server (`runtimeAbilitiesById`) with per-owner cleanup on disconnect and secure per-player unlock checks before cast.
-- Latest verification (2026-02-14, creator-authority pass): `npm run typecheck`, `npm run test:smoke`, and `npm run test:multiplayer` all pass after ability-creator command/message integration.
-- Targeted creator verification (2026-02-14): headless Playwright flow opened creator UI, submitted a custom draft (`Nova Bolt`), and confirmed `render_game_to_text.localAbility.catalog` grew (`2`) with creator status `Created ability #1024`.
-- `scripts/smoke-e2e.js` now includes a creator regression check: opens creator UI, submits a draft (`Smoke Bolt`), and waits for authoritative creator success state before passing.
-- Ability UI architecture split into separate systems (2026-02-14):
-  - loadout/inventory panel (`B`) is independent from creator panel (`N`)
-  - shared one-menu flow removed; each panel has its own visibility state and controls
-  - `render_game_to_text.localAbility.ui` now reports `loadoutPanelOpen` + `creatorPanelOpen`
-  - smoke automation now sanity-checks panel separation before creator submit.
-- Latest verification (2026-02-14, ability-ui split pass): `npm run typecheck:client`, `npm run test:smoke`, and `npm run test:multiplayer:quick` pass after separating creator vs loadout UIs.
+- Stack is stable: authoritative nengi 2.0 server, Three.js client, Rapier physics, Playwright automation.
+- Core movement/netcode path is implemented with server authority, client prediction/reconciliation, AOI, and platform carry handling.
+- Runtime ability pipeline exists end-to-end and is server-authoritative:
+  - hotbar selection/casting intent from client
+  - server validation/execution
+  - runtime ability creation via creator commands/messages
+- Remote humanoid model + base animation layering are integrated (locomotion/jump + upper-body action overlay).
+- Ability UI is now split into distinct systems:
+  - loadout/inventory panel on `B`
+  - creator panel on `N`
 
-## Session Close Notes (2026-02-13)
+## Latest Verified
 
-- Runtime default changed: CSP is now OFF by default. Players can still toggle CSP ON/OFF in runtime with `C`.
-- Reason: platform behavior is currently too jittery with CSP enabled in real play despite recent parity work.
-- Follow-up TODO: revisit CSP on-platform jitter with deeper instrumentation and stabilization pass; keep current authoritative server path unchanged.
+- 2026-02-15: `npm run typecheck:client` passed.
+- 2026-02-15: `npm run test:smoke` passed after ability-panel CSS + input-toggle fixes.
+- 2026-02-14: `npm run test:multiplayer:quick` passed.
 
-## Active TODO
+## Active Priorities
 
-- Tune reconciliation smoothing/hard-snap thresholds using targeted `?csp=1` multiplayer validation and capture jitter metrics over longer movement/platform runs.
-- Persist runtime-created abilities/loadout across reconnect (file/db boundary) instead of current in-memory session scope.
-- Extend creator output beyond projectile templates (melee/passive runtime behavior paths and corresponding server-authoritative execution).
-- Add creator automation coverage in Playwright (create ability, verify replicated catalog/loadout state, confirm cast behavior).
-- Expand automated tests further with combat-state assertions and longer-duration stability checks.
-- Investigate Rapier startup warning (`using deprecated parameters for the initialization function`) and identify exact call site in dependency/runtime path.
-- Expand humanoid animation set beyond base locomotion/jump/upper-body action (strafe, backpedal, turn-in-place, land, hit-react) while preserving existing layer/mask architecture.
-- Add animation import pipeline docs (Mixamo FBX Binary -> Blender retarget -> GLB clip pack) and automate conversion/validation checks.
-- Evaluate GLTF optimization pass (meshopt/texture compression and possible `.glb` packing) before adding more character/prop assets.
+1. Ability system productization
+- Persist runtime-created abilities/loadouts across reconnect/server restart.
+- Extend creator/runtime execution beyond projectile templates (melee/passive/utility paths).
+- Add deeper creator e2e assertions (catalog/loadout replication + cast behavior).
+
+2. Animation system expansion
+- Add strafe/backpedal/turn-in-place/land/hit-react clips while preserving current layered architecture.
+- Keep root motion OFF by default; allow per-clip opt-in only when explicitly needed.
+
+3. Netcode stability and observability
+- Investigate and reduce CSP/platform jitter further without regressing authoritative separation.
+- Tune reconciliation thresholds with targeted long-run multiplayer checks.
+
+4. Production-quality UX pass
+- Continue replacing prototype-feel interfaces with game-ready UI quality (layout, readability, interaction polish).
+
+## Known Issues
+
+- Rapier startup warning still appears in server runs: `using deprecated parameters for the initialization function; pass a single object instead`.
+
+## Handoff Notes
+
+- On Windows, run Node/npm commands in one `cmd` chain: `nvm use 20.19.0 && npm ...`.
+- Ask user before adding/upgrading dependencies.
+- Commit after meaningful verified changes; push at milestone boundaries or when asked.

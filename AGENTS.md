@@ -15,7 +15,8 @@
   - if `progress.md` exists, read it before plans/code changes
   - read `overview.md` (if it exists)
   - read `vision.md` (if it exists)
-  - read every file in `docs/` recursively for local nengi/threejs/rapier reference context
+  - read the curated docs index files first (`docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` when present)
+  - then read only the specific files in `docs/` needed for the current task; avoid bulk-reading vendored reference trees unless required
 
 ## Workflow and Tooling
 
