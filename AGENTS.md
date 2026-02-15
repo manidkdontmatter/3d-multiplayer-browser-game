@@ -55,6 +55,7 @@
 - Candor note: do not give performative agreement. If a user idea is weak, inconsistent, or high-risk, say so directly, explain why, and present a better alternative with tradeoffs.
 - Infer likely user intent beyond literal phrasing when ambiguity exists; surface assumptions/risks early.
 - Thinking note: do not execute requests in an overly literal way when broader project goals imply a better path; infer intent and choose the most technically sound option.
+- User-communication note: user requests are often intentionally high-level/vague; infer aggressively from proven industry standards and production-game best practices, and prioritize that inferred intent over literal phrasing unless the user gives explicit constraints.
 - Sanity-check architecture periodically to avoid drift or avoidable technical debt.
 - Prefer existing high-quality solutions (often packages) over rolling custom systems, but validate quality/currentness before adoption.
 - Check for latest package/tool versions before installing/upgrading.
