@@ -79,6 +79,32 @@
 - Enforce consistency through reusable primitives and patterns inside the codebase (shared classes/components/utilities), not ad-hoc one-off implementations.
 - Validate UX in runtime, not just by inspection: verify control flow, readability, and interaction behavior with Playwright/smoke checks whenever UI behavior changes materially.
 
+## UI Style System (Persistent)
+
+- Maintain a single cohesive visual language across all game UI screens/menus/HUDs; new UI work must extend this system, not invent a new one.
+- Current style direction: clean sci-fi tactical UI with cool sky/teal accents over deep navy translucent surfaces (high readability, low visual noise).
+- Use shared design tokens (color, spacing, radius, border, shadow, transition) from one central CSS token set; avoid hardcoded one-off values when tokens exist.
+- Panel chrome standard:
+  - translucent dark surface with subtle gradient
+  - soft cool border + medium blur
+  - consistent corner radii and shadow depth tiers
+- Typography standard:
+  - clear hierarchy (`title` > `section label` > `body` > `meta`)
+  - strong contrast for primary text, muted secondary text
+  - avoid tiny unreadable text for core interactions
+- Control standard (buttons/slots/cards/inputs):
+  - explicit hover/active/selected/disabled states
+  - selected state must be obvious at a glance (accent border + focus ring/shadow)
+  - interactables should have consistent sizing rhythm and hit areas
+- Layout standard:
+  - predictable anchors (HUD top-left, hotbar bottom-center, contextual panels side/bottom zones)
+  - consistent spacing scale and grouping
+  - mobile/smaller viewports should preserve hierarchy and usability, not just shrink everything
+- Status feedback standard:
+  - consistent semantic colors for info/pending/success/error
+  - message components should use the same shape, padding, and border treatment across systems
+- When updating an existing UI, align neighboring/related UI to these standards in the same pass when practical so the project converges instead of fragmenting.
+
 ## Feature Quality Standards
 
 - Apply production-quality expectations to all player-facing systems, not just UI: features should feel intentional, robust, and game-ready in behavior and usability.

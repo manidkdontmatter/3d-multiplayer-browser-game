@@ -12,6 +12,7 @@ Original prompt: we will add animations next. where do you think i can source so
 - Ability UI is now split into distinct systems:
   - loadout/inventory panel on `B`
   - creator panel on `N`
+- UI visual language is now centralized by token-driven style rules and applied across boot overlay, HUD, hotbar, and ability panels for consistency.
 
 ## Latest Verified
 
@@ -19,6 +20,7 @@ Original prompt: we will add animations next. where do you think i can source so
 - 2026-02-15: `npm run test:smoke` passed after ability-panel CSS + input-toggle fixes.
 - 2026-02-14: `npm run test:multiplayer:quick` passed.
 - 2026-02-15: `npm run test:smoke` and `npm run test:multiplayer:quick` passed after production-style ability UI redesign (separate loadout/creator systems retained).
+- 2026-02-15: `npm run test:smoke` passed after shared UI style-system normalization pass.
 
 ## Active Priorities
 
