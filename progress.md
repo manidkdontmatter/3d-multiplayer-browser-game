@@ -18,6 +18,7 @@ Original prompt: we will add animations next. where do you think i can source so
 - 2026-02-15: `npm run typecheck:client` passed.
 - 2026-02-15: `npm run test:smoke` passed after ability-panel CSS + input-toggle fixes.
 - 2026-02-14: `npm run test:multiplayer:quick` passed.
+- 2026-02-15: `npm run test:smoke` and `npm run test:multiplayer:quick` passed after production-style ability UI redesign (separate loadout/creator systems retained).
 
 ## Active Priorities
 

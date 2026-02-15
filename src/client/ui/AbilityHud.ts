@@ -42,9 +42,13 @@ type SlotElements = {
 
 type CreatorStatKey = keyof AbilityStatPoints;
 
+type CreatorStatUi = {
+  valueLabel: HTMLSpanElement;
+  fill: HTMLDivElement;
+};
+
 const ABILITY_DRAG_MIME = "application/x-vibe-ability-id";
 const CREATOR_DEFAULT_NAME = "Custom Bolt";
-
 const CREATOR_CATEGORY: AbilityCategory = "projectile";
 
 const CREATOR_STAT_LABELS: Readonly<Record<CreatorStatKey, string>> = Object.freeze({
@@ -59,9 +63,15 @@ export class AbilityHud {
   private readonly loadoutPanel: HTMLDivElement;
   private readonly creatorPanel: HTMLDivElement;
   private readonly cardGrid: HTMLDivElement;
+  private readonly loadoutSlotLabel: HTMLSpanElement;
+  private readonly loadoutAbilityLabel: HTMLParagraphElement;
+  private readonly loadoutAbilityDetail: HTMLParagraphElement;
   private readonly creatorStatus: HTMLParagraphElement;
   private readonly creatorBudgetLabel: HTMLSpanElement;
+  private readonly creatorBudgetFill: HTMLDivElement;
+  private readonly creatorTargetSlotLabel: HTMLSpanElement;
   private readonly creatorNameInput: HTMLInputElement;
+  private readonly creatorStatUi = new Map<CreatorStatKey, CreatorStatUi>();
   private readonly abilityCards = new Map<number, HTMLButtonElement>();
   private readonly slotElements: SlotElements[] = [];
   private readonly assignments = new Array<number>(HOTBAR_SLOT_COUNT).fill(ABILITY_ID_NONE);
@@ -133,17 +143,58 @@ export class AbilityHud {
 
     this.loadoutPanel = documentRef.createElement("div");
     this.loadoutPanel.id = "ability-loadout-panel";
-    this.loadoutPanel.className = "ability-panel ability-panel-hidden";
+    this.loadoutPanel.className = "ability-system-panel ability-panel-hidden";
 
-    const loadoutHeader = documentRef.createElement("p");
-    loadoutHeader.className = "ability-panel-title";
-    loadoutHeader.textContent = "Ability Inventory + Loadout";
-    this.loadoutPanel.append(loadoutHeader);
+    this.loadoutPanel.append(
+      this.createPanelHeader(
+        documentRef,
+        "Loadout",
+        "Equip abilities to active hotbar slots.",
+        "B"
+      )
+    );
 
-    const loadoutHint = documentRef.createElement("p");
-    loadoutHint.className = "ability-panel-hint";
-    loadoutHint.textContent = "Press B to close. Drag cards to hotbar slots or click to equip.";
-    this.loadoutPanel.append(loadoutHint);
+    const loadoutSummary = documentRef.createElement("div");
+    loadoutSummary.className = "ability-loadout-summary";
+
+    const loadoutSummaryLabel = documentRef.createElement("p");
+    loadoutSummaryLabel.className = "ability-section-label";
+    loadoutSummaryLabel.textContent = "Selected Slot";
+
+    const loadoutSummaryTop = documentRef.createElement("div");
+    loadoutSummaryTop.className = "ability-loadout-summary-top";
+
+    this.loadoutSlotLabel = documentRef.createElement("span");
+    this.loadoutSlotLabel.className = "ability-slot-pill";
+
+    const clearSlotButton = documentRef.createElement("button");
+    clearSlotButton.type = "button";
+    clearSlotButton.className = "ability-button-secondary";
+    clearSlotButton.textContent = "Clear Slot";
+    clearSlotButton.addEventListener("click", () => {
+      this.assignAbilityToSlot(this.selectedSlot, ABILITY_ID_NONE, true);
+    });
+
+    loadoutSummaryTop.append(this.loadoutSlotLabel, clearSlotButton);
+
+    this.loadoutAbilityLabel = documentRef.createElement("p");
+    this.loadoutAbilityLabel.className = "ability-loadout-current-name";
+
+    this.loadoutAbilityDetail = documentRef.createElement("p");
+    this.loadoutAbilityDetail.className = "ability-loadout-current-detail";
+
+    loadoutSummary.append(
+      loadoutSummaryLabel,
+      loadoutSummaryTop,
+      this.loadoutAbilityLabel,
+      this.loadoutAbilityDetail
+    );
+    this.loadoutPanel.append(loadoutSummary);
+
+    const inventoryLabel = documentRef.createElement("p");
+    inventoryLabel.className = "ability-section-label";
+    inventoryLabel.textContent = "Unlocked Abilities";
+    this.loadoutPanel.append(inventoryLabel);
 
     this.cardGrid = documentRef.createElement("div");
     this.cardGrid.className = "ability-card-grid";
@@ -151,40 +202,61 @@ export class AbilityHud {
 
     this.creatorPanel = documentRef.createElement("div");
     this.creatorPanel.id = "ability-creator-panel";
-    this.creatorPanel.className = "ability-panel ability-panel-hidden";
+    this.creatorPanel.className = "ability-system-panel ability-panel-hidden";
 
-    const creatorHeader = documentRef.createElement("p");
-    creatorHeader.className = "ability-panel-title";
-    creatorHeader.textContent = "Ability Creator";
-    this.creatorPanel.append(creatorHeader);
+    this.creatorPanel.append(
+      this.createPanelHeader(
+        documentRef,
+        "Ability Creator",
+        "Create and auto-equip a new ability to the selected slot.",
+        "N"
+      )
+    );
 
-    const creatorHint = documentRef.createElement("p");
-    creatorHint.className = "ability-panel-hint";
-    creatorHint.textContent =
-      "Press N to close. Creator currently outputs projectile abilities.";
-    this.creatorPanel.append(creatorHint);
+    const creatorContext = documentRef.createElement("div");
+    creatorContext.className = "ability-creator-context";
 
-    const creatorBody = documentRef.createElement("section");
-    creatorBody.className = "ability-creator-panel";
+    this.creatorTargetSlotLabel = documentRef.createElement("span");
+    this.creatorTargetSlotLabel.className = "ability-target-slot";
 
-    const creatorTitle = documentRef.createElement("p");
-    creatorTitle.className = "ability-creator-title";
-    creatorTitle.textContent = "Create Ability";
-    creatorBody.append(creatorTitle);
+    this.creatorBudgetLabel = documentRef.createElement("span");
+    this.creatorBudgetLabel.className = "ability-budget-label";
 
-    const creatorRow = documentRef.createElement("div");
-    creatorRow.className = "ability-creator-row";
+    const creatorBudgetTrack = documentRef.createElement("div");
+    creatorBudgetTrack.className = "ability-budget-track";
+    this.creatorBudgetFill = documentRef.createElement("div");
+    this.creatorBudgetFill.className = "ability-budget-fill";
+    creatorBudgetTrack.append(this.creatorBudgetFill);
+
+    creatorContext.append(this.creatorTargetSlotLabel, this.creatorBudgetLabel, creatorBudgetTrack);
+    this.creatorPanel.append(creatorContext);
+
+    const creatorForm = documentRef.createElement("div");
+    creatorForm.className = "ability-creator-form";
+
+    const nameRow = documentRef.createElement("div");
+    nameRow.className = "ability-form-row";
     const nameLabel = documentRef.createElement("label");
-    nameLabel.className = "ability-creator-label";
-    nameLabel.textContent = "Name";
+    nameLabel.className = "ability-form-label";
+    nameLabel.textContent = "Ability Name";
     this.creatorNameInput = documentRef.createElement("input");
     this.creatorNameInput.type = "text";
     this.creatorNameInput.className = "ability-creator-input";
     this.creatorNameInput.maxLength = 24;
     this.creatorNameInput.value = CREATOR_DEFAULT_NAME;
     nameLabel.append(this.creatorNameInput);
-    creatorRow.append(nameLabel);
-    creatorBody.append(creatorRow);
+    nameRow.append(nameLabel);
+
+    const categoryRow = documentRef.createElement("div");
+    categoryRow.className = "ability-form-row";
+    const categoryLabel = documentRef.createElement("label");
+    categoryLabel.className = "ability-form-label";
+    categoryLabel.textContent = "Category";
+    const categoryValue = documentRef.createElement("div");
+    categoryValue.className = "ability-readonly-field";
+    categoryValue.textContent = "Projectile (current runtime support)";
+    categoryLabel.append(categoryValue);
+    categoryRow.append(categoryLabel);
 
     const statGrid = documentRef.createElement("div");
     statGrid.className = "ability-creator-stat-grid";
@@ -192,53 +264,62 @@ export class AbilityHud {
     for (const statKey of statKeys) {
       statGrid.append(this.createStatControl(documentRef, statKey));
     }
-    creatorBody.append(statGrid);
 
     const attributeSection = documentRef.createElement("div");
     attributeSection.className = "ability-creator-attributes";
-    const attributeTitle = documentRef.createElement("p");
-    attributeTitle.className = "ability-creator-subtitle";
-    attributeTitle.textContent = `Attributes (max ${ABILITY_CREATOR_MAX_ATTRIBUTES})`;
-    attributeSection.append(attributeTitle);
+
+    const attributeLabel = documentRef.createElement("p");
+    attributeLabel.className = "ability-section-label";
+    attributeLabel.textContent = `Attributes (pick up to ${ABILITY_CREATOR_MAX_ATTRIBUTES})`;
+    attributeSection.append(attributeLabel);
+
+    const attributeGrid = documentRef.createElement("div");
+    attributeGrid.className = "ability-attribute-grid";
 
     for (const attribute of getAbilityAttributeDefinitions()) {
       const wrapper = documentRef.createElement("label");
-      wrapper.className = "ability-creator-attribute-option";
+      wrapper.className = "ability-attribute-option";
+
       const checkbox = documentRef.createElement("input");
       checkbox.type = "checkbox";
       checkbox.value = attribute.key;
       checkbox.addEventListener("change", () => {
         this.enforceAttributeSelectionLimit(attribute.key);
       });
+
+      const name = documentRef.createElement("span");
+      name.className = "ability-attribute-name";
+      name.textContent = attribute.name;
+
+      const description = documentRef.createElement("span");
+      description.className = "ability-attribute-description";
+      description.textContent = attribute.description;
+
+      wrapper.append(checkbox, name, description);
+      attributeGrid.append(wrapper);
       this.creatorAttributeToggles.set(attribute.key, checkbox);
-      const text = documentRef.createElement("span");
-      text.textContent = `${attribute.name} - ${attribute.description}`;
-      wrapper.append(checkbox, text);
-      attributeSection.append(wrapper);
     }
-    creatorBody.append(attributeSection);
+
+    attributeSection.append(attributeGrid);
 
     const creatorFooter = documentRef.createElement("div");
     creatorFooter.className = "ability-creator-footer";
-    this.creatorBudgetLabel = documentRef.createElement("span");
-    this.creatorBudgetLabel.className = "ability-creator-budget";
-    creatorFooter.append(this.creatorBudgetLabel);
 
     const createButton = documentRef.createElement("button");
     createButton.type = "button";
     createButton.className = "ability-creator-submit";
-    createButton.textContent = "Create + Equip";
+    createButton.textContent = "Create Ability";
     createButton.addEventListener("click", () => {
       this.submitCreatorDraft();
     });
-    creatorFooter.append(createButton);
-    creatorBody.append(creatorFooter);
 
     this.creatorStatus = documentRef.createElement("p");
     this.creatorStatus.className = "ability-creator-status";
-    creatorBody.append(this.creatorStatus);
 
-    this.creatorPanel.append(creatorBody);
+    creatorFooter.append(createButton, this.creatorStatus);
+
+    creatorForm.append(nameRow, categoryRow, statGrid, attributeSection, creatorFooter);
+    this.creatorPanel.append(creatorForm);
 
     this.root.append(this.loadoutPanel, this.creatorPanel);
     documentRef.body.append(this.root);
@@ -247,7 +328,7 @@ export class AbilityHud {
       id: ABILITY_ID_NONE,
       key: "empty",
       name: "Empty",
-      description: "Clear slot",
+      description: "No ability assigned to this slot.",
       category: "passive",
       points: {
         power: 0,
@@ -266,6 +347,7 @@ export class AbilityHud {
     this.setHotbarAssignments(this.options.initialHotbarAssignments);
     this.setSelectedSlot(this.options.initialSelectedSlot ?? 0, false);
     this.updateCreatorBudgetLabel();
+    this.updateAttributeSelectionState();
     this.setCreatorStatus("Ready.");
   }
 
@@ -279,9 +361,11 @@ export class AbilityHud {
   }
 
   public setLoadoutPanelOpen(open: boolean): void {
+    if (open) {
+      this.setCreatorPanelOpen(false, true);
+    }
     this.loadoutPanelOpen = open;
-    this.loadoutPanel.classList.toggle("ability-panel-hidden", !open);
-    this.loadoutPanel.classList.toggle("ability-panel-visible", open);
+    this.setPanelVisibility(this.loadoutPanel, open);
   }
 
   public isLoadoutPanelOpen(): boolean {
@@ -293,10 +377,12 @@ export class AbilityHud {
     return this.creatorPanelOpen;
   }
 
-  public setCreatorPanelOpen(open: boolean): void {
+  public setCreatorPanelOpen(open: boolean, fromSibling = false): void {
+    if (open && !fromSibling) {
+      this.setLoadoutPanelOpen(false);
+    }
     this.creatorPanelOpen = open;
-    this.creatorPanel.classList.toggle("ability-panel-hidden", !open);
-    this.creatorPanel.classList.toggle("ability-panel-visible", open);
+    this.setPanelVisibility(this.creatorPanel, open);
   }
 
   public isCreatorPanelOpen(): boolean {
@@ -310,11 +396,16 @@ export class AbilityHud {
   public setSelectedSlot(slot: number, emitSelectionEvent: boolean): void {
     const clampedSlot = clampHotbarSlotIndex(slot);
     this.selectedSlot = clampedSlot;
+
     for (let i = 0; i < this.slotElements.length; i += 1) {
       const isSelected = i === clampedSlot;
       this.slotElements[i]?.button.classList.toggle("ability-slot-selected", isSelected);
     }
+
     this.updateCardSelection();
+    this.updateLoadoutSummary();
+    this.updateCreatorTargetSlotLabel();
+
     if (emitSelectionEvent) {
       this.options.onHotbarSlotSelected?.(clampedSlot);
     }
@@ -326,6 +417,8 @@ export class AbilityHud {
       this.assignAbilityToSlot(slot, abilityId, false);
     }
     this.updateCardSelection();
+    this.updateLoadoutSummary();
+    this.updateCreatorTargetSlotLabel();
   }
 
   public upsertAbility(ability: AbilityDefinition): void {
@@ -338,10 +431,29 @@ export class AbilityHud {
     }
     this.renderAbilityCard(card, ability.id);
     this.updateCardSelection();
+    this.updateLoadoutSummary();
+    this.updateCreatorTargetSlotLabel();
   }
 
   public setCreatorStatus(message: string): void {
     this.creatorStatus.textContent = message;
+    this.creatorStatus.classList.remove(
+      "ability-creator-status-info",
+      "ability-creator-status-pending",
+      "ability-creator-status-success",
+      "ability-creator-status-error"
+    );
+
+    const lowered = message.toLowerCase();
+    if (lowered.includes("failed") || lowered.includes("error")) {
+      this.creatorStatus.classList.add("ability-creator-status-error");
+    } else if (lowered.includes("sent to server") || lowered.includes("queued")) {
+      this.creatorStatus.classList.add("ability-creator-status-pending");
+    } else if (lowered.includes("created ability")) {
+      this.creatorStatus.classList.add("ability-creator-status-success");
+    } else {
+      this.creatorStatus.classList.add("ability-creator-status-info");
+    }
   }
 
   public getSelectedSlot(): number {
@@ -352,37 +464,87 @@ export class AbilityHud {
     return this.assignments[this.selectedSlot] ?? ABILITY_ID_NONE;
   }
 
+  private createPanelHeader(
+    documentRef: Document,
+    title: string,
+    subtitle: string,
+    keyHint: string
+  ): HTMLElement {
+    const wrapper = documentRef.createElement("header");
+    wrapper.className = "ability-panel-header";
+
+    const headingRow = documentRef.createElement("div");
+    headingRow.className = "ability-panel-heading-row";
+
+    const heading = documentRef.createElement("h2");
+    heading.className = "ability-panel-title";
+    heading.textContent = title;
+
+    const key = documentRef.createElement("span");
+    key.className = "ability-key-hint";
+    key.textContent = keyHint;
+
+    headingRow.append(heading, key);
+
+    const subtitleNode = documentRef.createElement("p");
+    subtitleNode.className = "ability-panel-subtitle";
+    subtitleNode.textContent = subtitle;
+
+    wrapper.append(headingRow, subtitleNode);
+    return wrapper;
+  }
+
   private createStatControl(documentRef: Document, statKey: CreatorStatKey): HTMLElement {
-    const row = documentRef.createElement("div");
-    row.className = "ability-creator-stat-row";
+    const card = documentRef.createElement("div");
+    card.className = "ability-stat-card";
+
+    const top = documentRef.createElement("div");
+    top.className = "ability-stat-top";
 
     const label = documentRef.createElement("span");
-    label.className = "ability-creator-stat-label";
+    label.className = "ability-stat-label";
     label.textContent = CREATOR_STAT_LABELS[statKey];
+
+    const value = documentRef.createElement("span");
+    value.className = "ability-stat-value";
+
+    top.append(label, value);
+
+    const controls = documentRef.createElement("div");
+    controls.className = "ability-stat-controls";
 
     const minus = documentRef.createElement("button");
     minus.type = "button";
-    minus.className = "ability-creator-stepper";
+    minus.className = "ability-stat-stepper";
     minus.textContent = "-";
     minus.addEventListener("click", () => {
       this.adjustCreatorPoints(statKey, -1);
     });
 
-    const value = documentRef.createElement("span");
-    value.className = "ability-creator-stat-value";
-    value.dataset.stat = statKey;
-    value.textContent = String(this.creatorPoints[statKey]);
+    const track = documentRef.createElement("div");
+    track.className = "ability-stat-track";
+    const fill = documentRef.createElement("div");
+    fill.className = "ability-stat-fill";
+    track.append(fill);
 
     const plus = documentRef.createElement("button");
     plus.type = "button";
-    plus.className = "ability-creator-stepper";
+    plus.className = "ability-stat-stepper";
     plus.textContent = "+";
     plus.addEventListener("click", () => {
       this.adjustCreatorPoints(statKey, 1);
     });
 
-    row.append(label, minus, value, plus);
-    return row;
+    controls.append(minus, track, plus);
+    card.append(top, controls);
+
+    this.creatorStatUi.set(statKey, {
+      valueLabel: value,
+      fill
+    });
+    this.updateStatVisual(statKey);
+
+    return card;
   }
 
   private adjustCreatorPoints(statKey: CreatorStatKey, delta: number): void {
@@ -391,46 +553,72 @@ export class AbilityHud {
     if (next === current) {
       return;
     }
+
     const totalWithoutCurrent = this.getCreatorTotalPoints() - current;
     if (totalWithoutCurrent + next > ABILITY_CREATOR_TOTAL_POINTS) {
+      this.setCreatorStatus(`Point budget is ${ABILITY_CREATOR_TOTAL_POINTS}.`);
       return;
     }
+
     this.creatorPoints[statKey] = next;
-    const valueNode = this.creatorPanel.querySelector(`[data-stat="${statKey}"]`);
-    if (valueNode) {
-      valueNode.textContent = String(next);
-    }
+    this.updateStatVisual(statKey);
     this.updateCreatorBudgetLabel();
+  }
+
+  private updateStatVisual(statKey: CreatorStatKey): void {
+    const ui = this.creatorStatUi.get(statKey);
+    if (!ui) {
+      return;
+    }
+    const points = this.creatorPoints[statKey];
+    ui.valueLabel.textContent = `${points}`;
+    const fillPercent = (points / ABILITY_CREATOR_MAX_POINTS_PER_STAT) * 100;
+    ui.fill.style.width = `${fillPercent.toFixed(1)}%`;
   }
 
   private updateCreatorBudgetLabel(): void {
     const used = this.getCreatorTotalPoints();
     const remaining = ABILITY_CREATOR_TOTAL_POINTS - used;
-    this.creatorBudgetLabel.textContent = `Points: ${used}/${ABILITY_CREATOR_TOTAL_POINTS} (left ${remaining})`;
+    this.creatorBudgetLabel.textContent = `Point Budget ${used}/${ABILITY_CREATOR_TOTAL_POINTS} (left ${remaining})`;
+    this.creatorBudgetFill.style.width = `${((used / ABILITY_CREATOR_TOTAL_POINTS) * 100).toFixed(1)}%`;
   }
 
   private enforceAttributeSelectionLimit(changedKey: AbilityAttributeKey): void {
     const selected = this.getSelectedCreatorAttributes();
-    if (selected.length <= ABILITY_CREATOR_MAX_ATTRIBUTES) {
-      return;
+    if (selected.length > ABILITY_CREATOR_MAX_ATTRIBUTES) {
+      const checkbox = this.creatorAttributeToggles.get(changedKey);
+      if (checkbox) {
+        checkbox.checked = false;
+      }
+      this.setCreatorStatus(`Choose up to ${ABILITY_CREATOR_MAX_ATTRIBUTES} attributes.`);
     }
-    const checkbox = this.creatorAttributeToggles.get(changedKey);
-    if (checkbox) {
-      checkbox.checked = false;
+    this.updateAttributeSelectionState();
+  }
+
+  private updateAttributeSelectionState(): void {
+    for (const checkbox of this.creatorAttributeToggles.values()) {
+      const wrapper = checkbox.closest(".ability-attribute-option");
+      if (!wrapper) {
+        continue;
+      }
+      wrapper.classList.toggle("ability-attribute-option-selected", checkbox.checked);
     }
   }
 
   private submitCreatorDraft(): void {
     const name = this.creatorNameInput.value.trim();
     const selectedAttributes = this.getSelectedCreatorAttributes();
+
     if (name.length < 3) {
-      this.setCreatorStatus("Name must be at least 3 characters.");
+      this.setCreatorStatus("Ability name must be at least 3 characters.");
       return;
     }
+
     if (selectedAttributes.length > ABILITY_CREATOR_MAX_ATTRIBUTES) {
-      this.setCreatorStatus(`Choose at most ${ABILITY_CREATOR_MAX_ATTRIBUTES} attributes.`);
+      this.setCreatorStatus(`Choose up to ${ABILITY_CREATOR_MAX_ATTRIBUTES} attributes.`);
       return;
     }
+
     const payload: AbilityCreateDraftSubmission = {
       name,
       category: abilityCategoryToWireValue(CREATOR_CATEGORY),
@@ -441,6 +629,7 @@ export class AbilityHud {
       attributeMask: encodeAbilityAttributeMask(selectedAttributes),
       targetHotbarSlot: this.selectedSlot
     };
+
     this.options.onCreateAbilityRequested?.(payload);
     this.setCreatorStatus("Sent to server...");
   }
@@ -470,6 +659,7 @@ export class AbilityHud {
     card.className = "ability-card";
     card.draggable = true;
     card.dataset.abilityId = String(abilityId);
+
     this.renderAbilityCard(card, abilityId);
 
     card.addEventListener("dragstart", (event) => {
@@ -480,6 +670,7 @@ export class AbilityHud {
       event.dataTransfer.setData(ABILITY_DRAG_MIME, String(abilityId));
       event.dataTransfer.setData("text/plain", String(abilityId));
     });
+
     card.addEventListener("click", () => {
       this.assignAbilityToSlot(this.selectedSlot, abilityId, true);
     });
@@ -489,27 +680,57 @@ export class AbilityHud {
   }
 
   private renderAbilityCard(card: HTMLButtonElement, abilityId: number): void {
-    const ability = this.abilityCatalog.get(abilityId) ?? getAbilityDefinitionById(abilityId);
+    const ability = this.resolveAbilityById(abilityId);
+
     card.innerHTML = "";
+
+    const header = this.root.ownerDocument.createElement("div");
+    header.className = "ability-card-header";
+
     const title = this.root.ownerDocument.createElement("span");
     title.className = "ability-card-title";
     title.textContent = ability ? ability.name : `Unknown (${abilityId})`;
-    const subtitle = this.root.ownerDocument.createElement("span");
-    subtitle.className = "ability-card-subtitle";
-    if (!ability) {
-      subtitle.textContent = "Unavailable";
-    } else {
-      const attributes = ability.attributes.length > 0 ? ability.attributes.join(", ") : "none";
-      subtitle.textContent = `${ability.category} | attrs ${attributes}`;
-    }
-    card.append(title, subtitle);
+
+    const category = this.root.ownerDocument.createElement("span");
+    category.className = "ability-card-category";
+    category.textContent = ability?.category ?? "unknown";
+
+    header.append(title, category);
+
+    const description = this.root.ownerDocument.createElement("p");
+    description.className = "ability-card-description";
+    description.textContent = ability?.description ?? "Unavailable";
+
+    const footer = this.root.ownerDocument.createElement("div");
+    footer.className = "ability-card-footer";
+
+    const points = this.root.ownerDocument.createElement("span");
+    points.className = "ability-card-meta";
+    const totalPoints = ability
+      ? ability.points.power + ability.points.velocity + ability.points.efficiency + ability.points.control
+      : 0;
+    points.textContent = `Pts ${totalPoints}`;
+
+    const attrs = this.root.ownerDocument.createElement("span");
+    attrs.className = "ability-card-meta";
+    attrs.textContent =
+      ability && ability.attributes.length > 0 ? `Attrs ${ability.attributes.join(", ")}` : "Attrs none";
+
+    footer.append(points, attrs);
+
+    card.append(header, description, footer);
   }
 
   private assignAbilityToSlot(slot: number, abilityId: number, emitAssignmentEvent: boolean): void {
     const clampedSlot = clampHotbarSlotIndex(slot);
     const normalizedAbilityId = this.normalizeAbilityId(abilityId);
+
     this.assignments[clampedSlot] = normalizedAbilityId;
     this.renderSlot(clampedSlot);
+    this.updateCardSelection();
+    this.updateLoadoutSummary();
+    this.updateCreatorTargetSlotLabel();
+
     if (emitAssignmentEvent) {
       this.options.onHotbarAssignmentChanged?.(clampedSlot, normalizedAbilityId);
     }
@@ -520,25 +741,44 @@ export class AbilityHud {
     if (!elements) {
       return;
     }
+
     const abilityId = this.assignments[slot] ?? ABILITY_ID_NONE;
-    const ability =
-      this.abilityCatalog.get(abilityId) ??
-      getAbilityDefinitionById(abilityId) ??
-      this.abilityCatalog.get(ABILITY_ID_NONE);
+    const ability = this.resolveAbilityById(abilityId);
+
     elements.nameLabel.textContent = ability?.name ?? "Unknown";
+    elements.button.title = `Slot ${slot + 1}: ${ability?.name ?? "Unknown"}`;
+  }
+
+  private updateLoadoutSummary(): void {
+    const abilityId = this.assignments[this.selectedSlot] ?? ABILITY_ID_NONE;
+    const ability = this.resolveAbilityById(abilityId);
+
+    this.loadoutSlotLabel.textContent = `Slot ${this.selectedSlot + 1}`;
+    this.loadoutAbilityLabel.textContent = ability?.name ?? "Unknown";
+    this.loadoutAbilityDetail.textContent = ability?.description ?? "No description available.";
+  }
+
+  private updateCreatorTargetSlotLabel(): void {
+    const abilityId = this.assignments[this.selectedSlot] ?? ABILITY_ID_NONE;
+    const ability = this.resolveAbilityById(abilityId);
+    this.creatorTargetSlotLabel.textContent = `Target Slot ${this.selectedSlot + 1}: ${ability?.name ?? "Empty"}`;
+  }
+
+  private resolveAbilityById(abilityId: number): AbilityDefinition | null {
+    return this.abilityCatalog.get(abilityId) ?? getAbilityDefinitionById(abilityId);
   }
 
   private normalizeAbilityId(abilityId: number): number {
     if (!Number.isFinite(abilityId)) {
       return ABILITY_ID_NONE;
     }
+
     const normalized = Math.max(ABILITY_ID_NONE, Math.floor(abilityId));
     if (normalized === ABILITY_ID_NONE) {
       return ABILITY_ID_NONE;
     }
-    return this.abilityCatalog.has(normalized) || getAbilityDefinitionById(normalized)
-      ? normalized
-      : ABILITY_ID_NONE;
+
+    return this.resolveAbilityById(normalized) ? normalized : ABILITY_ID_NONE;
   }
 
   private readDraggedAbilityId(event: DragEvent): number | null {
@@ -546,10 +786,12 @@ export class AbilityHud {
     if (!transfer) {
       return null;
     }
+
     const raw = transfer.getData(ABILITY_DRAG_MIME) || transfer.getData("text/plain");
     if (!raw) {
       return null;
     }
+
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -568,5 +810,10 @@ export class AbilityHud {
       this.creatorPoints.efficiency +
       this.creatorPoints.control
     );
+  }
+
+  private setPanelVisibility(panel: HTMLElement, open: boolean): void {
+    panel.classList.toggle("ability-panel-hidden", !open);
+    panel.classList.toggle("ability-panel-visible", open);
   }
 }
