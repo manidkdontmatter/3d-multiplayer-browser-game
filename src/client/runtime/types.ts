@@ -23,8 +23,6 @@ export interface RemotePlayerState {
   serverTick: number;
   grounded: boolean;
   health: number;
-  upperBodyAction: number;
-  upperBodyActionNonce: number;
 }
 
 export interface PlatformState {
@@ -60,4 +58,11 @@ export interface TrainingDummyState {
   serverTick: number;
   health: number;
   maxHealth: number;
+}
+
+export interface AbilityUseEvent {
+  ownerNid: number;
+  abilityId: number;
+  category: "projectile" | "melee" | "passive";
+  serverTick: number;
 }

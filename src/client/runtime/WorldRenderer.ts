@@ -1,14 +1,12 @@
 import {
   AdditiveBlending,
   AmbientLight,
-  AnimationClip,
   Box3,
   BoxGeometry,
   CapsuleGeometry,
   Color,
   CylinderGeometry,
   DirectionalLight,
-  Euler,
   Fog,
   Group,
   IcosahedronGeometry,
@@ -18,41 +16,44 @@ import {
   MeshStandardMaterial,
   Object3D,
   PerspectiveCamera,
-  Quaternion,
   Scene,
   SphereGeometry,
-  SkinnedMesh,
   Vector3,
   WebGLRenderer
 } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { clone as cloneSkeleton, retargetClip } from "three/examples/jsm/utils/SkeletonUtils.js";
-import {
-  ANIMATION_MIXAMO_IDLE_ASSET_ID,
-  ANIMATION_MIXAMO_JUMP_ASSET_ID,
-  ANIMATION_MIXAMO_PUNCH_ASSET_ID,
-  ANIMATION_MIXAMO_RUN_ASSET_ID,
-  ANIMATION_MIXAMO_WALK_ASSET_ID,
-  CHARACTER_MALE_ASSET_ID
-} from "../assets/assetManifest";
+import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { VRMHumanoid, type VRM, type VRMCore, type VRMHumanBoneName, type VRMHumanBones } from "@pixiv/three-vrm";
+import { CHARACTER_MALE_ASSET_ID } from "../assets/assetManifest";
 import { getLoadedAsset } from "../assets/assetLoader";
 import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED, STATIC_WORLD_BLOCKS } from "../../shared/index";
-import type { PlayerPose, ProjectileState, RemotePlayerState, TrainingDummyState } from "./types";
-import { CharacterAnimationController } from "./CharacterAnimationController";
+import {
+  CharacterAnimationController
+} from "./animation/CharacterAnimationController";
+import {
+  createCharacterAnimationClips,
+  loadCharacterVRMAnimationAssets,
+  type CharacterVRMAnimationAssets
+} from "./animation/characterAnimationLibrary";
+import type {
+  AbilityUseEvent,
+  PlayerPose,
+  ProjectileState,
+  RemotePlayerState,
+  TrainingDummyState
+} from "./types";
 
 const REMOTE_CHARACTER_TARGET_HEIGHT = PLAYER_EYE_HEIGHT + 0.08;
 const MIN_MODEL_HEIGHT = 1e-4;
-const REMOTE_CHARACTER_MODEL_YAW_OFFSET = Math.PI;
+const REMOTE_CHARACTER_MODEL_YAW_OFFSET = 0;
 const REMOTE_ANIMATION_SPEED_CAP = PLAYER_SPRINT_SPEED * 2.2;
 const PROJECTILE_VISUAL_POOL_PREWARM = 24;
 const PROJECTILE_SPAWN_BURST_POOL_PREWARM = 12;
 const PROJECTILE_SPAWN_BURST_POOL_MAX = 80;
 const PROJECTILE_SPAWN_BURST_PARTICLE_COUNT = 8;
 const PROJECTILE_SPAWN_BURST_DURATION_SECONDS = 0.16;
-const LOCAL_FIRST_PERSON_BODY_BACK_OFFSET = 0.16;
-const LOCAL_FIRST_PERSON_BODY_DOWN_OFFSET = -0.05;
-const LOCAL_FIRST_PERSON_HEAD_SCALE = 0.001;
-const MIXAMO_HIP_BONE = "mixamorig:Hips";
+const LOCAL_FIRST_PERSON_ONLY_LAYER = 11;
+const LOCAL_THIRD_PERSON_ONLY_LAYER = 12;
 
 interface ProjectilePalette {
   coreColor: number;
@@ -80,110 +81,38 @@ const PROJECTILE_PALETTES = new Map<number, Readonly<ProjectilePalette>>([
   ]
 ]);
 
-const MIXAMO_RETARGET_BONE_NAMES: Readonly<Record<string, string>> = {
-  pelvis: MIXAMO_HIP_BONE,
-  spine_01: "mixamorig:Spine",
-  spine_02: "mixamorig:Spine1",
-  spine_03: "mixamorig:Spine2",
-  neck_01: "mixamorig:Neck",
-  Head: "mixamorig:Head",
-  clavicle_l: "mixamorig:LeftShoulder",
-  upperarm_l: "mixamorig:LeftArm",
-  lowerarm_l: "mixamorig:LeftForeArm",
-  hand_l: "mixamorig:LeftHand",
-  thumb_01_l: "mixamorig:LeftHandThumb1",
-  thumb_02_l: "mixamorig:LeftHandThumb2",
-  thumb_03_l: "mixamorig:LeftHandThumb3",
-  thumb_04_leaf_l: "mixamorig:LeftHandThumb4",
-  index_01_l: "mixamorig:LeftHandIndex1",
-  index_02_l: "mixamorig:LeftHandIndex2",
-  index_03_l: "mixamorig:LeftHandIndex3",
-  index_04_leaf_l: "mixamorig:LeftHandIndex4",
-  middle_01_l: "mixamorig:LeftHandMiddle1",
-  middle_02_l: "mixamorig:LeftHandMiddle2",
-  middle_03_l: "mixamorig:LeftHandMiddle3",
-  middle_04_leaf_l: "mixamorig:LeftHandMiddle4",
-  ring_01_l: "mixamorig:LeftHandRing1",
-  ring_02_l: "mixamorig:LeftHandRing2",
-  ring_03_l: "mixamorig:LeftHandRing3",
-  ring_04_leaf_l: "mixamorig:LeftHandRing4",
-  pinky_01_l: "mixamorig:LeftHandPinky1",
-  pinky_02_l: "mixamorig:LeftHandPinky2",
-  pinky_03_l: "mixamorig:LeftHandPinky3",
-  pinky_04_leaf_l: "mixamorig:LeftHandPinky4",
-  clavicle_r: "mixamorig:RightShoulder",
-  upperarm_r: "mixamorig:RightArm",
-  lowerarm_r: "mixamorig:RightForeArm",
-  hand_r: "mixamorig:RightHand",
-  thumb_01_r: "mixamorig:RightHandThumb1",
-  thumb_02_r: "mixamorig:RightHandThumb2",
-  thumb_03_r: "mixamorig:RightHandThumb3",
-  thumb_04_leaf_r: "mixamorig:RightHandThumb4",
-  index_01_r: "mixamorig:RightHandIndex1",
-  index_02_r: "mixamorig:RightHandIndex2",
-  index_03_r: "mixamorig:RightHandIndex3",
-  index_04_leaf_r: "mixamorig:RightHandIndex4",
-  middle_01_r: "mixamorig:RightHandMiddle1",
-  middle_02_r: "mixamorig:RightHandMiddle2",
-  middle_03_r: "mixamorig:RightHandMiddle3",
-  middle_04_leaf_r: "mixamorig:RightHandMiddle4",
-  ring_01_r: "mixamorig:RightHandRing1",
-  ring_02_r: "mixamorig:RightHandRing2",
-  ring_03_r: "mixamorig:RightHandRing3",
-  ring_04_leaf_r: "mixamorig:RightHandRing4",
-  pinky_01_r: "mixamorig:RightHandPinky1",
-  pinky_02_r: "mixamorig:RightHandPinky2",
-  pinky_03_r: "mixamorig:RightHandPinky3",
-  pinky_04_leaf_r: "mixamorig:RightHandPinky4",
-  thigh_l: "mixamorig:LeftUpLeg",
-  calf_l: "mixamorig:LeftLeg",
-  foot_l: "mixamorig:LeftFoot",
-  ball_l: "mixamorig:LeftToeBase",
-  ball_leaf_l: "mixamorig:LeftToe_End",
-  thigh_r: "mixamorig:RightUpLeg",
-  calf_r: "mixamorig:RightLeg",
-  foot_r: "mixamorig:RightFoot",
-  ball_r: "mixamorig:RightToeBase",
-  ball_leaf_r: "mixamorig:RightToe_End"
-};
-
-const REMOTE_CHARACTER_ROOT_MOTION_POLICY = {
-  // Root motion is disabled by default to keep movement physics/netcode authoritative.
-  defaultEnabled: false,
-  // Opt in per clip when/if a specific animation should apply root motion.
-  perClip: {}
-} as const;
 
 interface RemotePlayerVisual {
   root: Group;
-  animationController: CharacterAnimationController | null;
+  animator: CharacterAnimationController | null;
+  humanoid: VRMHumanoid | null;
   lastX: number;
   lastY: number;
   lastZ: number;
   horizontalSpeed: number;
   verticalSpeed: number;
+  grounded: boolean;
+  sprinting: boolean;
   initialized: boolean;
 }
 
 interface LocalPlayerVisual {
   root: Group;
-  animationController: CharacterAnimationController | null;
-  hiddenHeadBones: Object3D[];
-  firstPersonBones: {
-    spineUpper: Object3D | null;
-    clavicleL: Object3D | null;
-    clavicleR: Object3D | null;
-    upperArmL: Object3D | null;
-    upperArmR: Object3D | null;
-    forearmL: Object3D | null;
-    forearmR: Object3D | null;
-  };
+  animator: CharacterAnimationController | null;
+  vrm: VRM | null;
   lastX: number;
   lastY: number;
   lastZ: number;
   horizontalSpeed: number;
   verticalSpeed: number;
+  grounded: boolean;
+  sprinting: boolean;
   initialized: boolean;
+}
+
+interface LocalPlayerSyncOptions {
+  frameDeltaSeconds: number;
+  grounded: boolean;
 }
 
 interface ProjectileFlightVisual {
@@ -209,13 +138,6 @@ interface ProjectileSpawnBurst {
   durationSeconds: number;
 }
 
-interface RetargetedAnimationSet {
-  idle: AnimationClip;
-  walk: AnimationClip;
-  run: AnimationClip;
-  jump: AnimationClip;
-  upperCast: AnimationClip;
-}
 
 export class WorldRenderer {
   private readonly renderer: WebGLRenderer;
@@ -229,15 +151,16 @@ export class WorldRenderer {
   private readonly pooledSpawnBursts = new Map<number, ProjectileSpawnBurst[]>();
   private readonly activeSpawnBursts: ProjectileSpawnBurst[] = [];
   private readonly cameraForward = new Vector3(0, 0, -1);
+  private readonly characterAnimationAssets: CharacterVRMAnimationAssets | null;
+  private readonly sourceRawBoneNames: Array<{ boneName: VRMHumanBoneName; nodeName: string }> = [];
+  private readonly sourceVrmMetaVersion: "0" | "1" | null;
   private readonly remotePlayerTemplate: Group | null;
-  private readonly remotePlayerRetargetedClips: RetargetedAnimationSet | null;
   private readonly localPlayerVisual: LocalPlayerVisual | null;
   private readonly projectileCoreGeometry = new IcosahedronGeometry(0.12, 1);
   private readonly projectileGlowGeometry = new SphereGeometry(0.24, 10, 8);
   private readonly projectileBurstParticleGeometry = new IcosahedronGeometry(0.045, 0);
-  private readonly tempEuler = new Euler(0, 0, 0, "XYZ");
-  private readonly tempQuat = new Quaternion();
   private readonly tempVecA = new Vector3();
+  private localPlayerNid: number | null = null;
 
   public constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -253,10 +176,17 @@ export class WorldRenderer {
     this.scene.fog = new Fog(0xb8e4ff, 45, 220);
 
     this.camera = new PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.01, 600);
+    this.camera.layers.enable(LOCAL_FIRST_PERSON_ONLY_LAYER);
+    this.camera.layers.disable(LOCAL_THIRD_PERSON_ONLY_LAYER);
 
     this.initializeScene();
     this.remotePlayerTemplate = this.createRemotePlayerTemplate();
-    this.remotePlayerRetargetedClips = this.createRetargetedAnimationSet(this.remotePlayerTemplate);
+    this.characterAnimationAssets = loadCharacterVRMAnimationAssets();
+    const sourceVrm = this.getSourceVrm();
+    this.sourceVrmMetaVersion = sourceVrm?.meta.metaVersion ?? null;
+    if (sourceVrm) {
+      this.sourceRawBoneNames.push(...this.buildSourceRawBoneNames(sourceVrm));
+    }
     this.localPlayerVisual = this.createLocalPlayerVisual();
     if (this.localPlayerVisual) {
       this.scene.add(this.localPlayerVisual.root);
@@ -300,39 +230,36 @@ export class WorldRenderer {
       }
 
       visual.horizontalSpeed = Math.min(Math.max(0, visual.horizontalSpeed), REMOTE_ANIMATION_SPEED_CAP);
+      visual.grounded = remotePlayer.grounded;
+      visual.sprinting = visual.horizontalSpeed >= PLAYER_SPRINT_SPEED * 0.92;
       visual.root.position.set(remotePlayer.x, renderY, remotePlayer.z);
       visual.root.rotation.y = remotePlayer.yaw;
       visual.lastX = remotePlayer.x;
       visual.lastY = renderY;
       visual.lastZ = remotePlayer.z;
-
-      visual.animationController?.update({
-        deltaSeconds: dt,
+      visual.animator?.update(dt, {
         horizontalSpeed: visual.horizontalSpeed,
         verticalSpeed: visual.verticalSpeed,
-        grounded: remotePlayer.grounded,
-        upperBodyAction: remotePlayer.upperBodyAction,
-        upperBodyActionNonce: remotePlayer.upperBodyActionNonce
+        grounded: visual.grounded,
+        sprinting: visual.sprinting
       });
+      visual.humanoid?.update();
     }
 
     for (const [nid, visual] of this.remotePlayers) {
       if (!activeNids.has(nid)) {
+        visual.animator?.dispose();
         this.scene.remove(visual.root);
         this.remotePlayers.delete(nid);
       }
     }
   }
 
-  public syncLocalPlayer(
-    localPose: PlayerPose,
-    frameDeltaSeconds: number,
-    animationState: { grounded: boolean; upperBodyAction: number; upperBodyActionNonce: number }
-  ): void {
+  public syncLocalPlayer(localPose: PlayerPose, options: LocalPlayerSyncOptions): void {
     if (!this.localPlayerVisual) {
       return;
     }
-    const dt = Math.max(1 / 240, Math.min(frameDeltaSeconds, 1 / 20));
+    const dt = Math.max(1 / 240, Math.min(options.frameDeltaSeconds, 1 / 20));
     const visual = this.localPlayerVisual;
     const renderY = localPose.y - PLAYER_EYE_HEIGHT;
     if (visual.initialized) {
@@ -351,21 +278,40 @@ export class WorldRenderer {
     }
 
     visual.horizontalSpeed = Math.min(Math.max(0, visual.horizontalSpeed), REMOTE_ANIMATION_SPEED_CAP);
+    visual.grounded = options.grounded;
+    visual.sprinting = visual.horizontalSpeed >= PLAYER_SPRINT_SPEED * 0.92;
     visual.root.position.set(localPose.x, renderY, localPose.z);
     visual.root.rotation.y = localPose.yaw;
     visual.lastX = localPose.x;
     visual.lastY = renderY;
     visual.lastZ = localPose.z;
-
-    visual.animationController?.update({
-      deltaSeconds: dt,
+    visual.animator?.update(dt, {
       horizontalSpeed: visual.horizontalSpeed,
       verticalSpeed: visual.verticalSpeed,
-      grounded: animationState.grounded,
-      upperBodyAction: animationState.upperBodyAction,
-      upperBodyActionNonce: animationState.upperBodyActionNonce
+      grounded: visual.grounded,
+      sprinting: visual.sprinting
     });
-    this.applyLocalFirstPersonOffsets(localPose.pitch);
+    visual.vrm?.update(dt);
+  }
+
+  public setLocalPlayerNid(nid: number | null): void {
+    this.localPlayerNid = typeof nid === "number" ? nid : null;
+  }
+
+  public triggerLocalMeleePunch(): void {
+    this.localPlayerVisual?.animator?.triggerPunch();
+  }
+
+  public applyAbilityUseEvents(events: AbilityUseEvent[]): void {
+    for (const event of events) {
+      if (event.category !== "melee") {
+        continue;
+      }
+      if (this.localPlayerNid !== null && event.ownerNid === this.localPlayerNid) {
+        continue;
+      }
+      this.remotePlayers.get(event.ownerNid)?.animator?.triggerPunch();
+    }
   }
 
   public syncPlatforms(platformStates: Array<{
@@ -523,13 +469,29 @@ export class WorldRenderer {
 
   private createRemotePlayerVisual(): RemotePlayerVisual {
     let root: Group;
-    let animationController: CharacterAnimationController | null = null;
+    let animator: CharacterAnimationController | null = null;
+    let humanoid: VRMHumanoid | null = null;
     if (this.remotePlayerTemplate) {
       root = cloneSkeleton(this.remotePlayerTemplate) as Group;
-      animationController = new CharacterAnimationController(root, {
-        clips: this.remotePlayerRetargetedClips ?? undefined,
-        rootMotion: REMOTE_CHARACTER_ROOT_MOTION_POLICY
-      });
+      humanoid = this.createHumanoidForClonedModel(root);
+      if (!humanoid) {
+        console.warn("[animation] remote humanoid creation failed; avatar will be static");
+      }
+      if (humanoid && this.characterAnimationAssets && this.sourceVrmMetaVersion) {
+        const clips = createCharacterAnimationClips(
+          {
+            scene: root,
+            humanoid,
+            meta: { metaVersion: this.sourceVrmMetaVersion } as VRMCore["meta"]
+          } as VRMCore,
+          this.characterAnimationAssets
+        );
+        if (clips) {
+          animator = new CharacterAnimationController(root, clips);
+        } else {
+          console.warn("[animation] remote clip creation failed; avatar will be static");
+        }
+      }
     } else {
       root = new Group();
 
@@ -561,60 +523,58 @@ export class WorldRenderer {
     }
     return {
       root,
-      animationController,
+      animator,
+      humanoid,
       lastX: 0,
       lastY: 0,
       lastZ: 0,
       horizontalSpeed: 0,
       verticalSpeed: 0,
+      grounded: true,
+      sprinting: false,
       initialized: false
     };
   }
 
   private createLocalPlayerVisual(): LocalPlayerVisual | null {
-    if (!this.remotePlayerTemplate) {
+    const gltf = getLoadedAsset<GLTF>(CHARACTER_MALE_ASSET_ID);
+    if (!gltf?.scene) {
       return null;
     }
 
     const root = new Group();
-    const model = cloneSkeleton(this.remotePlayerTemplate) as Group;
-    model.position.y += LOCAL_FIRST_PERSON_BODY_DOWN_OFFSET;
-    model.position.z += LOCAL_FIRST_PERSON_BODY_BACK_OFFSET;
-    root.add(model);
-
-    const animationController = new CharacterAnimationController(root, {
-      clips: this.remotePlayerRetargetedClips ?? undefined,
-      rootMotion: REMOTE_CHARACTER_ROOT_MOTION_POLICY
-    });
-
-    const hiddenHeadBones = this.collectNamedNodes(model, [
-      "mixamorig:Head",
-      "mixamorig:Neck",
-      "Head",
-      "Neck"
-    ]);
-    for (const bone of hiddenHeadBones) {
-      bone.scale.setScalar(LOCAL_FIRST_PERSON_HEAD_SCALE);
+    const vrm = (gltf.userData as { vrm?: VRM }).vrm ?? null;
+    const sourceScene = vrm?.scene ?? gltf.scene;
+    const model = sourceScene as Object3D;
+    model.rotation.y = REMOTE_CHARACTER_MODEL_YAW_OFFSET;
+    this.normalizeModelToGround(model, REMOTE_CHARACTER_TARGET_HEIGHT);
+    if (vrm?.firstPerson) {
+      vrm.firstPerson.setup({
+        firstPersonOnlyLayer: LOCAL_FIRST_PERSON_ONLY_LAYER,
+        thirdPersonOnlyLayer: LOCAL_THIRD_PERSON_ONLY_LAYER
+      });
     }
+    root.add(model);
+    const localClips =
+      vrm && this.characterAnimationAssets
+        ? createCharacterAnimationClips(vrm, this.characterAnimationAssets)
+        : null;
+    if (!localClips) {
+      console.warn("[animation] local clip creation failed; local avatar will be static");
+    }
+    const animator = localClips ? new CharacterAnimationController(root, localClips) : null;
 
     return {
       root,
-      animationController,
-      hiddenHeadBones,
-      firstPersonBones: {
-        spineUpper: this.findFirstExistingNode(model, ["mixamorig:Spine2", "spine_03"]),
-        clavicleL: this.findFirstExistingNode(model, ["mixamorig:LeftShoulder", "clavicle_l"]),
-        clavicleR: this.findFirstExistingNode(model, ["mixamorig:RightShoulder", "clavicle_r"]),
-        upperArmL: this.findFirstExistingNode(model, ["mixamorig:LeftArm", "upperarm_l"]),
-        upperArmR: this.findFirstExistingNode(model, ["mixamorig:RightArm", "upperarm_r"]),
-        forearmL: this.findFirstExistingNode(model, ["mixamorig:LeftForeArm", "lowerarm_l"]),
-        forearmR: this.findFirstExistingNode(model, ["mixamorig:RightForeArm", "lowerarm_r"])
-      },
+      animator,
+      vrm,
       lastX: 0,
       lastY: 0,
       lastZ: 0,
       horizontalSpeed: 0,
       verticalSpeed: 0,
+      grounded: true,
+      sprinting: false,
       initialized: false
     };
   }
@@ -842,161 +802,71 @@ export class WorldRenderer {
     }
 
     const root = new Group();
-    const model = cloneSkeleton(gltf.scene) as Object3D;
-    // GLTF forward axis is opposite this project's forward convention; rotate once here.
+    const vrm = (gltf.userData as { vrm?: VRM }).vrm;
+    const sourceScene = vrm?.scene ?? gltf.scene;
+    const model = cloneSkeleton(sourceScene) as Object3D;
+    this.removeNormalizedHumanoidRigs(model);
+    // Canonical VRM assets in this project are authored facing the gameplay forward convention.
     model.rotation.y = REMOTE_CHARACTER_MODEL_YAW_OFFSET;
     this.normalizeModelToGround(model, REMOTE_CHARACTER_TARGET_HEIGHT);
     root.add(model);
     return root;
   }
 
-  private createRetargetedAnimationSet(template: Group | null): RetargetedAnimationSet | null {
-    if (!template) {
-      return null;
-    }
-
-    const targetSkinnedMesh = this.findFirstSkinnedMesh(template);
-    if (!targetSkinnedMesh) {
-      return null;
-    }
-
-    const walk = this.retargetMixamoClip(
-      targetSkinnedMesh,
-      ANIMATION_MIXAMO_WALK_ASSET_ID,
-      "walk"
-    );
-    const idle = this.retargetMixamoClip(
-      targetSkinnedMesh,
-      ANIMATION_MIXAMO_IDLE_ASSET_ID,
-      "idle"
-    );
-    const run = this.retargetMixamoClip(
-      targetSkinnedMesh,
-      ANIMATION_MIXAMO_RUN_ASSET_ID,
-      "run"
-    );
-    const jump = this.retargetMixamoClip(
-      targetSkinnedMesh,
-      ANIMATION_MIXAMO_JUMP_ASSET_ID,
-      "jump"
-    );
-    const upperCast = this.retargetMixamoClip(
-      targetSkinnedMesh,
-      ANIMATION_MIXAMO_PUNCH_ASSET_ID,
-      "upperCast"
-    );
-
-    if (!idle || !walk || !run || !jump || !upperCast) {
-      return null;
-    }
-
-    return { idle, walk, run, jump, upperCast };
-  }
-
-  private retargetMixamoClip(
-    targetSkinnedMesh: SkinnedMesh,
-    sourceAssetId: string,
-    clipName: string
-  ): AnimationClip | null {
-    const sourceRoot = getLoadedAsset<Group>(sourceAssetId);
-    if (!sourceRoot) {
-      return null;
-    }
-    const sourceSkinnedMesh = this.findFirstSkinnedMesh(sourceRoot);
-    const sourceClip = sourceRoot.animations?.[0];
-    if (!sourceSkinnedMesh || !sourceClip) {
-      return null;
-    }
-
-    const retargeted = retargetClip(targetSkinnedMesh, sourceSkinnedMesh, sourceClip, {
-      names: MIXAMO_RETARGET_BONE_NAMES,
-      hip: MIXAMO_HIP_BONE,
-      preserveBoneMatrix: true,
-      preserveHipPosition: true,
-      useFirstFramePosition: true
-    });
-
-    const normalizedTracks = retargeted.tracks.map((track) => {
-      const clonedTrack = track.clone();
-      const bonesPathMatch = /^\.bones\[([^\]]+)\]\.(.+)$/i.exec(clonedTrack.name);
-      if (bonesPathMatch) {
-        const [, boneName, property] = bonesPathMatch;
-        clonedTrack.name = `${boneName}.${property}`;
-      }
-      return clonedTrack;
-    });
-
-    return new AnimationClip(clipName, retargeted.duration, normalizedTracks);
-  }
-
-  private findFirstSkinnedMesh(root: Object3D): SkinnedMesh | null {
-    let found: SkinnedMesh | null = null;
+  private removeNormalizedHumanoidRigs(root: Object3D): void {
+    const toRemove: Object3D[] = [];
     root.traverse((node) => {
-      if (found) {
-        return;
-      }
-      if ((node as SkinnedMesh & { isSkinnedMesh?: boolean }).isSkinnedMesh) {
-        found = node as SkinnedMesh;
+      if (node.name === "VRMHumanoidRig" && node.parent) {
+        toRemove.push(node);
       }
     });
-    return found;
-  }
-
-  private findFirstExistingNode(root: Object3D, names: string[]): Object3D | null {
-    for (const name of names) {
-      const found = root.getObjectByName(name);
-      if (found) {
-        return found;
-      }
+    for (const node of toRemove) {
+      node.parent?.remove(node);
     }
-    return null;
   }
 
-  private collectNamedNodes(root: Object3D, names: string[]): Object3D[] {
-    const collected: Object3D[] = [];
-    const seen = new Set<Object3D>();
-    for (const name of names) {
-      const node = root.getObjectByName(name);
-      if (!node || seen.has(node)) {
+  private getSourceVrm(): VRM | null {
+    const gltf = getLoadedAsset<GLTF>(CHARACTER_MALE_ASSET_ID);
+    return ((gltf?.userData as { vrm?: VRM } | undefined)?.vrm) ?? null;
+  }
+
+  private buildSourceRawBoneNames(vrm: VRM): Array<{ boneName: VRMHumanBoneName; nodeName: string }> {
+    const bindings: Array<{ boneName: VRMHumanBoneName; nodeName: string }> = [];
+    for (const [boneName, bone] of Object.entries(vrm.humanoid.humanBones) as Array<
+      [VRMHumanBoneName, { node: Object3D } | undefined]
+    >) {
+      const nodeName = bone?.node?.name?.trim();
+      if (!nodeName) {
         continue;
       }
-      seen.add(node);
-      collected.push(node);
+      bindings.push({ boneName, nodeName });
     }
-    return collected;
+    return bindings;
   }
 
-  private applyLocalFirstPersonOffsets(pitch: number): void {
-    if (!this.localPlayerVisual) {
-      return;
+  private createHumanoidForClonedModel(root: Object3D): VRMHumanoid | null {
+    if (this.sourceRawBoneNames.length === 0) {
+      return null;
     }
-    const visual = this.localPlayerVisual;
-    for (const headBone of visual.hiddenHeadBones) {
-      headBone.scale.setScalar(LOCAL_FIRST_PERSON_HEAD_SCALE);
+    const humanBones = {} as VRMHumanBones;
+    for (const binding of this.sourceRawBoneNames) {
+      const node = root.getObjectByName(binding.nodeName);
+      if (!node) {
+        continue;
+      }
+      (humanBones as Record<string, { node: Object3D }>)[binding.boneName] = { node };
     }
-
-    const lookFactor = this.clamp(Math.abs(pitch) / 1.35, 0, 1);
-    this.rotateBoneOffset(visual.firstPersonBones.spineUpper, -0.28 - lookFactor * 0.08, 0, 0);
-    this.rotateBoneOffset(visual.firstPersonBones.clavicleL, 0.05, 0.08, -0.24);
-    this.rotateBoneOffset(visual.firstPersonBones.clavicleR, 0.05, -0.08, 0.24);
-    this.rotateBoneOffset(visual.firstPersonBones.upperArmL, -0.26, 0.14, -0.55);
-    this.rotateBoneOffset(visual.firstPersonBones.upperArmR, -0.26, -0.14, 0.55);
-    this.rotateBoneOffset(visual.firstPersonBones.forearmL, -0.06, 0.07, -0.28);
-    this.rotateBoneOffset(visual.firstPersonBones.forearmR, -0.06, -0.07, 0.28);
-  }
-
-  private rotateBoneOffset(
-    bone: Object3D | null,
-    offsetX: number,
-    offsetY: number,
-    offsetZ: number
-  ): void {
-    if (!bone) {
-      return;
+    if (
+      !(humanBones as Record<string, unknown>).hips ||
+      !(humanBones as Record<string, unknown>).head
+    ) {
+      return null;
     }
-    this.tempEuler.set(offsetX, offsetY, offsetZ, "XYZ");
-    this.tempQuat.setFromEuler(this.tempEuler);
-    bone.quaternion.multiply(this.tempQuat);
+    const humanoid = new VRMHumanoid(humanBones, {
+      autoUpdateHumanBones: true
+    });
+    root.add(humanoid.normalizedHumanBonesRoot);
+    return humanoid;
   }
 
   private clamp(value: number, min: number, max: number): number {

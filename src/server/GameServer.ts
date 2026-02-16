@@ -27,6 +27,7 @@ type QueueEvent = {
 
 const MAX_TICK_INTERVAL_SAMPLES = 6000;
 const DEFAULT_PERSIST_FLUSH_INTERVAL_MS = 5000;
+const DEFAULT_HEALTH_LOG_INTERVAL_MS = 5000;
 
 export class GameServer {
   private readonly instance: Instance;
@@ -39,14 +40,21 @@ export class GameServer {
   private running = false;
   private nextTickAtMs = 0;
   private nextPersistFlushAtMs = 0;
+  private readonly healthLogIntervalMs: number;
   private readonly persistFlushIntervalMs: number;
+  private serverStartAtMs = 0;
   private lastTickDurationMs = 0;
   private tickDurationAccumMs = 0;
   private tickDurationCount = 0;
   private tickDurationMaxMs = 0;
+  private readonly tickDurationSamplesMs: number[] = [];
+  private tickOverBudgetCount = 0;
   private tickIntervalAccumMs = 0;
   private tickIntervalCount = 0;
-  private lastTickDurationLogMs = 0;
+  private catchUpLoopCount = 0;
+  private catchUpStepCount = 0;
+  private skippedTickResyncCount = 0;
+  private lastHealthLogMs = 0;
   private lastTickStartMs: number | null = null;
   private readonly tickIntervalsMs: number[] = [];
   private tickIntervalSampleWriteIndex = 0;
@@ -58,6 +66,7 @@ export class GameServer {
     this.globalChannel = new Channel(this.instance.localState);
     this.spatialChannel = new ChannelAABB3D(this.instance.localState);
     this.persistFlushIntervalMs = this.resolvePersistFlushIntervalMs();
+    this.healthLogIntervalMs = this.resolveHealthLogIntervalMs();
     this.persistence = new PersistenceService(process.env.SERVER_DATA_PATH ?? "./data/game.sqlite");
     this.simulation = new GameSimulation(this.globalChannel, this.spatialChannel, this.persistence);
   }
@@ -83,9 +92,10 @@ export class GameServer {
 
     this.running = true;
     const now = performance.now();
+    this.serverStartAtMs = now;
     this.nextTickAtMs = now + SERVER_TICK_MS;
     this.nextPersistFlushAtMs = now + this.persistFlushIntervalMs;
-    this.lastTickDurationLogMs = now;
+    this.lastHealthLogMs = now;
     this.scheduleLoop(0);
   }
 
@@ -211,8 +221,12 @@ export class GameServer {
     this.lastTickDurationMs = tickDurationMs;
     this.tickDurationAccumMs += tickDurationMs;
     this.tickDurationCount += 1;
+    this.tickDurationSamplesMs.push(tickDurationMs);
     if (tickDurationMs > this.tickDurationMaxMs) {
       this.tickDurationMaxMs = tickDurationMs;
+    }
+    if (tickDurationMs > SERVER_TICK_MS) {
+      this.tickOverBudgetCount += 1;
     }
   }
 
@@ -234,27 +248,19 @@ export class GameServer {
       this.nextTickAtMs += SERVER_TICK_MS;
       steps += 1;
     }
+    if (steps > 1) {
+      this.catchUpLoopCount += 1;
+      this.catchUpStepCount += steps - 1;
+    }
 
     // If we're very late, resync to avoid endless catch-up spiral.
     if (now - this.nextTickAtMs > SERVER_TICK_MS * maxCatchUpSteps) {
       this.nextTickAtMs = now + SERVER_TICK_MS;
+      this.skippedTickResyncCount += 1;
     }
 
-    if (process.env.SERVER_TICK_LOG !== "0" && now - this.lastTickDurationLogMs >= 1000) {
-      const avgDuration =
-        this.tickDurationCount > 0 ? this.tickDurationAccumMs / this.tickDurationCount : 0;
-      const avgInterval =
-        this.tickIntervalCount > 0 ? this.tickIntervalAccumMs / this.tickIntervalCount : 0;
-      const effectiveTps = avgInterval > 0 ? 1000 / avgInterval : 0;
-      console.log(
-        `[server] tick exec avg=${avgDuration.toFixed(3)}ms max=${this.tickDurationMaxMs.toFixed(3)}ms last=${this.lastTickDurationMs.toFixed(3)}ms | interval avg=${avgInterval.toFixed(3)}ms tps=${effectiveTps.toFixed(2)}`
-      );
-      this.tickDurationAccumMs = 0;
-      this.tickDurationCount = 0;
-      this.tickDurationMaxMs = 0;
-      this.tickIntervalAccumMs = 0;
-      this.tickIntervalCount = 0;
-      this.lastTickDurationLogMs = now;
+    if (process.env.SERVER_TICK_LOG !== "0" && now - this.lastHealthLogMs >= this.healthLogIntervalMs) {
+      this.logHealth(now);
     }
 
     const delay = this.nextTickAtMs - performance.now();
@@ -309,6 +315,53 @@ export class GameServer {
       return DEFAULT_PERSIST_FLUSH_INTERVAL_MS;
     }
     return Math.floor(raw);
+  }
+
+  private resolveHealthLogIntervalMs(): number {
+    const raw = Number(process.env.SERVER_HEALTH_LOG_MS ?? DEFAULT_HEALTH_LOG_INTERVAL_MS);
+    if (!Number.isFinite(raw) || raw < 1000) {
+      return DEFAULT_HEALTH_LOG_INTERVAL_MS;
+    }
+    return Math.floor(raw);
+  }
+
+  private logHealth(nowMs: number): void {
+    const avgDuration =
+      this.tickDurationCount > 0 ? this.tickDurationAccumMs / this.tickDurationCount : 0;
+    const avgInterval =
+      this.tickIntervalCount > 0 ? this.tickIntervalAccumMs / this.tickIntervalCount : 0;
+    const effectiveTps = avgInterval > 0 ? 1000 / avgInterval : 0;
+    const overBudgetPercent =
+      this.tickDurationCount > 0 ? (this.tickOverBudgetCount / this.tickDurationCount) * 100 : 0;
+    const p95TickDurationMs = this.computeP95(this.tickDurationSamplesMs);
+    const uptimeSeconds = Math.max(0, Math.floor((nowMs - this.serverStartAtMs) / 1000));
+    const runtime = this.simulation.getRuntimeStats();
+    const targetTps = SERVER_TICK_MS > 0 ? 1000 / SERVER_TICK_MS : 0;
+
+    console.log(
+      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} projectiles=${runtime.activeProjectiles} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots}`
+    );
+
+    this.tickDurationAccumMs = 0;
+    this.tickDurationCount = 0;
+    this.tickDurationMaxMs = 0;
+    this.tickDurationSamplesMs.length = 0;
+    this.tickOverBudgetCount = 0;
+    this.tickIntervalAccumMs = 0;
+    this.tickIntervalCount = 0;
+    this.catchUpLoopCount = 0;
+    this.catchUpStepCount = 0;
+    this.skippedTickResyncCount = 0;
+    this.lastHealthLogMs = nowMs;
+  }
+
+  private computeP95(samples: readonly number[]): number {
+    if (samples.length === 0) {
+      return 0;
+    }
+    const sorted = [...samples].sort((a, b) => a - b);
+    const index = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * 0.95)));
+    return sorted[index] ?? 0;
   }
 
   private pushTickIntervalSample(intervalMs: number): void {

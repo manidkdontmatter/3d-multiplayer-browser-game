@@ -18,8 +18,16 @@ Core goals:
 - Server transport: `nengi-uws-instance-adapter` (`uWebSockets.js`)
 - Client networking: `nengi-websocket-client-adapter`
 - Rendering: `three`
+- Humanoid runtime: `@pixiv/three-vrm`, `@pixiv/three-vrm-animation`
 - Physics: `@dimforge/rapier3d-compat`
 - Browser automation tests: Playwright
+
+Humanoid asset ingestion/conversion tools in this repo:
+- `fbx2vrma-converter` (npm CLI) for FBX animation -> VRMA conversion.
+- `tools/avatar-asset-pipeline/avatar-build.exe` for pipeline-driven FBX/GLB -> VRM and pose/material normalization.
+
+Canonical ingestion intent:
+- Convert source humanoid models and animations offline to `VRM`/`VRMA` before runtime use.
 
 ## High-Level Architecture
 
@@ -41,7 +49,6 @@ Core modules:
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
 - `src/client/runtime/WorldRenderer.ts`: Three.js scene/render runtime.
-- `src/client/runtime/CharacterAnimationController.ts`: layered humanoid animation blending/masking.
 - `src/client/ui/AbilityHud.ts`: hotbar + loadout + creator panels.
 
 ## Netcode Model
@@ -61,8 +68,6 @@ Authoritative combat and physics highlights:
 
 ## Key Gameplay Systems (Current)
 
-- Shared full-body local first-person presentation rig (no separate FPS-arms asset).
-- Layered humanoid animation system with locomotion + jump + upper-body action overlay.
 - Runtime ability pipeline with server-authoritative creation/validation/execution.
 - Access-key-based auth (`#k=...` URL fragment + local storage fallback).
 - SQLite persistence for account/character/loadout/runtime-ability state.
@@ -90,7 +95,6 @@ Authoritative combat and physics highlights:
 - `scripts`: test/automation scripts
 - `docs`: local reference docs for nengi/Three.js/Rapier
 - `AGENTS.md`: persistent operating instructions/memory rules
-- `progress.md`: active short-lived status + priorities
 - `vision.md`: product/game direction
 - `docs-map.md`: markdown file responsibilities/read order
 

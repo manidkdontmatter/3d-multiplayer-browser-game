@@ -22,7 +22,6 @@ const RECONCILE_POSITION_SNAP_THRESHOLD = 2.5;
 const RECONCILE_YAW_SNAP_THRESHOLD = Math.PI * 0.75;
 const RECONCILE_OFFSET_EPSILON = 0.0005;
 const LOOK_PITCH_LIMIT = 1.45;
-const PRIMARY_UPPER_BODY_ACTION_ID = 1;
 
 export type ClientCreatePhase = "physics" | "network" | "ready";
 
@@ -55,7 +54,6 @@ export class GameClientApp {
   private lastReconcileReplayCount = 0;
   private reconcileCorrectionCount = 0;
   private reconcileHardSnapCount = 0;
-  private localUpperBodyActionNonce = 0;
   private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
   private lastAbilityCreateMessage = "Ready.";
   private lastQueuedHotbarSlot = 0;
@@ -195,12 +193,13 @@ export class GameClientApp {
     this.applyAbilityEvents();
 
     const pose = this.getRenderPose();
-    this.renderer.syncLocalPlayer(pose, seconds, {
-      grounded: this.physics.isGrounded(),
-      upperBodyAction: PRIMARY_UPPER_BODY_ACTION_ID,
-      upperBodyActionNonce: this.localUpperBodyActionNonce
+    this.renderer.syncLocalPlayer(pose, {
+      frameDeltaSeconds: seconds,
+      grounded: this.resolveLocalGroundedState()
     });
+    this.renderer.setLocalPlayerNid(this.network.getLocalPlayerNid());
     this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
+    this.renderer.applyAbilityUseEvents(this.network.consumeAbilityUseEvents());
     this.renderer.syncPlatforms(this.network.getPlatforms());
     this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
     this.renderer.syncProjectiles(this.network.getProjectiles(), seconds);
@@ -215,10 +214,9 @@ export class GameClientApp {
     const usePrimaryPressed =
       this.input.consumePrimaryActionTrigger() || this.consumeTestPrimaryActionTrigger();
     const usePrimaryHeld = this.input.isPrimaryActionHeld() || this.testPrimaryHeld;
-    if (usePrimaryPressed) {
-      this.localUpperBodyActionNonce = (this.localUpperBodyActionNonce + 1) & 0xffff;
+    if (usePrimaryPressed && this.getSelectedAbilityDefinition()?.melee) {
+      this.renderer.triggerLocalMeleePunch();
     }
-
     this.network.step(
       delta,
       movement,
@@ -389,12 +387,13 @@ export class GameClientApp {
         this.stepFixed(FIXED_STEP);
       }
       this.applyAbilityEvents();
-      this.renderer.syncLocalPlayer(this.getRenderPose(), FIXED_STEP, {
-        grounded: this.physics.isGrounded(),
-        upperBodyAction: PRIMARY_UPPER_BODY_ACTION_ID,
-        upperBodyActionNonce: this.localUpperBodyActionNonce
+      this.renderer.syncLocalPlayer(this.getRenderPose(), {
+        frameDeltaSeconds: FIXED_STEP,
+        grounded: this.resolveLocalGroundedState()
       });
+      this.renderer.setLocalPlayerNid(this.network.getLocalPlayerNid());
       this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
+      this.renderer.applyAbilityUseEvents(this.network.consumeAbilityUseEvents());
       this.renderer.syncPlatforms(this.network.getPlatforms());
       this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
       this.renderer.syncProjectiles(this.network.getProjectiles(), FIXED_STEP);
@@ -409,7 +408,7 @@ export class GameClientApp {
       const payload = {
         mode: this.network.getConnectionState(),
         pointerLock: document.pointerLockElement === this.canvas,
-        coordinateSystem: "right-handed; +x right, +y up, +z forward",
+        coordinateSystem: "right-handed; +x right, +y up, -z forward",
         player: {
           ...pose,
           nid: this.network.getLocalPlayerNid()
@@ -452,9 +451,7 @@ export class GameClientApp {
           pitch: p.pitch,
           serverTick: p.serverTick,
           grounded: p.grounded,
-          health: p.health,
-          upperBodyAction: p.upperBodyAction,
-          upperBodyActionNonce: p.upperBodyActionNonce
+          health: p.health
         })),
         localAbility: {
           selectedSlot,
@@ -641,6 +638,19 @@ export class GameClientApp {
     return (
       this.network.getAbilityById(abilityId)?.name ?? getAbilityDefinitionById(abilityId)?.name ?? "Empty"
     );
+  }
+
+  private resolveLocalGroundedState(): boolean {
+    if (this.isCspActive()) {
+      return this.physics.isGrounded();
+    }
+    return this.network.getLocalPlayerPose()?.grounded ?? this.physics.isGrounded();
+  }
+
+  private getSelectedAbilityDefinition() {
+    const selectedSlot = this.input.getSelectedHotbarSlot();
+    const abilityId = this.hotbarAbilityIds[selectedSlot] ?? ABILITY_ID_NONE;
+    return this.network.getAbilityById(abilityId) ?? getAbilityDefinitionById(abilityId);
   }
 
   private consumeTestPrimaryActionTrigger(): boolean {

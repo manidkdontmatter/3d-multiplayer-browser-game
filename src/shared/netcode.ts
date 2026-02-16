@@ -12,7 +12,8 @@ export enum NType {
   LoadoutStateMessage = 9,
   AbilityCreateResultMessage = 10,
   LoadoutCommand = 11,
-  TrainingDummyEntity = 12
+  TrainingDummyEntity = 12,
+  AbilityUseMessage = 13
 }
 
 export const inputCommandSchema = defineSchema({
@@ -55,9 +56,7 @@ export const playerEntitySchema = defineSchema({
   pitch: { type: Binary.Rotation32, interp: true },
   serverTick: Binary.UInt32,
   grounded: Binary.Boolean,
-  health: Binary.UInt8,
-  upperBodyAction: Binary.UInt8,
-  upperBodyActionNonce: Binary.UInt16
+  health: Binary.UInt8
 });
 
 export const identityMessageSchema = defineSchema({
@@ -149,6 +148,13 @@ export const abilityCreateResultMessageSchema = defineSchema({
   message: Binary.String
 });
 
+export const abilityUseMessageSchema = defineSchema({
+  ownerNid: Binary.UInt16,
+  abilityId: Binary.UInt16,
+  category: Binary.UInt8,
+  serverTick: Binary.UInt32
+});
+
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCreateCommand, abilityCreateCommandSchema);
@@ -162,6 +168,7 @@ ncontext.register(NType.TrainingDummyEntity, trainingDummyEntitySchema);
 ncontext.register(NType.AbilityDefinitionMessage, abilityDefinitionMessageSchema);
 ncontext.register(NType.LoadoutStateMessage, loadoutStateMessageSchema);
 ncontext.register(NType.AbilityCreateResultMessage, abilityCreateResultMessageSchema);
+ncontext.register(NType.AbilityUseMessage, abilityUseMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -209,8 +216,6 @@ export interface PlayerEntity {
   serverTick: number;
   grounded: boolean;
   health: number;
-  upperBodyAction: number;
-  upperBodyActionNonce: number;
 }
 
 export interface IdentityMessage {
@@ -311,4 +316,12 @@ export interface AbilityCreateResultMessage {
   success: boolean;
   createdAbilityId: number;
   message: string;
+}
+
+export interface AbilityUseMessage {
+  ntype: NType.AbilityUseMessage;
+  ownerNid: number;
+  abilityId: number;
+  category: number;
+  serverTick: number;
 }

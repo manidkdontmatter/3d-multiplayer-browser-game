@@ -7,16 +7,16 @@
 - Project target: production-grade TypeScript/Node.js 3D browser game.
 - Networking: nengi 2.0 patterns only (no nengi 1.x).
 - Rendering: Three.js. Physics: Rapier.
+- Humanoid runtime standards: VRM avatars + VRMA animations (no new non-canonical humanoid runtime formats unless user approves).
 
 ## Session Bootstrap
 
 - At session start, read in this order:
   1. `AGENTS.md`
   2. `docs-map.md` (if present)
-  3. `progress.md` (if present, before planning/coding)
-  4. `overview.md` (if present)
-  5. `vision.md` (if present)
-  6. Curated indexes: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` (when present)
+  3. `overview.md` (if present)
+  4. `vision.md` (if present)
+  5. Curated indexes: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` (when present)
 - Then load only task-relevant files in `docs/`; avoid bulk-reading vendored trees.
 
 ## Workflow and Tooling
@@ -30,6 +30,12 @@
 - Keep Node `>=20.19.x` (Vite requirement).
 - Validation defaults: `test:smoke` and `test:multiplayer`; never run them in parallel (ports `5173`/`9001`).
 - During active iteration, prefer fast checks first (`typecheck:*`, `test:smoke:fast`, `verify:quick`) and reserve full multiplayer suites for gates.
+- Humanoid asset ingestion tooling:
+  - `@pixiv/three-vrm`: runtime VRM support in Three.js.
+  - `@pixiv/three-vrm-animation`: runtime VRMA support in Three.js.
+  - `fbx2vrma-converter`: convert humanoid FBX animations (for example Mixamo) to VRMA.
+  - `tools/avatar-asset-pipeline/avatar-build.exe`: Windows CLI for humanoid FBX/GLB->VRM and normalization pipelines.
+- Use ingestion tooling first; avoid bespoke per-rig runtime retarget hacks.
 
 ## Architecture Rules
 
@@ -50,6 +56,10 @@
 - Challenge weak assumptions directly and propose better alternatives with tradeoffs.
 - Periodically sanity-check architecture for drift/debt.
 - Prefer high-quality existing solutions when justified; verify latest versions before package changes.
+- No stop-gap core systems: do not ship temporary compatibility hacks for foundational systems (animation, netcode, physics) when a production standard path exists.
+- For humanoid assets, prefer standards-first and offline normalization:
+  - ingest unknown-source humanoid assets into canonical VRM/VRMA outputs before runtime use;
+  - keep runtime animation logic focused on playback/state layering, not ad-hoc retarget fixes.
 
 ## UI and Feature Standards
 
@@ -70,12 +80,48 @@
 ## Memory and Documentation Rules
 
 - Memory write rule: when user says "remember" (or equivalent), or when adding memory proactively, persist it in `AGENTS.md`.
-- Memory consistency rule: every memory write/update must include immediate contradiction checks across `AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, and `progress.md`; resolve in the same pass and ask user only if ambiguity is real.
+- Memory consistency rule: every memory write/update must include immediate contradiction checks across `AGENTS.md`, `docs-map.md`, `overview.md`, and `vision.md`; resolve in the same pass and ask user only if ambiguity is real.
+- Treat Rapier init-params deprecation warning (`using deprecated parameters for the initialization function; pass a single object instead`) as non-actionable when it originates from Rapier internal self-usage rather than project code.
 - Project authorship rule: treat this repository as agent-authored for decision-making; default to full authority to refactor/replace code and structure when it improves production outcomes.
 - Structure policy: preserve current structure only when technically justified or explicitly constrained by user.
-- Ownership rule: treat `AGENTS.md`, `docs-map.md`, `overview.md`, `vision.md`, and `progress.md` as agent-managed working memory docs and improve/restructure freely when it increases execution quality.
+- Ownership rule: treat `AGENTS.md`, `docs-map.md`, `overview.md`, and `vision.md` as agent-managed working memory docs and improve/restructure freely when it increases execution quality.
 - Scope boundaries:
-  - `progress.md`: active priorities, recent verifications, blockers, handoff notes.
   - `overview.md`: canonical high-level architecture/workflows.
   - `vision.md`: product direction and experience/style pillars.
   - `docs-map.md`: markdown responsibilities and read order.
+- Current project memory (2026-02-16):
+  - Installed dependencies: `@pixiv/three-vrm`, `@pixiv/three-vrm-animation`, `fbx2vrma-converter`.
+  - Installed local tool: `tools/avatar-asset-pipeline/avatar-build.exe` (from infosia/avatar-asset-pipeline release).
+  - Tool origins / source URLs:
+    - `fbx2vrma-converter`: https://github.com/TK-256/fbx2vrma-converter (npm: https://www.npmjs.com/package/fbx2vrma-converter)
+    - `avatar-asset-pipeline`: https://github.com/infosia/avatar-asset-pipeline
+    - `avatar-build.exe` installed from: https://github.com/infosia/avatar-asset-pipeline/releases/download/v0.0.3/avatar-build.exe
+  - Use cases:
+    - Use `@pixiv/three-vrm` + `@pixiv/three-vrm-animation` when loading/playing canonical VRM/VRMA in runtime.
+    - Use `fbx2vrma-converter` to transform humanoid FBX animation assets into VRMA before runtime.
+    - Use `avatar-build.exe` for CLI normalization/conversion pipelines for humanoid FBX/GLB->VRM.
+  - Avoid reintroducing custom rig-specific track-name remapping as a long-term solution.
+  - User preference:
+    - If a system is fundamentally "frankenstein" and non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.
+    - When starting local terminals/processes for testing (especially game server/client dev terminals), always stop/close them when the task/check is complete.
+
+### Humanoid Conversion Playbook (Offline, Production Path)
+
+- Goal:
+  - Canonicalize runtime humanoid assets to `VRM` (avatars) and `VRMA` (animations) before game runtime.
+
+- Tool responsibilities:
+  - `fbx2vrma-converter`:
+    - Purpose: convert humanoid animation FBX -> VRMA.
+    - Use when: source is animation-only FBX (for example Mixamo clips).
+    - Example command:
+      - `npx fbx2vrma -i public/assets/animations/mixamo/Idle.fbx -o public/assets/animations/vrma/Idle.vrma --fbx2gltf node_modules/fbx2vrma-converter/FBX2glTF-windows-x64.exe --framerate 30`
+  - `tools/avatar-asset-pipeline/avatar-build.exe`:
+    - Purpose: convert/normalize humanoid model FBX/GLB -> VRM via JSON pipeline configs.
+    - Use when: source is a non-VRM humanoid avatar model that must become canonical VRM.
+    - Example command pattern:
+      - `tools/avatar-asset-pipeline/avatar-build.exe --pipeline <pipeline.json> --input_config <input.json> --output_config <output.json> --fbx2gltf <FBX2glTF.exe> -i <input.fbx|input.glb> -o <output.vrm> -v`
+
+- Operational rule:
+  - Prefer offline conversion jobs over runtime retargeting for shipping content.
+  - Runtime retargeting is fallback-only, not the default production path.

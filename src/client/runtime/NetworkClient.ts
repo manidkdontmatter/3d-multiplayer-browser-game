@@ -10,6 +10,7 @@ import {
   type AbilityDefinition
 } from "../../shared/index";
 import {
+  type AbilityUseMessage,
   NType,
   type AbilityCreateResultMessage,
   type AbilityDefinitionMessage,
@@ -26,7 +27,8 @@ import type {
   PlatformState,
   ProjectileState,
   RemotePlayerState,
-  TrainingDummyState
+  TrainingDummyState,
+  AbilityUseEvent
 } from "./types";
 
 export interface PendingInput {
@@ -127,6 +129,7 @@ export class NetworkClient {
   private readonly abilityDefinitions = new Map<number, AbilityDefinition>();
   private readonly pendingAbilityDefinitions = new Map<number, AbilityDefinition>();
   private readonly pendingAbilityCreateResults: AbilityCreateResult[] = [];
+  private readonly pendingAbilityUseEvents: AbilityUseEvent[] = [];
   private pendingLoadoutState: LoadoutState | null = null;
   private queuedAbilityCreateCommand: QueuedAbilityCreateCommand | null = null;
   private queuedLoadoutCommand: QueuedLoadoutCommand | null = null;
@@ -161,6 +164,7 @@ export class NetworkClient {
       this.lastSentYaw = 0;
       this.hasSentYaw = false;
       this.pendingAbilityCreateResults.length = 0;
+      this.pendingAbilityUseEvents.length = 0;
       this.pendingAbilityDefinitions.clear();
       this.pendingLoadoutState = null;
       this.queuedAbilityCreateCommand = null;
@@ -322,6 +326,15 @@ export class NetworkClient {
     };
   }
 
+  public consumeAbilityUseEvents(): AbilityUseEvent[] {
+    if (this.pendingAbilityUseEvents.length === 0) {
+      return [];
+    }
+    const events = this.pendingAbilityUseEvents.slice();
+    this.pendingAbilityUseEvents.length = 0;
+    return events;
+  }
+
   public getAbilityCatalog(): AbilityDefinition[] {
     return Array.from(this.abilityDefinitions.values()).sort((a, b) => a.id - b.id);
   }
@@ -470,6 +483,7 @@ export class NetworkClient {
         | AbilityDefinitionMessage
         | LoadoutStateMessage
         | AbilityCreateResultMessage
+        | AbilityUseMessage
         | TrainingDummyEntity
         | undefined;
       if (message?.ntype === NType.IdentityMessage) {
@@ -499,6 +513,19 @@ export class NetworkClient {
           success: message.success,
           createdAbilityId: message.createdAbilityId,
           message: message.message
+        });
+        continue;
+      }
+      if (message?.ntype === NType.AbilityUseMessage) {
+        const category = abilityCategoryFromWireValue(message.category);
+        if (!category) {
+          continue;
+        }
+        this.pendingAbilityUseEvents.push({
+          ownerNid: this.clampUnsignedInt(message.ownerNid, 0xffff),
+          abilityId: this.clampUnsignedInt(message.abilityId, 0xffff),
+          category,
+          serverTick: this.clampUnsignedInt(message.serverTick, 0xffffffff)
         });
       }
     }
@@ -825,8 +852,6 @@ export class NetworkClient {
     const serverTick = raw.serverTick;
     const grounded = raw.grounded;
     const health = raw.health;
-    const upperBodyAction = raw.upperBodyAction;
-    const upperBodyActionNonce = raw.upperBodyActionNonce;
 
     if (
       typeof nid !== "number" ||
@@ -849,9 +874,7 @@ export class NetworkClient {
       pitch,
       serverTick,
       grounded: typeof grounded === "boolean" ? grounded : true,
-      health: typeof health === "number" ? health : 100,
-      upperBodyAction: typeof upperBodyAction === "number" ? upperBodyAction : 0,
-      upperBodyActionNonce: typeof upperBodyActionNonce === "number" ? upperBodyActionNonce : 0
+      health: typeof health === "number" ? health : 100
     };
   }
 

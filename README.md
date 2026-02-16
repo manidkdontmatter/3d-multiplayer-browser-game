@@ -48,7 +48,6 @@ Authoritative server/browser-client scaffold using:
 
 - `overview.md`: canonical summary of what the project is and how it works.
 - `vision.md`: product/gameplay/aesthetic direction and long-range goals.
-- `progress.md`: active status, TODOs, and handoff notes.
 - `AGENTS.md`: persistent agent operating instructions/memory.
 - `docs-map.md`: role/read-order map for project Markdown files.
 - `.codex/config.toml`: project Codex defaults/profiles (`default`: no approval prompts with workspace-write sandbox, `--profile yolo`: danger-full-access).

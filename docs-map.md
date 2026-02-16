@@ -6,11 +6,10 @@ This file defines the role of each top-level Markdown file so context stays clea
 
 1. `AGENTS.md` (operating instructions + durable memory rules)
 2. `docs-map.md` (this file; role/read-order and conflict policy)
-3. `progress.md` (active status/TODO/handoff)
-4. `overview.md` (canonical system/architecture summary)
-5. `vision.md` (product/game direction)
-6. `docs/*-index.md` (curated technical entry points)
-7. Task-targeted files in `docs/` only as needed (avoid bulk-loading vendored docs trees by default)
+3. `overview.md` (canonical system/architecture summary)
+4. `vision.md` (product/game direction)
+5. `docs/*-index.md` (curated technical entry points)
+6. Task-targeted files in `docs/` only as needed (avoid bulk-loading vendored docs trees by default)
 
 ## File Responsibilities
 
@@ -18,12 +17,6 @@ This file defines the role of each top-level Markdown file so context stays clea
   - What it is: persistent instructions for how the agent should operate on this repo.
   - Include: workflow rules, tooling/runtime constraints, memory behavior, decision heuristics.
   - Exclude: long-form project narrative/history and temporary task status.
-
-- `progress.md`
-  - What it is: short-lived working memory for current status and near-term TODOs.
-  - Include: recent verifications, active priorities, current blockers, handoff notes.
-  - Exclude: timeless architecture explanations and permanent operating policy.
-  - Hygiene: keep it short and rolling; prune stale entries aggressively instead of preserving a full historical log.
 
 - `overview.md`
   - What it is: canonical high-level description of what the project is and how it works.
@@ -54,6 +47,6 @@ If two docs disagree, resolve in this order:
 2. `AGENTS.md` for agent operating behavior/memory policy.
 3. `overview.md` for architecture and system behavior.
 4. `vision.md` for product direction.
-5. `progress.md` for latest status/TODO context.
+5. If needed, the latest user instruction in the active thread for current status/TODO context.
 
 After deciding, update the conflicting files so the contradiction is removed instead of carried forward.

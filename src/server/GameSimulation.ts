@@ -27,8 +27,6 @@ import {
   PLAYER_MAX_HEALTH,
   SERVER_TICK_SECONDS,
   samplePlatformTransform,
-  PLAYER_SPRINT_SPEED,
-  PLAYER_WALK_SPEED,
   STATIC_WORLD_BLOCKS,
   toPlatformLocal,
   stepHorizontalMovement
@@ -70,8 +68,6 @@ type PlayerEntity = {
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
   lastPrimaryFireAtSeconds: number;
-  upperBodyAction: number;
-  upperBodyActionNonce: number;
   lastProcessedSequence: number;
   primaryHeld: boolean;
   lastAbilitySubmitNonce: number;
@@ -250,8 +246,6 @@ export class GameSimulation {
       activeHotbarSlot: this.sanitizeHotbarSlot(loaded?.activeHotbarSlot ?? 0, 0),
       hotbarAbilityIds: this.createInitialHotbar(loaded?.hotbarAbilityIds),
       lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
-      upperBodyAction: 0,
-      upperBodyActionNonce: 0,
       lastProcessedSequence: 0,
       primaryHeld: false,
       lastAbilitySubmitNonce: 0,
@@ -411,15 +405,14 @@ export class GameSimulation {
     }
 
     player.yaw = normalizeYaw(player.yaw + accumulatedYawDelta);
-    const speedScale = mergedSprint ? PLAYER_SPRINT_SPEED / PLAYER_WALK_SPEED : 1;
     const horizontal = stepHorizontalMovement(
       { vx: player.vx, vz: player.vz },
-      { forward: mergedForward, strafe: mergedStrafe, sprint: false, yaw: player.yaw },
+      { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw },
       player.grounded,
       SERVER_TICK_SECONDS
     );
-    player.vx = horizontal.vx * speedScale;
-    player.vz = horizontal.vz * speedScale;
+    player.vx = horizontal.vx;
+    player.vz = horizontal.vz;
     player.pitch = Math.max(-1.45, Math.min(1.45, mergedPitch));
     player.primaryHeld = mergedUsePrimaryHeld;
     if (queuedUsePrimaryPressed) {
@@ -544,6 +537,18 @@ export class GameSimulation {
     }
     this.dirtyCharacterAccountIds.clear();
     this.dirtyAbilityStateAccountIds.clear();
+  }
+
+  public getRuntimeStats(): {
+    onlinePlayers: number;
+    activeProjectiles: number;
+    pendingOfflineSnapshots: number;
+  } {
+    return {
+      onlinePlayers: this.playersByUserId.size,
+      activeProjectiles: this.projectilesByNid.size,
+      pendingOfflineSnapshots: this.pendingOfflineSnapshots.size
+    };
   }
 
   private createStaticWorldColliders(): void {
@@ -973,6 +978,20 @@ export class GameSimulation {
     });
   }
 
+  private broadcastAbilityUseMessage(player: PlayerEntity, ability: AbilityDefinition): void {
+    const abilityId = Math.max(0, Math.min(0xffff, Math.floor(ability.id)));
+    const category = abilityCategoryToWireValue(ability.category);
+    for (const user of this.usersById.values()) {
+      user.queueMessage({
+        ntype: NType.AbilityUseMessage,
+        ownerNid: player.nid,
+        abilityId,
+        category,
+        serverTick: this.tickNumber
+      });
+    }
+  }
+
   private removeRuntimeAbilitiesByOwner(ownerNid: number): void {
     for (const [abilityId, abilityEntry] of this.runtimeAbilitiesById) {
       if (abilityEntry.ownerNid === ownerNid) {
@@ -1127,10 +1146,8 @@ export class GameSimulation {
     if (secondsSinceLastFire < activeCooldownSeconds) {
       return;
     }
-
     player.lastPrimaryFireAtSeconds = this.elapsedSeconds;
-    player.upperBodyAction = 1;
-    player.upperBodyActionNonce = (player.upperBodyActionNonce + 1) & 0xffff;
+    this.broadcastAbilityUseMessage(player, ability);
 
     if (projectileProfile) {
       this.spawnProjectileAbility(player, projectileProfile);

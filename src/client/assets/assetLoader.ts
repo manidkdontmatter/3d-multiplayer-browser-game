@@ -1,7 +1,8 @@
 import { AudioLoader, FileLoader, Group, LoadingManager, Texture, TextureLoader } from "three";
-import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { VRMLoaderPlugin } from "@pixiv/three-vrm";
+import { VRMAnimationLoaderPlugin } from "@pixiv/three-vrm-animation";
 import type { AssetDefinition } from "./assetManifest";
 
 export type LoadedAsset = ArrayBuffer | AudioBuffer | Texture | GLTF | Group;
@@ -60,16 +61,15 @@ export async function preloadAssets(
   const textureLoader = new TextureLoader(manager);
   const audioLoader = new AudioLoader(manager);
   const gltfLoader = new GLTFLoader(manager);
-  const fbxLoader = new FBXLoader(manager);
-
+  gltfLoader.register((parser) => new VRMLoaderPlugin(parser));
+  gltfLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
   let loadedCount = 0;
   for (const asset of preloadList) {
     const loadedAsset = await loadSingleAsset(asset, {
       manager,
       textureLoader,
       audioLoader,
-      gltfLoader,
-      fbxLoader
+      gltfLoader
     });
     assetCache.set(asset.id, loadedAsset);
     loadedCount += 1;
@@ -82,7 +82,6 @@ interface LoaderSet {
   textureLoader: TextureLoader;
   audioLoader: AudioLoader;
   gltfLoader: GLTFLoader;
-  fbxLoader: FBXLoader;
 }
 
 async function loadSingleAsset(asset: AssetDefinition, loaders: LoaderSet): Promise<LoadedAsset> {
@@ -90,8 +89,8 @@ async function loadSingleAsset(asset: AssetDefinition, loaders: LoaderSet): Prom
     switch (asset.kind) {
       case "gltf":
         return await loaders.gltfLoader.loadAsync(asset.url);
-      case "fbx":
-        return await loaders.fbxLoader.loadAsync(asset.url);
+      case "vrma":
+        return await loaders.gltfLoader.loadAsync(asset.url);
       case "texture":
         return await loaders.textureLoader.loadAsync(asset.url);
       case "audio":
