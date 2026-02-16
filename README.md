@@ -24,6 +24,10 @@ Authoritative server/browser-client scaffold using:
 - `npm run test:multiplayer` validates two-client replication (client A movement must be visible on client B).
   - Also asserts sprint, jump, and disconnect/reconnect behavior.
 - `npm run test:multiplayer:quick` runs a faster multiplayer pass (core movement/replication only; sprint/jump/reconnect skipped).
+- `npm run test:multiplayer:fast` runs the quickest multiplayer iteration pass using existing services.
+  - Requires local `dev:server` on `ws://127.0.0.1:9001` and `dev:client` on `http://127.0.0.1:5173`.
+  - Reuses running server/client instead of starting new processes.
+  - Runs movement/replication assertions only (skips primary-action/sprint/jump/reconnect checks).
 - `npm run test:multiplayer:csp` runs the same multiplayer suite with `E2E_CSP=1` (CSP-enabled client mode).
 
 ## Runtime

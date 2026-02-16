@@ -8,6 +8,8 @@ import { chromium } from "playwright";
 const ROOT = process.cwd();
 const OUTPUT_DIR = path.join(ROOT, "output", "multiplayer");
 const CLIENT_ORIGIN = "http://127.0.0.1:5173";
+const USE_EXISTING_SERVER = process.env.E2E_USE_EXISTING_SERVER === "1";
+const EXISTING_SERVER_URL = process.env.E2E_SERVER_URL;
 const E2E_NETSIM_ENABLED = process.env.E2E_NETSIM === "1";
 const E2E_ENABLE_SPRINT_TEST = process.env.E2E_ENABLE_SPRINT_TEST !== "0";
 const E2E_ENABLE_JUMP_TEST = process.env.E2E_ENABLE_JUMP_TEST !== "0";
@@ -98,6 +100,25 @@ async function getFreePort() {
     });
     server.on("error", reject);
   });
+}
+
+function parseServerPort(serverUrl) {
+  try {
+    const parsed = new URL(serverUrl);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return null;
+    }
+    if (!parsed.hostname) {
+      return null;
+    }
+    const port = Number(parsed.port || (parsed.protocol === "wss:" ? "443" : "80"));
+    if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+      return null;
+    }
+    return { host: parsed.hostname, port };
+  } catch {
+    return null;
+  }
 }
 
 function startProcess(name, command, args, envOverrides = {}) {
@@ -315,8 +336,23 @@ async function main() {
     process.env.SERVER_TICK_LOG = "0";
   }
   const managedProcesses = [];
-  const serverPort = await getFreePort();
-  const serverUrl = `ws://127.0.0.1:${serverPort}`;
+  let serverUrl = "";
+  let serverPort = 0;
+  if (USE_EXISTING_SERVER) {
+    serverUrl = EXISTING_SERVER_URL?.trim() || "ws://127.0.0.1:9001";
+    const target = parseServerPort(serverUrl);
+    if (!target) {
+      throw new Error(`Invalid E2E_SERVER_URL: ${serverUrl}`);
+    }
+    const existingServerUp = await isPortOpen(target.host, target.port);
+    if (!existingServerUp) {
+      throw new Error(`E2E_USE_EXISTING_SERVER=1 but no server is reachable at ${serverUrl}`);
+    }
+    serverPort = target.port;
+  } else {
+    serverPort = await getFreePort();
+    serverUrl = `ws://127.0.0.1:${serverPort}`;
+  }
   const clientParams = new URLSearchParams({
     csp: CLIENT_CSP_QUERY,
     server: serverUrl
@@ -330,12 +366,16 @@ async function main() {
   const clientUrl = `${CLIENT_ORIGIN}?${clientParams.toString()}`;
   const clientAlreadyRunning = await isPortOpen("127.0.0.1", 5173);
 
-  const server = startProcess("server", "npm", ["run", "dev:server"], {
-    SERVER_PORT: String(serverPort),
-    SERVER_TICK_LOG: process.env.SERVER_TICK_LOG ?? "0"
-  });
-  managedProcesses.push(server);
-  await waitForPortOpen("127.0.0.1", serverPort, SERVER_START_TIMEOUT_MS, "server");
+  if (!USE_EXISTING_SERVER) {
+    const server = startProcess("server", "npm", ["run", "dev:server"], {
+      SERVER_PORT: String(serverPort),
+      SERVER_TICK_LOG: process.env.SERVER_TICK_LOG ?? "0"
+    });
+    managedProcesses.push(server);
+    await waitForPortOpen("127.0.0.1", serverPort, SERVER_START_TIMEOUT_MS, "server");
+  } else {
+    console.log(`[multi] using existing server at ${serverUrl}`);
+  }
 
   if (!clientAlreadyRunning) {
     const client = startProcess("client", "npm", [
