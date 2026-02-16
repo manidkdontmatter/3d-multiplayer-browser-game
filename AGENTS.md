@@ -104,6 +104,7 @@
   - User preference:
     - If a system is fundamentally "frankenstein" and non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.
     - When starting local terminals/processes for testing (especially game server/client dev terminals), always stop/close them when the task/check is complete.
+    - Before making changes, do a quick sanity pass to ensure the planned work is logically necessary and technically coherent, then execute.
 
 ### Humanoid Conversion Playbook (Offline, Production Path)
 

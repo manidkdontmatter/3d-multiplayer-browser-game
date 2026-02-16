@@ -520,15 +520,6 @@ async function main() {
         MIN_REQUIRED_REMOTE_MOVEMENT,
         REMOTE_MOVEMENT_TIMEOUT_MS
       );
-      if ((remoteMove.distance ?? 0) < MIN_REQUIRED_REMOTE_MOVEMENT) {
-        remoteMove = await waitForRemoteMovement(
-          pageB,
-          remoteBeforeOnB,
-          aNid,
-          MIN_REQUIRED_REMOTE_MOVEMENT,
-          REMOTE_MOVEMENT_TIMEOUT_MS
-        );
-      }
     } finally {
       await pageA.evaluate(() => {
         window.set_test_movement(null);

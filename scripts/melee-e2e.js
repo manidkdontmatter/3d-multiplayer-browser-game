@@ -210,7 +210,6 @@ async function main() {
       await page.evaluate(() => {
         window.advanceTime?.(80);
       });
-      await delay(80);
     }
     await page.evaluate(() => {
       window.set_test_primary_hold?.(false);
