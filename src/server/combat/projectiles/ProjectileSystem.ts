@@ -9,6 +9,7 @@ const PROJECTILE_MIN_RADIUS = 0.005;
 const PROJECTILE_RADIUS_CACHE_SCALE = 1000;
 const PROJECTILE_SPEED_EPSILON = 1e-6;
 const PROJECTILE_DEFAULT_MAX_RANGE = 260;
+const PROJECTILE_CONTACT_EPSILON = 0.002;
 
 type ProjectileEntity = {
   nid: number;
@@ -26,6 +27,13 @@ type ProjectileEntity = {
   damage: number;
   ttlSeconds: number;
   remainingRange: number;
+  gravity: number;
+  drag: number;
+  maxSpeed: number;
+  minSpeed: number;
+  remainingPierces: number;
+  despawnOnDamageableHit: boolean;
+  despawnOnWorldHit: boolean;
 };
 
 export interface ProjectileSpawnRequest {
@@ -41,6 +49,13 @@ export interface ProjectileSpawnRequest {
   readonly damage: number;
   readonly lifetimeSeconds: number;
   readonly maxRange?: number;
+  readonly gravity?: number;
+  readonly drag?: number;
+  readonly maxSpeed?: number;
+  readonly minSpeed?: number;
+  readonly pierceCount?: number;
+  readonly despawnOnDamageableHit?: boolean;
+  readonly despawnOnWorldHit?: boolean;
 }
 
 export interface ProjectileSystemOptions {
@@ -77,6 +92,15 @@ export class ProjectileSystem {
     projectile.damage = request.damage;
     projectile.ttlSeconds = request.lifetimeSeconds;
     projectile.remainingRange = this.resolveMaxRange(request.maxRange);
+    projectile.gravity = this.resolveOptionalNumber(request.gravity, 0);
+    projectile.drag = Math.max(0, this.resolveOptionalNumber(request.drag, 0));
+    projectile.maxSpeed = Math.max(0, this.resolveOptionalNumber(request.maxSpeed, Number.POSITIVE_INFINITY));
+    projectile.minSpeed = Math.max(0, this.resolveOptionalNumber(request.minSpeed, 0));
+    projectile.remainingPierces = Math.max(0, Math.floor(this.resolveOptionalNumber(request.pierceCount, 0)));
+    projectile.despawnOnDamageableHit =
+      typeof request.despawnOnDamageableHit === "boolean" ? request.despawnOnDamageableHit : true;
+    projectile.despawnOnWorldHit =
+      typeof request.despawnOnWorldHit === "boolean" ? request.despawnOnWorldHit : true;
     this.options.spatialChannel.addEntity(projectile);
     this.projectilesByNid.set(projectile.nid, projectile);
   }
@@ -89,8 +113,9 @@ export class ProjectileSystem {
         continue;
       }
 
+      this.integrateMotion(projectile, deltaSeconds);
       const speed = Math.hypot(projectile.vx, projectile.vy, projectile.vz);
-      if (speed <= PROJECTILE_SPEED_EPSILON) {
+      if (speed <= PROJECTILE_SPEED_EPSILON || speed < projectile.minSpeed) {
         this.removeProjectile(nid, projectile);
         continue;
       }
@@ -108,17 +133,41 @@ export class ProjectileSystem {
         continue;
       }
       if (collision) {
+        projectile.x += projectile.vx * traveledTime;
+        projectile.y += projectile.vy * traveledTime;
+        projectile.z += projectile.vz * traveledTime;
+        projectile.serverTick = this.options.getTickNumber();
         if (collision.target) {
           this.options.applyDamage(collision.target, projectile.damage);
+          const canPierceTarget = projectile.remainingPierces > 0;
+          if (canPierceTarget) {
+            projectile.remainingPierces -= 1;
+            projectile.x += projectile.vx * PROJECTILE_CONTACT_EPSILON;
+            projectile.y += projectile.vy * PROJECTILE_CONTACT_EPSILON;
+            projectile.z += projectile.vz * PROJECTILE_CONTACT_EPSILON;
+            continue;
+          }
+          if (!projectile.despawnOnDamageableHit) {
+            projectile.x += projectile.vx * PROJECTILE_CONTACT_EPSILON;
+            projectile.y += projectile.vy * PROJECTILE_CONTACT_EPSILON;
+            projectile.z += projectile.vz * PROJECTILE_CONTACT_EPSILON;
+            continue;
+          }
+          this.removeProjectile(nid, projectile);
+          continue;
         }
-        this.removeProjectile(nid, projectile);
-        continue;
+        if (projectile.despawnOnWorldHit) {
+          this.removeProjectile(nid, projectile);
+          continue;
+        }
       }
 
-      projectile.x += projectile.vx * traveledTime;
-      projectile.y += projectile.vy * traveledTime;
-      projectile.z += projectile.vz * traveledTime;
-      projectile.serverTick = this.options.getTickNumber();
+      if (!collision) {
+        projectile.x += projectile.vx * traveledTime;
+        projectile.y += projectile.vy * traveledTime;
+        projectile.z += projectile.vz * traveledTime;
+        projectile.serverTick = this.options.getTickNumber();
+      }
     }
   }
 
@@ -139,6 +188,13 @@ export class ProjectileSystem {
       return PROJECTILE_DEFAULT_MAX_RANGE;
     }
     return Math.max(0, rawMaxRange);
+  }
+
+  private resolveOptionalNumber(rawValue: number | undefined, fallback: number): number {
+    if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) {
+      return fallback;
+    }
+    return rawValue;
   }
 
   private resolveProjectileMaxTravelTime(
@@ -185,6 +241,27 @@ export class ProjectileSystem {
     };
   }
 
+  private integrateMotion(projectile: ProjectileEntity, deltaSeconds: number): void {
+    if (projectile.gravity !== 0) {
+      projectile.vy += projectile.gravity * deltaSeconds;
+    }
+    if (projectile.drag > 0) {
+      const dragScale = Math.max(0, 1 - projectile.drag * deltaSeconds);
+      projectile.vx *= dragScale;
+      projectile.vy *= dragScale;
+      projectile.vz *= dragScale;
+    }
+    if (Number.isFinite(projectile.maxSpeed) && projectile.maxSpeed > 0) {
+      const speed = Math.hypot(projectile.vx, projectile.vy, projectile.vz);
+      if (speed > projectile.maxSpeed && speed > PROJECTILE_SPEED_EPSILON) {
+        const scale = projectile.maxSpeed / speed;
+        projectile.vx *= scale;
+        projectile.vy *= scale;
+        projectile.vz *= scale;
+      }
+    }
+  }
+
   private getProjectileCastShape(radius: number): RAPIER.Ball {
     const clampedRadius = Math.max(PROJECTILE_MIN_RADIUS, radius);
     const cacheKey = Math.max(1, Math.round(clampedRadius * PROJECTILE_RADIUS_CACHE_SCALE));
@@ -225,6 +302,13 @@ export class ProjectileSystem {
     projectile.damage = 0;
     projectile.ttlSeconds = 0;
     projectile.remainingRange = 0;
+    projectile.gravity = 0;
+    projectile.drag = 0;
+    projectile.maxSpeed = 0;
+    projectile.minSpeed = 0;
+    projectile.remainingPierces = 0;
+    projectile.despawnOnDamageableHit = true;
+    projectile.despawnOnWorldHit = true;
     return projectile;
   }
 
@@ -245,6 +329,13 @@ export class ProjectileSystem {
     projectile.damage = 0;
     projectile.ttlSeconds = 0;
     projectile.remainingRange = 0;
+    projectile.gravity = 0;
+    projectile.drag = 0;
+    projectile.maxSpeed = 0;
+    projectile.minSpeed = 0;
+    projectile.remainingPierces = 0;
+    projectile.despawnOnDamageableHit = true;
+    projectile.despawnOnWorldHit = true;
     this.projectilePool.push(projectile);
   }
 
@@ -264,8 +355,14 @@ export class ProjectileSystem {
       radius: 0,
       damage: 0,
       ttlSeconds: 0,
-      remainingRange: 0
+      remainingRange: 0,
+      gravity: 0,
+      drag: 0,
+      maxSpeed: 0,
+      minSpeed: 0,
+      remainingPierces: 0,
+      despawnOnDamageableHit: true,
+      despawnOnWorldHit: true
     };
   }
 }
-

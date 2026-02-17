@@ -19,8 +19,17 @@ export interface ProjectileAbilityProfile {
   speed: number;
   damage: number;
   radius: number;
+  diameter?: number;
   cooldownSeconds: number;
   lifetimeSeconds: number;
+  maxRange?: number;
+  gravity?: number;
+  drag?: number;
+  maxSpeed?: number;
+  minSpeed?: number;
+  pierceCount?: number;
+  despawnOnDamageableHit?: boolean;
+  despawnOnWorldHit?: boolean;
   spawnForwardOffset: number;
   spawnVerticalOffset: number;
 }
@@ -270,6 +279,89 @@ export function createAbilityDefinitionFromDraft(
     attributes: normalized.attributes,
     projectile: projectileProfile,
     melee: meleeProfile
+  };
+}
+
+export interface ResolvedProjectileProfile {
+  kind: number;
+  speed: number;
+  damage: number;
+  radius: number;
+  diameter: number;
+  cooldownSeconds: number;
+  lifetimeSeconds: number;
+  maxRange: number;
+  gravity: number;
+  drag: number;
+  maxSpeed: number;
+  minSpeed: number;
+  pierceCount: number;
+  despawnOnDamageableHit: boolean;
+  despawnOnWorldHit: boolean;
+  spawnForwardOffset: number;
+  spawnVerticalOffset: number;
+}
+
+export function resolveProjectileProfile(profile: ProjectileAbilityProfile): ResolvedProjectileProfile {
+  const speed = clampNumber(profile.speed, 0, 160);
+  const radiusFromDiameter =
+    typeof profile.diameter === "number" && Number.isFinite(profile.diameter)
+      ? Math.max(0, profile.diameter * 0.5)
+      : 0;
+  const radius = clampNumber(Math.max(profile.radius, radiusFromDiameter), 0.01, 6);
+  const lifetimeSeconds = clampNumber(profile.lifetimeSeconds, 0.05, 20);
+  const maxRangeFromLifetime = speed * lifetimeSeconds;
+  const maxRange = clampNumber(
+    typeof profile.maxRange === "number" && Number.isFinite(profile.maxRange)
+      ? profile.maxRange
+      : maxRangeFromLifetime,
+    0,
+    1000
+  );
+  const drag = clampNumber(
+    typeof profile.drag === "number" && Number.isFinite(profile.drag) ? profile.drag : 0,
+    0,
+    60
+  );
+  const maxSpeed = clampNumber(
+    typeof profile.maxSpeed === "number" && Number.isFinite(profile.maxSpeed)
+      ? profile.maxSpeed
+      : speed,
+    0,
+    160
+  );
+  const minSpeed = clampNumber(
+    typeof profile.minSpeed === "number" && Number.isFinite(profile.minSpeed)
+      ? profile.minSpeed
+      : 0,
+    0,
+    maxSpeed
+  );
+  return {
+    kind: Math.max(0, Math.floor(profile.kind)),
+    speed,
+    damage: clampNumber(profile.damage, 0, 5000),
+    radius,
+    diameter: radius * 2,
+    cooldownSeconds: clampNumber(profile.cooldownSeconds, 0, 20),
+    lifetimeSeconds,
+    maxRange,
+    gravity:
+      typeof profile.gravity === "number" && Number.isFinite(profile.gravity)
+        ? clampNumber(profile.gravity, -200, 200)
+        : 0,
+    drag,
+    maxSpeed,
+    minSpeed,
+    pierceCount:
+      typeof profile.pierceCount === "number" && Number.isFinite(profile.pierceCount)
+        ? Math.max(0, Math.floor(profile.pierceCount))
+        : 0,
+    despawnOnDamageableHit:
+      typeof profile.despawnOnDamageableHit === "boolean" ? profile.despawnOnDamageableHit : true,
+    despawnOnWorldHit: typeof profile.despawnOnWorldHit === "boolean" ? profile.despawnOnWorldHit : true,
+    spawnForwardOffset: clampNumber(profile.spawnForwardOffset, -8, 8),
+    spawnVerticalOffset: clampNumber(profile.spawnVerticalOffset, -8, 8)
   };
 }
 

@@ -1,5 +1,6 @@
 import { clampHotbarSlotIndex } from "../../../shared/index";
 import type { AbilityDefinition } from "../../../shared/index";
+import { resolveProjectileProfile } from "../../../shared/index";
 
 export interface AbilityExecutionPlayer {
   nid: number;
@@ -30,6 +31,13 @@ export interface AbilityExecutionSystemOptions<TPlayer extends AbilityExecutionP
     damage: number;
     lifetimeSeconds: number;
     maxRange: number;
+    gravity: number;
+    drag: number;
+    maxSpeed: number;
+    minSpeed: number;
+    pierceCount: number;
+    despawnOnDamageableHit: boolean;
+    despawnOnWorldHit: boolean;
   }) => void;
   readonly applyMeleeHit: (player: TPlayer, meleeProfile: NonNullable<AbilityDefinition["melee"]>) => void;
 }
@@ -73,30 +81,37 @@ export class AbilityExecutionSystem<TPlayer extends AbilityExecutionPlayer> {
     player: TPlayer,
     projectileProfile: NonNullable<AbilityDefinition["projectile"]>
   ): void {
+    const resolved = resolveProjectileProfile(projectileProfile);
     const direction = this.computeViewDirection(player.yaw, player.pitch);
     const dirX = direction.x;
     const dirY = direction.y;
     const dirZ = direction.z;
 
-    const spawnX = player.x + dirX * projectileProfile.spawnForwardOffset;
+    const spawnX = player.x + dirX * resolved.spawnForwardOffset;
     const spawnY =
-      player.y + projectileProfile.spawnVerticalOffset + dirY * projectileProfile.spawnForwardOffset;
-    const spawnZ = player.z + dirZ * projectileProfile.spawnForwardOffset;
+      player.y + resolved.spawnVerticalOffset + dirY * resolved.spawnForwardOffset;
+    const spawnZ = player.z + dirZ * resolved.spawnForwardOffset;
 
     this.options.spawnProjectile({
       ownerNid: player.nid,
-      kind: projectileProfile.kind,
+      kind: resolved.kind,
       x: spawnX,
       y: spawnY,
       z: spawnZ,
-      vx: dirX * projectileProfile.speed,
-      vy: dirY * projectileProfile.speed,
-      vz: dirZ * projectileProfile.speed,
-      radius: projectileProfile.radius,
-      damage: projectileProfile.damage,
-      lifetimeSeconds: projectileProfile.lifetimeSeconds,
-      // Per-projectile range is resolved at spawn time instead of a shared mutable global.
-      maxRange: Math.max(0, projectileProfile.speed * projectileProfile.lifetimeSeconds)
+      vx: dirX * resolved.speed,
+      vy: dirY * resolved.speed,
+      vz: dirZ * resolved.speed,
+      radius: resolved.radius,
+      damage: resolved.damage,
+      lifetimeSeconds: resolved.lifetimeSeconds,
+      maxRange: resolved.maxRange,
+      gravity: resolved.gravity,
+      drag: resolved.drag,
+      maxSpeed: resolved.maxSpeed,
+      minSpeed: resolved.minSpeed,
+      pierceCount: resolved.pierceCount,
+      despawnOnDamageableHit: resolved.despawnOnDamageableHit,
+      despawnOnWorldHit: resolved.despawnOnWorldHit
     });
   }
 
