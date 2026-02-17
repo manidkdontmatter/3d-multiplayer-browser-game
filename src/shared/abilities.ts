@@ -19,7 +19,6 @@ export interface ProjectileAbilityProfile {
   speed: number;
   damage: number;
   radius: number;
-  diameter?: number;
   cooldownSeconds: number;
   lifetimeSeconds: number;
   maxRange?: number;
@@ -287,7 +286,6 @@ export interface ResolvedProjectileProfile {
   speed: number;
   damage: number;
   radius: number;
-  diameter: number;
   cooldownSeconds: number;
   lifetimeSeconds: number;
   maxRange: number;
@@ -304,11 +302,7 @@ export interface ResolvedProjectileProfile {
 
 export function resolveProjectileProfile(profile: ProjectileAbilityProfile): ResolvedProjectileProfile {
   const speed = clampNumber(profile.speed, 0, 160);
-  const radiusFromDiameter =
-    typeof profile.diameter === "number" && Number.isFinite(profile.diameter)
-      ? Math.max(0, profile.diameter * 0.5)
-      : 0;
-  const radius = clampNumber(Math.max(profile.radius, radiusFromDiameter), 0.01, 6);
+  const radius = clampNumber(profile.radius, 0.01, 6);
   const lifetimeSeconds = clampNumber(profile.lifetimeSeconds, 0.05, 20);
   const maxRangeFromLifetime = speed * lifetimeSeconds;
   const maxRange = clampNumber(
@@ -342,7 +336,6 @@ export function resolveProjectileProfile(profile: ProjectileAbilityProfile): Res
     speed,
     damage: clampNumber(profile.damage, 0, 5000),
     radius,
-    diameter: radius * 2,
     cooldownSeconds: clampNumber(profile.cooldownSeconds, 0, 20),
     lifetimeSeconds,
     maxRange,
