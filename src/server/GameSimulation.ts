@@ -9,7 +9,6 @@ import {
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
   encodeAbilityAttributeMask,
-  GRAVITY,
   getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
   NType,
@@ -20,7 +19,6 @@ import {
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
-  PLAYER_GROUND_STICK_VELOCITY,
   PLAYER_JUMP_VELOCITY,
   PLAYER_MAX_HEALTH,
   SERVER_TICK_SECONDS,
@@ -43,6 +41,7 @@ import {
   type CombatTarget
 } from "./combat/damage/DamageSystem";
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
+import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 
 type UserLike = {
   id: number;
@@ -144,6 +143,7 @@ export class GameSimulation {
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly damageSystem: DamageSystem;
   private readonly projectileSystem: ProjectileSystem;
+  private readonly playerMovementSystem: PlayerMovementSystem<PlayerEntity>;
   private elapsedSeconds = 0;
   private tickNumber = 0;
 
@@ -176,6 +176,26 @@ export class GameSimulation {
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
+    });
+    this.playerMovementSystem = new PlayerMovementSystem<PlayerEntity>({
+      characterController: this.characterController,
+      getTickNumber: () => this.tickNumber,
+      beforePlayerMove: (player) => {
+        if (player.primaryHeld) {
+          this.tryUsePrimaryAbility(player);
+        }
+      },
+      samplePlayerPlatformCarry: (player) => this.samplePlayerPlatformCarry(player),
+      findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
+        this.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
+      onPlayerStepped: (userId, player, platformYawDelta) => {
+        this.syncUserView(userId, player);
+        this.queueInputAck(userId, player, platformYawDelta);
+        this.markPlayerDirty(player, {
+          dirtyCharacter: true,
+          dirtyAbilityState: false
+        });
+      }
     });
 
     this.createStaticWorldColliders();
@@ -394,82 +414,7 @@ export class GameSimulation {
     this.elapsedSeconds += delta;
     this.world.integrationParameters.dt = delta;
     this.updatePlatforms(previousElapsedSeconds, this.elapsedSeconds);
-
-    for (const [userId, player] of this.playersByUserId.entries()) {
-      if (player.primaryHeld) {
-        this.tryUsePrimaryAbility(player);
-      }
-      const carry = this.samplePlayerPlatformCarry(player);
-      player.yaw = normalizeYaw(player.yaw + carry.yaw);
-      const attachedToPlatformForSolve = player.groundedPlatformPid !== null;
-      const solveVerticalVelocity = attachedToPlatformForSolve
-        ? 0
-        : player.grounded && player.vy <= 0
-          ? PLAYER_GROUND_STICK_VELOCITY
-          : player.vy;
-      const desired = {
-        x: player.vx * delta + carry.x,
-        y: solveVerticalVelocity * delta + carry.y,
-        z: player.vz * delta + carry.z
-      };
-      this.characterController.computeColliderMovement(
-        player.collider,
-        desired,
-        undefined,
-        undefined,
-        (collider) => {
-          if (collider.handle === player.collider.handle) {
-            return false;
-          }
-          return true;
-        }
-      );
-      const corrected = this.characterController.computedMovement();
-
-      const current = player.body.translation();
-      player.body.setTranslation(
-        {
-          x: current.x + corrected.x,
-          y: current.y + corrected.y,
-          z: current.z + corrected.z
-        },
-        true
-      );
-
-      const moved = player.body.translation();
-      const groundedByQuery = this.characterController.computedGrounded();
-      const canAttachToPlatform =
-        groundedByQuery || player.groundedPlatformPid !== null || player.vy <= 0;
-      const groundedPlatformPid = canAttachToPlatform
-        ? this.findGroundedPlatformPid(moved.x, moved.y, moved.z, player.groundedPlatformPid)
-        : null;
-      player.grounded = groundedByQuery || groundedPlatformPid !== null;
-      player.groundedPlatformPid = player.grounded ? groundedPlatformPid : null;
-      const attachedToPlatform = player.grounded && player.groundedPlatformPid !== null;
-      if (attachedToPlatform) {
-        // While attached to a platform, platform Y carry drives vertical motion directly.
-        player.vy = 0;
-      } else if (player.grounded) {
-        if (player.vy < 0) {
-          player.vy = 0;
-        }
-      } else {
-        // Apply gravity after this-step grounding resolution.
-        player.vy += GRAVITY * delta;
-      }
-
-      player.x = moved.x;
-      player.y = moved.y + PLAYER_CAMERA_OFFSET_Y;
-      player.z = moved.z;
-      player.serverTick = this.tickNumber;
-
-      this.syncUserView(userId, player);
-      this.queueInputAck(userId, player, carry.yaw);
-      this.markPlayerDirty(player, {
-        dirtyCharacter: true,
-        dirtyAbilityState: false
-      });
-    }
+    this.playerMovementSystem.stepPlayers(this.playersByUserId, delta);
 
     this.projectileSystem.step(delta);
     this.world.step();
