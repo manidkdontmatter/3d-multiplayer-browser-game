@@ -49,6 +49,11 @@ Core modules:
 - `src/server/persistence/PersistenceService.ts`: SQLite-backed auth + character/loadout persistence.
 - `src/client/bootstrap.ts`: staged startup orchestration.
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
+- `src/client/runtime/network/NetTransportClient.ts`: nengi transport wrapper, message ingress, and interpolation stream access.
+- `src/client/runtime/network/SnapshotStore.ts`: replicated entity frame application + typed entity state projection.
+- `src/client/runtime/network/AckReconciliationBuffer.ts`: input sequence tracking, ack buffering/order checks, and reconciliation replay frames.
+- `src/client/runtime/network/InterpolationController.ts`: interpolation delay adaptation from latency/jitter samples.
+- `src/client/runtime/network/AbilityStateStore.ts`: runtime ability catalog/loadout updates and cosmetic ability-use event buffering.
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
 - `src/client/runtime/WorldRenderer.ts`: thin renderer facade/composition root.
 - `src/client/runtime/rendering/WorldEnvironment.ts`: renderer/camera/scene bootstrap and static environment.

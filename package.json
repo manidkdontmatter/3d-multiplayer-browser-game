@@ -26,6 +26,7 @@
     "test:multiplayer:csp": "node --input-type=module -e \"process.env.E2E_CSP='1'; await import('./scripts/multiplayer-e2e.js');\"",
     "test:multiplayer:chaos": "node --input-type=module -e \"process.env.E2E_CSP='1'; process.env.E2E_NETSIM='1'; process.env.E2E_MIN_REMOTE_MOVEMENT='0.4'; process.env.E2E_REMOTE_MOVEMENT_TIMEOUT_MS='22000'; process.env.E2E_MIN_SPRINT_MOVEMENT='1.0'; process.env.E2E_MIN_JUMP_HEIGHT='0.35'; await import('./scripts/multiplayer-e2e.js');\"",
     "test:movement-parity": "tsx scripts/movement-parity.ts",
+    "test:network-client:regression": "tsx scripts/network-client-regression.ts",
     "test:tick": "tsx scripts/tick-consistency.ts"
   },
   "engines": {
