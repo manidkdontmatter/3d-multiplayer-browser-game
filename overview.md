@@ -50,7 +50,13 @@ Core modules:
 - `src/client/bootstrap.ts`: staged startup orchestration.
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
-- `src/client/runtime/WorldRenderer.ts`: Three.js scene/render runtime.
+- `src/client/runtime/WorldRenderer.ts`: thin renderer facade/composition root.
+- `src/client/runtime/rendering/WorldEnvironment.ts`: renderer/camera/scene bootstrap and static environment.
+- `src/client/runtime/rendering/ProjectileVisualSystem.ts`: projectile visuals, pulses, and pooled spawn bursts.
+- `src/client/runtime/rendering/RemoteCharacterVisualSystem.ts`: remote avatar lifecycle and animation state.
+- `src/client/runtime/rendering/LocalCharacterVisualSystem.ts`: local avatar first/third-person presentation and animation.
+- `src/client/runtime/rendering/WorldEntityVisualSystem.ts`: platform/training-dummy visual lifecycle.
+- `src/client/runtime/rendering/AudioEventBridge.ts`: cosmetic ability-use audio event routing.
 - `src/client/ui/AbilityHud.ts`: hotbar + loadout panel.
 - `src/shared/sim/kinematicCharacter.ts`: shared kinematic solve/post-step movement helpers used by both client prediction and server authority.
 - `src/shared/sim/findGroundedPlatformPid.ts`: shared grounded-platform resolver used by both client and server.
