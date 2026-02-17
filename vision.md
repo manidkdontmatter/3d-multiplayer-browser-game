@@ -23,20 +23,17 @@ Long-range target:
 - Long-term progression unlocks superhuman/anime-scale abilities:
   - advanced movement states (including flight)
   - energy beams, energy weapons, melee
-- Adapt anime-inspired power escalation into first-person gameplay without switching genres.
+- Adapt anime-inspired power escalation into first-person gameplay.
 
 ## Visual Pillars
 
 - Low-poly/retro presentation with realistic proportions.
-- Light/optimistic overall tone (not dark, not cartoony).
+- Light/optimistic overall tone (not dark, yet not cartoony).
 - Practical asset-delivery awareness (lighter texture/asset footprint where possible).
 
 ## Architecture Alignment
 
 - Strict client/server separation.
-- Authoritative server trust model.
-- Design choices should remain compatible with high-player-count netcode and anti-cheat boundaries.
+- Authoritative server model.
+- Design choices should remain compatible with high-player-count netcode.
 
-## Guidance Level
-
-These are directional goals that guide decisions and prioritization. They are not intended to block better technical solutions when constraints or evidence suggest adjustments.

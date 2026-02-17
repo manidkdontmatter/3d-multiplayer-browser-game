@@ -38,7 +38,7 @@ This file defines the role of each top-level Markdown file so context stays clea
 - If architecture/tooling/workflows materially change, update `overview.md`.
 - If goals/game direction materially change, update `vision.md`.
 - If operating behavior or memory policy changes, update `AGENTS.md`.
-- If a file starts accumulating content that belongs elsewhere, move it and leave a pointer.
+- If a file starts accumulating content that belongs elsewhere, move it
 
 ## Conflict Resolution
 

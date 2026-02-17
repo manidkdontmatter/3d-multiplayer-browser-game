@@ -5,9 +5,10 @@
 This repository is a production-oriented foundation for a first-person, authoritative, multiplayer 3D browser game.
 
 Core goals:
-- Server-authoritative simulation with anti-cheat-friendly trust boundaries.
+- Server-authoritative simulation.
 - High-performance netcode using nengi 2.0 patterns.
-- Three.js rendering + Rapier physics in the browser.
+- Three.js rendering
+- Rapier physics.
 - Scalable architecture for persistent worlds and high player counts.
 
 ## Current Stack
@@ -41,50 +42,14 @@ Runtime entry points:
 - Client: `src/client/main.ts`
 - Server: `src/server/main.ts`
 
-Core modules:
-- `src/server/GameServer.ts`: server lifecycle + networking setup.
-- `src/server/GameSimulation.ts`: authoritative tick/simulation.
-- `src/server/combat/projectiles/ProjectileSystem.ts`: authoritative projectile lifecycle, collision casts, pooling, and replication lifecycle.
-- `src/server/combat/damage/DamageSystem.ts`: unified damage application and damageable target registry.
-- `src/server/persistence/PersistenceService.ts`: SQLite-backed auth + character/loadout persistence.
-- `src/client/bootstrap.ts`: staged startup orchestration.
-- `src/client/runtime/NetworkClient.ts`: client netcode integration.
-- `src/client/runtime/network/NetTransportClient.ts`: nengi transport wrapper, message ingress, and interpolation stream access.
-- `src/client/runtime/network/SnapshotStore.ts`: replicated entity frame application + typed entity state projection.
-- `src/client/runtime/network/AckReconciliationBuffer.ts`: input sequence tracking, ack buffering/order checks, and reconciliation replay frames.
-- `src/client/runtime/network/InterpolationController.ts`: interpolation delay adaptation from latency/jitter samples.
-- `src/client/runtime/network/AbilityStateStore.ts`: runtime ability catalog/loadout updates and cosmetic ability-use event buffering.
-- `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
-- `src/client/runtime/WorldRenderer.ts`: thin renderer facade/composition root.
-- `src/client/runtime/rendering/WorldEnvironment.ts`: renderer/camera/scene bootstrap and static environment.
-- `src/client/runtime/rendering/ProjectileVisualSystem.ts`: projectile visuals, pulses, and pooled spawn bursts.
-- `src/client/runtime/rendering/RemoteCharacterVisualSystem.ts`: remote avatar lifecycle and animation state.
-- `src/client/runtime/rendering/LocalCharacterVisualSystem.ts`: local avatar first/third-person presentation and animation.
-- `src/client/runtime/rendering/WorldEntityVisualSystem.ts`: platform/training-dummy visual lifecycle.
-- `src/client/runtime/rendering/AudioEventBridge.ts`: cosmetic ability-use audio event routing.
-- `src/client/ui/AbilityHud.ts`: hotbar + loadout panel.
-- `src/shared/sim/kinematicCharacter.ts`: shared kinematic solve/post-step movement helpers used by both client prediction and server authority.
-- `src/shared/sim/findGroundedPlatformPid.ts`: shared grounded-platform resolver used by both client and server.
-
 ## Netcode Model
 
 - Fixed server tick cadence with deterministic ordering.
 - AOI/visibility via nengi spatial channels.
-- Snapshot replication includes authoritative timing data.
-- Input command stream carries movement/look and primary-action intents.
-- Low-frequency loadout/equip changes use explicit `LoadoutCommand`.
-- Server movement integration is tick-owned (`SERVER_TICK_SECONDS`).
 - Client prediction mirrors server movement/collision as closely as possible.
-
-Authoritative combat and physics highlights:
-- Projectile abilities: `GameSimulation` emits spawn requests to `ProjectileSystem` (projectile internals are not owned by ability code).
-- Projectile collision: authoritative Rapier swept shape-cast queries in `ProjectileSystem`.
-- Unified damage path: melee/projectile damage resolves through `DamageSystem` for registered damageable targets.
-- Melee abilities: server-side range/radius/arc checks.
 
 ## Key Gameplay Systems (Current)
 
-- Server-authoritative projectile and melee ability execution from static ability definitions.
 - Access-key-based auth (`#k=...` URL fragment + local storage fallback).
 - SQLite persistence for account/character/loadout state.
 
@@ -113,7 +78,3 @@ Authoritative combat and physics highlights:
 - `AGENTS.md`: persistent operating instructions/memory rules
 - `vision.md`: product/game direction
 - `docs-map.md`: markdown file responsibilities/read order
-
-## Maintenance Rule
-
-Update this file when architecture, core runtime behavior, stack, or primary workflows materially change.
