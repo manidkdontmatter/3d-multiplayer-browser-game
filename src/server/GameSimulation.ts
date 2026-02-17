@@ -154,6 +154,7 @@ const PROJECTILE_POOL_MAX = 4096;
 const PROJECTILE_MIN_RADIUS = 0.005;
 const PROJECTILE_RADIUS_CACHE_SCALE = 1000;
 const PROJECTILE_SPEED_EPSILON = 1e-6;
+const ABILITY_USE_EVENT_RADIUS = PLAYER_CAPSULE_RADIUS * 2;
 const TRAINING_DUMMY_MAX_HEALTH = 160;
 const TRAINING_DUMMY_RADIUS = 0.42;
 const TRAINING_DUMMY_HALF_HEIGHT = 0.95;
@@ -986,7 +987,24 @@ export class GameSimulation {
   private broadcastAbilityUseMessage(player: PlayerEntity, ability: AbilityDefinition): void {
     const abilityId = Math.max(0, Math.min(0xffff, Math.floor(ability.id)));
     const category = abilityCategoryToWireValue(ability.category);
+    const eventX = player.x;
+    const eventY = player.y;
+    const eventZ = player.z;
     for (const user of this.usersById.values()) {
+      const ownerPlayer = this.playersByUserId.get(user.id);
+      const isOwner = ownerPlayer?.nid === player.nid;
+      if (
+        !isOwner &&
+        !this.shouldDeliverAbilityUseToView(
+          user.view,
+          eventX,
+          eventY,
+          eventZ,
+          ABILITY_USE_EVENT_RADIUS
+        )
+      ) {
+        continue;
+      }
       user.queueMessage({
         ntype: NType.AbilityUseMessage,
         ownerNid: player.nid,
@@ -1681,6 +1699,23 @@ export class GameSimulation {
     user.view.x = player.x;
     user.view.y = player.y;
     user.view.z = player.z;
+  }
+
+  private shouldDeliverAbilityUseToView(
+    view: AABB3D | undefined,
+    x: number,
+    y: number,
+    z: number,
+    radius: number
+  ): boolean {
+    if (!view) {
+      return false;
+    }
+    const clampedRadius = Math.max(0, radius);
+    const dx = Math.max(Math.abs(x - view.x) - view.halfWidth, 0);
+    const dy = Math.max(Math.abs(y - view.y) - view.halfHeight, 0);
+    const dz = Math.max(Math.abs(z - view.z) - view.halfDepth, 0);
+    return dx * dx + dy * dy + dz * dz <= clampedRadius * clampedRadius;
   }
 
   private getSpawnPosition(): { x: number; z: number } {

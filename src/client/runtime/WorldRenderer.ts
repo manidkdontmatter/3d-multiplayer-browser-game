@@ -303,6 +303,7 @@ export class WorldRenderer {
   }
 
   public applyAbilityUseEvents(events: AbilityUseEvent[]): void {
+    // These network events are cosmetic-only; damage/hit outcomes are always server authoritative.
     for (const event of events) {
       if (event.category !== "melee") {
         continue;

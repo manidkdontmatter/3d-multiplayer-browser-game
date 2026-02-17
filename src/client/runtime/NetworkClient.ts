@@ -95,6 +95,7 @@ const INTERPOLATION_DELAY_BASE_TICKS = 2;
 const INTERPOLATION_DELAY_SMOOTHING = 0.15;
 const ACK_JITTER_SMOOTHING = 0.15;
 const ACK_SIMULATION_BUFFER_LIMIT = 64;
+const CONNECT_TIMEOUT_MS = 10000;
 
 interface NetSimulationConfig {
   enabled: boolean;
@@ -129,6 +130,7 @@ export class NetworkClient {
   private readonly abilityDefinitions = new Map<number, AbilityDefinition>();
   private readonly pendingAbilityDefinitions = new Map<number, AbilityDefinition>();
   private readonly pendingAbilityCreateResults: AbilityCreateResult[] = [];
+  // Presentation-only ability-use cues (animation/VFX). Never used for authoritative gameplay state.
   private readonly pendingAbilityUseEvents: AbilityUseEvent[] = [];
   private pendingLoadoutState: LoadoutState | null = null;
   private queuedAbilityCreateCommand: QueuedAbilityCreateCommand | null = null;
@@ -177,14 +179,16 @@ export class NetworkClient {
 
   public async connect(serverUrl: string, authKey: string): Promise<void> {
     try {
-      const timeoutMs = 1500;
       await Promise.race([
         this.client.connect(serverUrl, {
           authVersion: 1,
           authKey
         }),
         new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error(`connect timeout after ${timeoutMs}ms`)), timeoutMs);
+          setTimeout(
+            () => reject(new Error(`connect timeout after ${CONNECT_TIMEOUT_MS}ms`)),
+            CONNECT_TIMEOUT_MS
+          );
         })
       ]);
       this.connected = true;
