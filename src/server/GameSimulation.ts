@@ -4,7 +4,6 @@ import {
   ABILITY_ID_NONE,
   ABILITY_ID_PUNCH,
   abilityCategoryToWireValue,
-  applyPlatformCarry,
   clampHotbarSlotIndex,
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
@@ -12,26 +11,16 @@ import {
   getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
   NType,
-  normalizeYaw,
-  PLATFORM_DEFINITIONS,
-  PlatformSpatialIndex,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
-  PLAYER_JUMP_VELOCITY,
   PLAYER_MAX_HEALTH,
   SERVER_TICK_SECONDS,
-  samplePlatformTransform,
-  STATIC_WORLD_BLOCKS,
-  toPlatformLocal,
-  stepHorizontalMovement
+  STATIC_WORLD_BLOCKS
 } from "../shared/index";
 import type { AbilityDefinition, MeleeAbilityProfile } from "../shared/index";
-import type {
-  InputCommand as InputWireCommand,
-  LoadoutCommand as LoadoutWireCommand
-} from "../shared/netcode";
+import type { LoadoutCommand as LoadoutWireCommand } from "../shared/netcode";
 import {
   type PlayerSnapshot,
   PersistenceService
@@ -41,7 +30,9 @@ import {
   type CombatTarget
 } from "./combat/damage/DamageSystem";
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
+import { InputSystem } from "./input/InputSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
+import { PlatformSystem } from "./platform/PlatformSystem";
 
 type UserLike = {
   id: number;
@@ -76,28 +67,6 @@ type PlayerEntity = {
   collider: RAPIER.Collider;
 };
 
-type PlatformEntity = {
-  nid: number;
-  ntype: NType.PlatformEntity;
-  pid: number;
-  kind: 1 | 2;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  serverTick: number;
-  halfX: number;
-  halfY: number;
-  halfZ: number;
-  prevX: number;
-  prevY: number;
-  prevZ: number;
-  prevYaw: number;
-  definition: (typeof PLATFORM_DEFINITIONS)[number];
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
-};
-
 type TrainingDummyEntity = {
   nid: number;
   ntype: NType.TrainingDummyEntity;
@@ -118,8 +87,6 @@ type PendingOfflineSnapshot = {
   dirtyAbilityState: boolean;
 };
 
-const INPUT_SEQUENCE_MODULO = 0x10000;
-const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
 const MELEE_DIRECTION_EPSILON = 1e-6;
 const ABILITY_USE_EVENT_RADIUS = PLAYER_CAPSULE_RADIUS * 2;
 const TRAINING_DUMMY_MAX_HEALTH = 160;
@@ -133,9 +100,6 @@ export class GameSimulation {
   private readonly playersByNid = new Map<number, PlayerEntity>();
   private readonly trainingDummiesByNid = new Map<number, TrainingDummyEntity>();
   private readonly usersById = new Map<number, UserLike>();
-  private readonly platformsByPid = new Map<number, PlatformEntity>();
-  private readonly platformSpatialIndex = new PlatformSpatialIndex();
-  private readonly platformQueryScratch: number[] = [];
   private readonly dirtyCharacterAccountIds = new Set<number>();
   private readonly dirtyAbilityStateAccountIds = new Set<number>();
   private readonly pendingOfflineSnapshots = new Map<number, PendingOfflineSnapshot>();
@@ -143,6 +107,8 @@ export class GameSimulation {
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly damageSystem: DamageSystem;
   private readonly projectileSystem: ProjectileSystem;
+  private readonly inputSystem: InputSystem<UserLike, PlayerEntity>;
+  private readonly platformSystem: PlatformSystem;
   private readonly playerMovementSystem: PlayerMovementSystem<PlayerEntity>;
   private elapsedSeconds = 0;
   private tickNumber = 0;
@@ -177,6 +143,15 @@ export class GameSimulation {
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
     });
+    this.inputSystem = new InputSystem<UserLike, PlayerEntity>({
+      onLoadoutCommand: (user, player, command) => this.processLoadoutCommand(user, player, command),
+      onPrimaryPressed: (player) => this.tryUsePrimaryAbility(player)
+    });
+    this.platformSystem = new PlatformSystem({
+      world: this.world,
+      spatialChannel: this.spatialChannel,
+      getTickNumber: () => this.tickNumber
+    });
     this.playerMovementSystem = new PlayerMovementSystem<PlayerEntity>({
       characterController: this.characterController,
       getTickNumber: () => this.tickNumber,
@@ -185,9 +160,9 @@ export class GameSimulation {
           this.tryUsePrimaryAbility(player);
         }
       },
-      samplePlayerPlatformCarry: (player) => this.samplePlayerPlatformCarry(player),
+      samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
       findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
-        this.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
+        this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
         this.syncUserView(userId, player);
         this.queueInputAck(userId, player, platformYawDelta);
@@ -199,7 +174,7 @@ export class GameSimulation {
     });
 
     this.createStaticWorldColliders();
-    this.initializePlatforms();
+    this.platformSystem.initializePlatforms();
     this.initializeTrainingDummies();
   }
 
@@ -315,97 +290,7 @@ export class GameSimulation {
     if (!player) {
       return;
     }
-
-    let latestSequence = player.lastProcessedSequence;
-    let hasAcceptedCommand = false;
-    let mergedForward = 0;
-    let mergedStrafe = 0;
-    let mergedPitch = player.pitch;
-    let mergedSprint = false;
-    let queuedUsePrimaryPressed = false;
-    let mergedUsePrimaryHeld = player.primaryHeld;
-    let queuedJump = false;
-    let mergedYaw = player.yaw;
-
-    for (const rawCommand of commands) {
-      const ntype = (rawCommand as { ntype?: unknown })?.ntype;
-      if (ntype === NType.LoadoutCommand) {
-        this.processLoadoutCommand(user, player, rawCommand as Partial<LoadoutWireCommand>);
-        continue;
-      }
-
-      const command = rawCommand as Partial<InputWireCommand>;
-      if (command.ntype !== NType.InputCommand) {
-        continue;
-      }
-      if (
-        typeof command.forward !== "number" ||
-        !Number.isFinite(command.forward) ||
-        typeof command.strafe !== "number" ||
-        !Number.isFinite(command.strafe) ||
-        typeof command.pitch !== "number" ||
-        !Number.isFinite(command.pitch)
-      ) {
-        continue;
-      }
-
-      const pitch = command.pitch ?? mergedPitch;
-      const hasAbsoluteYaw = typeof command.yaw === "number" && Number.isFinite(command.yaw);
-      const hasYawDelta = typeof command.yawDelta === "number" && Number.isFinite(command.yawDelta);
-      if (!hasAbsoluteYaw && !hasYawDelta) {
-        continue;
-      }
-      const yaw = hasAbsoluteYaw
-        ? normalizeYaw(command.yaw as number)
-        : normalizeYaw(mergedYaw + normalizeYaw(command.yawDelta ?? 0));
-      const forward = this.clampAxis(command.forward ?? mergedForward);
-      const strafe = this.clampAxis(command.strafe ?? mergedStrafe);
-      const sprint = Boolean(command.sprint);
-      const sequence =
-        typeof command.sequence === "number" && Number.isFinite(command.sequence)
-          ? (command.sequence & 0xffff)
-          : ((latestSequence + 1) & 0xffff);
-      if (!this.isSequenceAheadOf(latestSequence, sequence)) {
-        continue;
-      }
-
-      hasAcceptedCommand = true;
-      latestSequence = sequence;
-      mergedForward = forward;
-      mergedStrafe = strafe;
-      mergedYaw = yaw;
-      mergedPitch = pitch;
-      mergedSprint = sprint;
-      queuedUsePrimaryPressed = queuedUsePrimaryPressed || Boolean(command.usePrimaryPressed);
-      mergedUsePrimaryHeld = Boolean(command.usePrimaryHeld);
-      queuedJump = queuedJump || Boolean(command.jump);
-    }
-
-    if (!hasAcceptedCommand) {
-      return;
-    }
-
-    if (queuedJump && player.grounded) {
-      player.vy = PLAYER_JUMP_VELOCITY;
-      player.grounded = false;
-      player.groundedPlatformPid = null;
-    }
-
-    player.yaw = mergedYaw;
-    const horizontal = stepHorizontalMovement(
-      { vx: player.vx, vz: player.vz },
-      { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw },
-      player.grounded,
-      SERVER_TICK_SECONDS
-    );
-    player.vx = horizontal.vx;
-    player.vz = horizontal.vz;
-    player.pitch = Math.max(-1.45, Math.min(1.45, mergedPitch));
-    player.primaryHeld = mergedUsePrimaryHeld;
-    if (queuedUsePrimaryPressed) {
-      this.tryUsePrimaryAbility(player);
-    }
-    player.lastProcessedSequence = latestSequence;
+    this.inputSystem.applyCommands(user, player, commands);
   }
 
   public step(delta: number): void {
@@ -413,7 +298,7 @@ export class GameSimulation {
     const previousElapsedSeconds = this.elapsedSeconds;
     this.elapsedSeconds += delta;
     this.world.integrationParameters.dt = delta;
-    this.updatePlatforms(previousElapsedSeconds, this.elapsedSeconds);
+    this.platformSystem.updatePlatforms(previousElapsedSeconds, this.elapsedSeconds);
     this.playerMovementSystem.stepPlayers(this.playersByUserId, delta);
 
     this.projectileSystem.step(delta);
@@ -488,44 +373,6 @@ export class GameSimulation {
     }
   }
 
-  private initializePlatforms(): void {
-    for (const definition of PLATFORM_DEFINITIONS) {
-      const pose = samplePlatformTransform(definition, 0);
-      const body = this.world.createRigidBody(
-        RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pose.x, pose.y, pose.z)
-      );
-      const collider = this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(definition.halfX, definition.halfY, definition.halfZ),
-        body
-      );
-
-      const platform: PlatformEntity = {
-        nid: 0,
-        ntype: NType.PlatformEntity,
-        pid: definition.pid,
-        kind: definition.kind,
-        x: pose.x,
-        y: pose.y,
-        z: pose.z,
-        yaw: pose.yaw,
-        serverTick: this.tickNumber,
-        halfX: definition.halfX,
-        halfY: definition.halfY,
-        halfZ: definition.halfZ,
-        prevX: pose.x,
-        prevY: pose.y,
-        prevZ: pose.z,
-        prevYaw: pose.yaw,
-        definition,
-        body,
-        collider
-      };
-      this.platformsByPid.set(platform.pid, platform);
-      this.spatialChannel.addEntity(platform);
-    }
-    this.rebuildPlatformSpatialIndex();
-  }
-
   private initializeTrainingDummies(): void {
     for (const spawn of TRAINING_DUMMY_SPAWNS) {
       const body = this.world.createRigidBody(
@@ -552,130 +399,6 @@ export class GameSimulation {
       this.trainingDummiesByNid.set(dummy.nid, dummy);
       this.damageSystem.registerDummy(dummy);
     }
-  }
-
-  private updatePlatforms(previousElapsedSeconds: number, elapsedSeconds: number): void {
-    for (const platform of this.platformsByPid.values()) {
-      const previousPose = samplePlatformTransform(platform.definition, previousElapsedSeconds);
-      const currentPose = samplePlatformTransform(platform.definition, elapsedSeconds);
-      platform.prevX = previousPose.x;
-      platform.prevY = previousPose.y;
-      platform.prevZ = previousPose.z;
-      platform.prevYaw = previousPose.yaw;
-      platform.x = currentPose.x;
-      platform.y = currentPose.y;
-      platform.z = currentPose.z;
-      platform.yaw = currentPose.yaw;
-      platform.serverTick = this.tickNumber;
-
-      platform.body.setTranslation({ x: platform.x, y: platform.y, z: platform.z }, true);
-      platform.body.setRotation(
-        { x: 0, y: Math.sin(platform.yaw * 0.5), z: 0, w: Math.cos(platform.yaw * 0.5) },
-        true
-      );
-    }
-    this.rebuildPlatformSpatialIndex();
-  }
-
-  private rebuildPlatformSpatialIndex(): void {
-    this.platformSpatialIndex.clear();
-    for (const platform of this.platformsByPid.values()) {
-      this.platformSpatialIndex.insert({
-        pid: platform.pid,
-        x: platform.x,
-        z: platform.z,
-        halfX: platform.halfX,
-        halfZ: platform.halfZ
-      });
-    }
-  }
-
-  private samplePlayerPlatformCarry(player: PlayerEntity): { x: number; y: number; z: number; yaw: number } {
-    if (!player.grounded || player.groundedPlatformPid === null) {
-      return { x: 0, y: 0, z: 0, yaw: 0 };
-    }
-
-    const platform = this.platformsByPid.get(player.groundedPlatformPid);
-    if (!platform) {
-      player.groundedPlatformPid = null;
-      return { x: 0, y: 0, z: 0, yaw: 0 };
-    }
-
-    const bodyPos = player.body.translation();
-    const carried = applyPlatformCarry(
-      { x: platform.prevX, y: platform.prevY, z: platform.prevZ, yaw: platform.prevYaw },
-      { x: platform.x, y: platform.y, z: platform.z, yaw: platform.yaw },
-      { x: bodyPos.x, y: bodyPos.y, z: bodyPos.z }
-    );
-
-    return {
-      x: carried.x - bodyPos.x,
-      y: carried.y - bodyPos.y,
-      z: carried.z - bodyPos.z,
-      yaw: normalizeYaw(platform.yaw - platform.prevYaw)
-    };
-  }
-
-  private findGroundedPlatformPid(
-    bodyX: number,
-    bodyY: number,
-    bodyZ: number,
-    preferredPid: number | null
-  ): number | null {
-    const footY = bodyY - (PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS);
-    const baseVerticalTolerance = 0.25;
-    const preferredVerticalTolerance = 0.45;
-    const maxBelowTopTolerance = 0.2;
-    const horizontalMargin = PLAYER_CAPSULE_RADIUS * 0.75;
-    this.platformSpatialIndex.queryAabb(
-      bodyX,
-      bodyZ,
-      horizontalMargin,
-      horizontalMargin,
-      this.platformQueryScratch
-    );
-    if (preferredPid !== null && !this.platformQueryScratch.includes(preferredPid)) {
-      this.platformQueryScratch.push(preferredPid);
-      this.platformQueryScratch.sort((a, b) => a - b);
-    }
-    let selectedPid: number | null = null;
-    let closestVerticalGapAbs = Number.POSITIVE_INFINITY;
-
-    for (const platformPid of this.platformQueryScratch) {
-      const platform = this.platformsByPid.get(platformPid);
-      if (!platform) {
-        continue;
-      }
-      const local = toPlatformLocal(platform, bodyX, bodyZ);
-      const withinX = Math.abs(local.x) <= platform.halfX + horizontalMargin;
-      const withinZ = Math.abs(local.z) <= platform.halfZ + horizontalMargin;
-      if (!withinX || !withinZ) {
-        continue;
-      }
-
-      const topY = platform.y + platform.halfY;
-      const signedGap = footY - topY;
-      if (signedGap < -maxBelowTopTolerance) {
-        continue;
-      }
-      const maxGap =
-        preferredPid !== null && platform.pid === preferredPid
-          ? preferredVerticalTolerance
-          : baseVerticalTolerance;
-      if (signedGap > maxGap) {
-        continue;
-      }
-
-      const gapAbs = Math.abs(signedGap);
-      if (gapAbs >= closestVerticalGapAbs) {
-        continue;
-      }
-
-      closestVerticalGapAbs = gapAbs;
-      selectedPid = platform.pid;
-    }
-
-    return selectedPid;
   }
 
   private processLoadoutCommand(
@@ -1222,13 +945,6 @@ export class GameSimulation {
     return Math.max(0, Math.min(1, value));
   }
 
-  private clampAxis(value: number): number {
-    if (!Number.isFinite(value)) {
-      return 0;
-    }
-    return Math.max(-1, Math.min(1, value));
-  }
-
   private queueInputAck(userId: number, player: PlayerEntity, platformYawDelta: number): void {
     const user = this.usersById.get(userId);
     if (!user) {
@@ -1318,8 +1034,4 @@ export class GameSimulation {
     return { x: baseRadius + (maxRings + 1) * ringStep, z: 0 };
   }
 
-  private isSequenceAheadOf(lastSequence: number, candidateSequence: number): boolean {
-    const delta = (candidateSequence - lastSequence + INPUT_SEQUENCE_MODULO) % INPUT_SEQUENCE_MODULO;
-    return delta > 0 && delta < INPUT_SEQUENCE_HALF_RANGE;
-  }
 }
