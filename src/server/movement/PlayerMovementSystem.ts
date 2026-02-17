@@ -1,9 +1,10 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
-  GRAVITY,
-  normalizeYaw,
+  applyPlatformCarryYaw,
+  buildDesiredCharacterTranslation,
   PLAYER_CAMERA_OFFSET_Y,
-  PLAYER_GROUND_STICK_VELOCITY
+  resolveKinematicPostStepState,
+  resolveVerticalVelocityForSolve
 } from "../../shared/index";
 
 type PlatformCarry = { x: number; y: number; z: number; yaw: number };
@@ -44,18 +45,15 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
     for (const [userId, player] of playersByUserId.entries()) {
       this.options.beforePlayerMove?.(player);
       const carry = this.options.samplePlayerPlatformCarry(player);
-      player.yaw = normalizeYaw(player.yaw + carry.yaw);
-      const attachedToPlatformForSolve = player.groundedPlatformPid !== null;
-      const solveVerticalVelocity = attachedToPlatformForSolve
-        ? 0
-        : player.grounded && player.vy <= 0
-          ? PLAYER_GROUND_STICK_VELOCITY
-          : player.vy;
-      const desired = {
-        x: player.vx * deltaSeconds + carry.x,
-        y: solveVerticalVelocity * deltaSeconds + carry.y,
-        z: player.vz * deltaSeconds + carry.z
-      };
+      player.yaw = applyPlatformCarryYaw(player.yaw, carry.yaw);
+      const solveVerticalVelocity = resolveVerticalVelocityForSolve(player);
+      const desired = buildDesiredCharacterTranslation(
+        player.vx,
+        player.vz,
+        deltaSeconds,
+        solveVerticalVelocity,
+        carry
+      );
       this.options.characterController.computeColliderMovement(
         player.collider,
         desired,
@@ -77,32 +75,23 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
 
       const moved = player.body.translation();
       const groundedByQuery = this.options.characterController.computedGrounded();
-      const canAttachToPlatform =
-        groundedByQuery || player.groundedPlatformPid !== null || player.vy <= 0;
-      const groundedPlatformPid = canAttachToPlatform
-        ? this.options.findGroundedPlatformPid(moved.x, moved.y, moved.z, player.groundedPlatformPid)
-        : null;
-      player.grounded = groundedByQuery || groundedPlatformPid !== null;
-      player.groundedPlatformPid = player.grounded ? groundedPlatformPid : null;
-      const attachedToPlatform = player.grounded && player.groundedPlatformPid !== null;
-      if (attachedToPlatform) {
-        // While attached to a platform, platform Y carry drives vertical motion directly.
-        player.vy = 0;
-      } else if (player.grounded) {
-        if (player.vy < 0) {
-          player.vy = 0;
-        }
-      } else {
-        // Apply gravity after this-step grounding resolution.
-        player.vy += GRAVITY * deltaSeconds;
-      }
-
-      player.x = moved.x;
-      player.y = moved.y + PLAYER_CAMERA_OFFSET_Y;
-      player.z = moved.z;
+      const next = resolveKinematicPostStepState({
+        previous: player,
+        movedBody: moved,
+        groundedByQuery,
+        deltaSeconds,
+        playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
+        findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
+          this.options.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid)
+      });
+      player.grounded = next.grounded;
+      player.groundedPlatformPid = next.groundedPlatformPid;
+      player.vy = next.vy;
+      player.x = next.x;
+      player.y = next.y;
+      player.z = next.z;
       player.serverTick = this.options.getTickNumber();
       this.options.onPlayerStepped(userId, player, carry.yaw);
     }
   }
 }
-

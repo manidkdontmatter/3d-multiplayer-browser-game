@@ -2,13 +2,13 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import type { ChannelAABB3D } from "nengi";
 import {
   applyPlatformCarry,
+  findGroundedPlatformPid,
   NType,
   PLATFORM_DEFINITIONS,
   PlatformSpatialIndex,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   samplePlatformTransform,
-  toPlatformLocal,
   normalizeYaw
 } from "../../shared/index";
 
@@ -148,60 +148,18 @@ export class PlatformSystem {
     bodyZ: number,
     preferredPid: number | null
   ): number | null {
-    const footY = bodyY - (PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS);
-    const baseVerticalTolerance = 0.25;
-    const preferredVerticalTolerance = 0.45;
-    const maxBelowTopTolerance = 0.2;
-    const horizontalMargin = PLAYER_CAPSULE_RADIUS * 0.75;
-    this.platformSpatialIndex.queryAabb(
+    return findGroundedPlatformPid({
       bodyX,
+      bodyY,
       bodyZ,
-      horizontalMargin,
-      horizontalMargin,
-      this.platformQueryScratch
-    );
-    if (preferredPid !== null && !this.platformQueryScratch.includes(preferredPid)) {
-      this.platformQueryScratch.push(preferredPid);
-      this.platformQueryScratch.sort((a, b) => a - b);
-    }
-    let selectedPid: number | null = null;
-    let closestVerticalGapAbs = Number.POSITIVE_INFINITY;
-
-    for (const platformPid of this.platformQueryScratch) {
-      const platform = this.platformsByPid.get(platformPid);
-      if (!platform) {
-        continue;
-      }
-      const local = toPlatformLocal(platform, bodyX, bodyZ);
-      const withinX = Math.abs(local.x) <= platform.halfX + horizontalMargin;
-      const withinZ = Math.abs(local.z) <= platform.halfZ + horizontalMargin;
-      if (!withinX || !withinZ) {
-        continue;
-      }
-
-      const topY = platform.y + platform.halfY;
-      const signedGap = footY - topY;
-      if (signedGap < -maxBelowTopTolerance) {
-        continue;
-      }
-      const maxGap =
-        preferredPid !== null && platform.pid === preferredPid
-          ? preferredVerticalTolerance
-          : baseVerticalTolerance;
-      if (signedGap > maxGap) {
-        continue;
-      }
-
-      const gapAbs = Math.abs(signedGap);
-      if (gapAbs >= closestVerticalGapAbs) {
-        continue;
-      }
-
-      closestVerticalGapAbs = gapAbs;
-      selectedPid = platform.pid;
-    }
-
-    return selectedPid;
+      preferredPid,
+      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
+      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
+      queryNearbyPlatformPids: (centerX, centerZ, halfX, halfZ, output) =>
+        this.platformSpatialIndex.queryAabb(centerX, centerZ, halfX, halfZ, output),
+      resolvePlatformByPid: (pid) => this.platformsByPid.get(pid),
+      queryScratch: this.platformQueryScratch
+    });
   }
 
   private rebuildPlatformSpatialIndex(): void {
@@ -217,4 +175,3 @@ export class PlatformSystem {
     }
   }
 }
-

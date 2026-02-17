@@ -52,6 +52,8 @@ Core modules:
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
 - `src/client/runtime/WorldRenderer.ts`: Three.js scene/render runtime.
 - `src/client/ui/AbilityHud.ts`: hotbar + loadout panel.
+- `src/shared/sim/kinematicCharacter.ts`: shared kinematic solve/post-step movement helpers used by both client prediction and server authority.
+- `src/shared/sim/findGroundedPlatformPid.ts`: shared grounded-platform resolver used by both client and server.
 
 ## Netcode Model
 

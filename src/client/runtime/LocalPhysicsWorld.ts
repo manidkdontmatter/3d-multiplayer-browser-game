@@ -1,7 +1,8 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
-  GRAVITY,
+  buildDesiredCharacterTranslation,
+  findGroundedPlatformPid,
   normalizeYaw,
   PlatformSpatialIndex,
   PLATFORM_DEFINITIONS,
@@ -9,12 +10,12 @@ import {
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
-  PLAYER_GROUND_STICK_VELOCITY,
   PLAYER_JUMP_VELOCITY,
+  resolveKinematicPostStepState,
+  resolveVerticalVelocityForSolve,
   STATIC_WORLD_BLOCKS,
   samplePlatformTransform,
   stepHorizontalMovement,
-  toPlatformLocal
 } from "../../shared/index";
 import type { MovementInput, PlayerPose } from "./types";
 
@@ -171,18 +172,18 @@ export class LocalPhysicsWorld {
     }
 
     const carry = this.samplePlatformCarry(previousSimulationSeconds, this.simulationSeconds);
-    const attachedToPlatformForSolve = this.groundedPlatformPid !== null;
-    const solveVerticalVelocity = attachedToPlatformForSolve
-      ? 0
-      : this.grounded && this.verticalVelocity <= 0
-        ? PLAYER_GROUND_STICK_VELOCITY
-        : this.verticalVelocity;
-
-    const desired = {
-      x: this.horizontalVelocity.vx * dt + carry.x,
-      y: solveVerticalVelocity * dt + carry.y,
-      z: this.horizontalVelocity.vz * dt + carry.z
-    };
+    const solveVerticalVelocity = resolveVerticalVelocityForSolve({
+      grounded: this.grounded,
+      groundedPlatformPid: this.groundedPlatformPid,
+      vy: this.verticalVelocity
+    });
+    const desired = buildDesiredCharacterTranslation(
+      this.horizontalVelocity.vx,
+      this.horizontalVelocity.vz,
+      dt,
+      solveVerticalVelocity,
+      { x: carry.x, y: carry.y, z: carry.z, yaw: 0 }
+    );
     this.characterController.computeColliderMovement(
       this.playerCollider,
       desired,
@@ -203,27 +204,25 @@ export class LocalPhysicsWorld {
     this.world.step();
     const position = this.playerBody.translation();
     const groundedByQuery = this.characterController.computedGrounded();
-    const canAttachToPlatform =
-      groundedByQuery || this.groundedPlatformPid !== null || this.verticalVelocity <= 0;
-    const groundedPlatformPid = canAttachToPlatform
-      ? this.findGroundedPlatformPid(position.x, position.y, position.z, this.groundedPlatformPid)
-      : null;
-    this.grounded = groundedByQuery || groundedPlatformPid !== null;
-    this.groundedPlatformPid = this.grounded ? groundedPlatformPid : null;
-    const attachedToPlatform = this.grounded && this.groundedPlatformPid !== null;
-    if (attachedToPlatform) {
-      this.verticalVelocity = 0;
-    } else if (this.grounded) {
-      if (this.verticalVelocity < 0) {
-        this.verticalVelocity = 0;
-      }
-    } else {
-      this.verticalVelocity += GRAVITY * dt;
-    }
-
-    this.pose.x = position.x;
-    this.pose.y = position.y + PLAYER_CAMERA_OFFSET_Y;
-    this.pose.z = position.z;
+    const next = resolveKinematicPostStepState({
+      previous: {
+        grounded: this.grounded,
+        groundedPlatformPid: this.groundedPlatformPid,
+        vy: this.verticalVelocity
+      },
+      movedBody: position,
+      groundedByQuery,
+      deltaSeconds: dt,
+      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
+      findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
+        this.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid)
+    });
+    this.grounded = next.grounded;
+    this.groundedPlatformPid = next.groundedPlatformPid;
+    this.verticalVelocity = next.vy;
+    this.pose.x = next.x;
+    this.pose.y = next.y;
+    this.pose.z = next.z;
     this.pose.yaw = yaw;
     this.pose.pitch = pitch;
   }
@@ -244,6 +243,22 @@ export class LocalPhysicsWorld {
 
   public getPose(): PlayerPose {
     return { ...this.pose };
+  }
+
+  public getKinematicState(): {
+    vx: number;
+    vy: number;
+    vz: number;
+    grounded: boolean;
+    groundedPlatformPid: number | null;
+  } {
+    return {
+      vx: this.horizontalVelocity.vx,
+      vy: this.verticalVelocity,
+      vz: this.horizontalVelocity.vz,
+      grounded: this.grounded,
+      groundedPlatformPid: this.groundedPlatformPid
+    };
   }
 
   public isGrounded(): boolean {
@@ -330,60 +345,18 @@ export class LocalPhysicsWorld {
     bodyZ: number,
     preferredPid: number | null
   ): number | null {
-    const footY = bodyY - (PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS);
-    const baseVerticalTolerance = 0.25;
-    const preferredVerticalTolerance = 0.45;
-    const maxBelowTopTolerance = 0.2;
-    const horizontalMargin = PLAYER_CAPSULE_RADIUS * 0.75;
-    this.platformSpatialIndex.queryAabb(
+    return findGroundedPlatformPid({
       bodyX,
+      bodyY,
       bodyZ,
-      horizontalMargin,
-      horizontalMargin,
-      this.platformQueryScratch
-    );
-    if (preferredPid !== null && !this.platformQueryScratch.includes(preferredPid)) {
-      this.platformQueryScratch.push(preferredPid);
-      this.platformQueryScratch.sort((a, b) => a - b);
-    }
-    let selectedPid: number | null = null;
-    let closestVerticalGapAbs = Number.POSITIVE_INFINITY;
-
-    for (const platformPid of this.platformQueryScratch) {
-      const platform = this.platformBodies.get(platformPid);
-      if (!platform) {
-        continue;
-      }
-      const local = toPlatformLocal(platform, bodyX, bodyZ);
-      const withinX = Math.abs(local.x) <= platform.halfX + horizontalMargin;
-      const withinZ = Math.abs(local.z) <= platform.halfZ + horizontalMargin;
-      if (!withinX || !withinZ) {
-        continue;
-      }
-
-      const topY = platform.y + platform.halfY;
-      const signedGap = footY - topY;
-      if (signedGap < -maxBelowTopTolerance) {
-        continue;
-      }
-      const maxGap =
-        preferredPid !== null && platform.pid === preferredPid
-          ? preferredVerticalTolerance
-          : baseVerticalTolerance;
-      if (signedGap > maxGap) {
-        continue;
-      }
-
-      const gapAbs = Math.abs(signedGap);
-      if (gapAbs >= closestVerticalGapAbs) {
-        continue;
-      }
-
-      closestVerticalGapAbs = gapAbs;
-      selectedPid = platform.pid;
-    }
-
-    return selectedPid;
+      preferredPid,
+      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
+      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
+      queryNearbyPlatformPids: (centerX, centerZ, halfX, halfZ, output) =>
+        this.platformSpatialIndex.queryAabb(centerX, centerZ, halfX, halfZ, output),
+      resolvePlatformByPid: (pid) => this.platformBodies.get(pid),
+      queryScratch: this.platformQueryScratch
+    });
   }
 
   private clampStepDelta(delta: number): number {

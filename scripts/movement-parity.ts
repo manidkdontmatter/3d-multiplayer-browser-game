@@ -1,206 +1,270 @@
 import process from "node:process";
+import RAPIER from "@dimforge/rapier3d-compat";
+import type { ChannelAABB3D } from "nengi";
+import { LocalPhysicsWorld } from "../src/client/runtime/LocalPhysicsWorld";
+import type { MovementInput } from "../src/client/runtime/types";
+import { PlayerMovementSystem } from "../src/server/movement/PlayerMovementSystem";
+import { PlatformSystem } from "../src/server/platform/PlatformSystem";
+import { WorldBootstrapSystem } from "../src/server/world/WorldBootstrapSystem";
 import {
-  GRAVITY,
+  PLATFORM_DEFINITIONS,
+  PLAYER_BODY_CENTER_HEIGHT,
+  PLAYER_CAMERA_OFFSET_Y,
+  PLAYER_CAPSULE_HALF_HEIGHT,
+  PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
   SERVER_TICK_SECONDS,
+  normalizeYaw,
+  samplePlatformTransform,
   stepHorizontalMovement
 } from "../src/shared/index";
 
 type MovementFrame = {
-  forward: number;
-  strafe: number;
-  sprint: boolean;
-  jump: boolean;
+  movement: MovementInput;
   yawDelta: number;
-  pitch: number;
+  pitchDelta: number;
   delta: number;
 };
 
-type SimState = {
-  x: number;
-  y: number;
-  z: number;
+type ServerParityPlayer = {
   yaw: number;
   pitch: number;
   vx: number;
   vy: number;
   vz: number;
   grounded: boolean;
+  groundedPlatformPid: number | null;
+  x: number;
+  y: number;
+  z: number;
+  serverTick: number;
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
 };
 
-const EPSILON = 1e-9;
-const GROUND_Y = 0;
+const EPS_POSITION = 1e-3;
+const EPS_VELOCITY = 1e-3;
+const EPS_ANGLE = 1e-4;
 
-function normalizeYaw(value: number): number {
-  let yaw = value;
-  while (yaw > Math.PI) yaw -= Math.PI * 2;
-  while (yaw < -Math.PI) yaw += Math.PI * 2;
-  return yaw;
+function createNoopSpatialChannel(): ChannelAABB3D {
+  const channel = {
+    addEntity: (_entity: unknown) => undefined,
+    removeEntity: (_entity: unknown) => undefined
+  };
+  return channel as unknown as ChannelAABB3D;
 }
 
-function createInitialState(): SimState {
-  return {
-    x: 0,
-    y: GROUND_Y,
-    z: 0,
+function createTrace(): MovementFrame[] {
+  const frames: MovementFrame[] = [];
+  const push = (
+    count: number,
+    frame: {
+      forward: number;
+      strafe: number;
+      sprint: boolean;
+      yawDelta?: number;
+      pitchDelta?: number;
+      jumpAtStart?: boolean;
+    }
+  ): void => {
+    for (let i = 0; i < count; i += 1) {
+      frames.push({
+        movement: {
+          forward: frame.forward,
+          strafe: frame.strafe,
+          sprint: frame.sprint,
+          jump: i === 0 && Boolean(frame.jumpAtStart)
+        },
+        yawDelta: frame.yawDelta ?? 0,
+        pitchDelta: frame.pitchDelta ?? 0,
+        delta: SERVER_TICK_SECONDS
+      });
+    }
+  };
+
+  push(80, { forward: 0, strafe: 0, sprint: false });
+  push(1, { forward: 0, strafe: 0, sprint: false, jumpAtStart: true });
+  push(40, { forward: 1, strafe: 0, sprint: false, pitchDelta: 0.0015 });
+  push(45, { forward: 1, strafe: 0, sprint: true, yawDelta: -0.01 });
+  push(35, { forward: 0, strafe: 1, sprint: true, yawDelta: 0.013 });
+  push(25, { forward: -0.4, strafe: 0.65, sprint: false, pitchDelta: -0.002 });
+  push(40, { forward: 0, strafe: 0, sprint: false });
+
+  return frames;
+}
+
+function assertClose(label: string, frameIndex: number, expected: number, actual: number, epsilon: number): void {
+  if (Math.abs(expected - actual) <= epsilon) {
+    return;
+  }
+  throw new Error(
+    `Frame ${frameIndex}: ${label} mismatch expected=${expected.toFixed(6)} actual=${actual.toFixed(6)} eps=${epsilon}`
+  );
+}
+
+async function runParityTest(): Promise<void> {
+  await RAPIER.init();
+
+  const local = await LocalPhysicsWorld.create();
+
+  const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+  world.integrationParameters.dt = SERVER_TICK_SECONDS;
+  const characterController = world.createCharacterController(0.01);
+  characterController.setSlideEnabled(true);
+  characterController.enableSnapToGround(0.2);
+  characterController.disableAutostep();
+  characterController.setMaxSlopeClimbAngle((60 * Math.PI) / 180);
+  characterController.setMinSlopeSlideAngle((80 * Math.PI) / 180);
+
+  let tick = 0;
+  let elapsedSeconds = 0;
+
+  const spatial = createNoopSpatialChannel();
+  const worldBootstrap = new WorldBootstrapSystem({
+    world,
+    spatialChannel: spatial,
+    getTickNumber: () => tick
+  });
+  worldBootstrap.createStaticWorldColliders();
+
+  const platformSystem = new PlatformSystem({
+    world,
+    spatialChannel: spatial,
+    getTickNumber: () => tick
+  });
+  platformSystem.initializePlatforms();
+
+  const platformOne = PLATFORM_DEFINITIONS.find((definition) => definition.pid === 1);
+  if (!platformOne) {
+    throw new Error("Missing platform definition pid=1");
+  }
+  const platformOnePose = samplePlatformTransform(platformOne, 0);
+  const bodyY = platformOnePose.y + platformOne.halfY + PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS;
+  const cameraY = bodyY + PLAYER_CAMERA_OFFSET_Y;
+
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(platformOnePose.x, bodyY, platformOnePose.z)
+  );
+  const collider = world.createCollider(
+    RAPIER.ColliderDesc.capsule(PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS).setFriction(0),
+    body
+  );
+
+  const serverPlayer: ServerParityPlayer = {
     yaw: 0,
     pitch: 0,
     vx: 0,
     vy: 0,
     vz: 0,
-    grounded: true
-  };
-}
-
-function stepServerStyle(state: SimState, frame: MovementFrame): SimState {
-  const next: SimState = { ...state };
-  if (frame.jump && next.grounded) {
-    next.vy = PLAYER_JUMP_VELOCITY;
-    next.grounded = false;
-  }
-
-  next.yaw = normalizeYaw(next.yaw + frame.yawDelta);
-  next.pitch = Math.max(-1.45, Math.min(1.45, frame.pitch));
-  const horizontal = stepHorizontalMovement(
-    { vx: next.vx, vz: next.vz },
-    { forward: frame.forward, strafe: frame.strafe, sprint: frame.sprint, yaw: next.yaw },
-    next.grounded,
-    frame.delta
-  );
-  next.vx = horizontal.vx;
-  next.vz = horizontal.vz;
-
-  if (next.grounded && next.vy < 0) {
-    next.vy = 0;
-  }
-  next.vy += GRAVITY * frame.delta;
-  next.x += next.vx * frame.delta;
-  next.y += next.vy * frame.delta;
-  next.z += next.vz * frame.delta;
-  if (next.y <= GROUND_Y) {
-    next.y = GROUND_Y;
-    next.vy = 0;
-    next.grounded = true;
-  } else {
-    next.grounded = false;
-  }
-  return next;
-}
-
-function stepClientStyle(state: SimState, frame: MovementFrame): SimState {
-  const next: SimState = { ...state };
-  if (frame.jump && next.grounded) {
-    next.vy = PLAYER_JUMP_VELOCITY;
-    next.grounded = false;
-  }
-
-  next.yaw = normalizeYaw(next.yaw + frame.yawDelta);
-  next.pitch = Math.max(-1.45, Math.min(1.45, frame.pitch));
-  const horizontal = stepHorizontalMovement(
-    { vx: next.vx, vz: next.vz },
-    { forward: frame.forward, strafe: frame.strafe, sprint: frame.sprint, yaw: next.yaw },
-    next.grounded,
-    frame.delta
-  );
-  next.vx = horizontal.vx;
-  next.vz = horizontal.vz;
-
-  if (next.grounded && next.vy < 0) {
-    next.vy = 0;
-  }
-  next.vy += GRAVITY * frame.delta;
-  next.x += next.vx * frame.delta;
-  next.y += next.vy * frame.delta;
-  next.z += next.vz * frame.delta;
-  if (next.y <= GROUND_Y) {
-    next.y = GROUND_Y;
-    next.vy = 0;
-    next.grounded = true;
-  } else {
-    next.grounded = false;
-  }
-  return next;
-}
-
-function createTrace(): MovementFrame[] {
-  const frames: MovementFrame[] = [];
-  const pushRepeated = (
-    count: number,
-    frame: Omit<MovementFrame, "delta" | "jump"> & { jump?: boolean; delta?: number }
-  ): void => {
-    for (let i = 0; i < count; i += 1) {
-      frames.push({
-        forward: frame.forward,
-        strafe: frame.strafe,
-        sprint: frame.sprint,
-        jump: i === 0 ? Boolean(frame.jump) : false,
-        yawDelta: frame.yawDelta,
-        pitch: frame.pitch,
-        delta: frame.delta ?? SERVER_TICK_SECONDS
-      });
-    }
+    grounded: true,
+    groundedPlatformPid: 1,
+    x: platformOnePose.x,
+    y: cameraY,
+    z: platformOnePose.z,
+    serverTick: tick,
+    body,
+    collider
   };
 
-  pushRepeated(25, { forward: 1, strafe: 0, sprint: false, yawDelta: 0.008, pitch: 0.02 });
-  pushRepeated(18, { forward: 1, strafe: 0, sprint: true, yawDelta: -0.01, pitch: 0.03 });
-  pushRepeated(20, { forward: 0, strafe: 1, sprint: true, yawDelta: 0.012, pitch: -0.03 });
-  pushRepeated(14, { forward: 0.6, strafe: 0.6, sprint: false, yawDelta: 0, pitch: 0 });
-  pushRepeated(10, { forward: 0, strafe: 0, sprint: false, yawDelta: 0, pitch: 0 });
-  pushRepeated(1, { forward: 1, strafe: 0, sprint: true, yawDelta: 0, pitch: 0.1, jump: true });
-  pushRepeated(20, { forward: 1, strafe: 0, sprint: true, yawDelta: 0, pitch: 0.08 });
-  pushRepeated(16, { forward: 1, strafe: -1, sprint: false, yawDelta: -0.02, pitch: -0.05 });
-  pushRepeated(12, { forward: 0, strafe: 0, sprint: false, yawDelta: 0, pitch: 0 });
-  return frames;
-}
+  const serverPlayers = new Map<number, ServerParityPlayer>([[1, serverPlayer]]);
 
-function assertClose(label: string, actual: number, expected: number, frameIndex: number): void {
-  if (Math.abs(actual - expected) <= EPSILON) {
-    return;
-  }
-  throw new Error(
-    `Parity mismatch at frame ${frameIndex} for ${label}: expected=${expected.toFixed(12)} actual=${actual.toFixed(12)}`
-  );
-}
+  const movementSystem = new PlayerMovementSystem<ServerParityPlayer>({
+    characterController,
+    getTickNumber: () => tick,
+    samplePlayerPlatformCarry: (player) => platformSystem.samplePlayerPlatformCarry(player),
+    findGroundedPlatformPid: (x, y, z, preferredPid) =>
+      platformSystem.findGroundedPlatformPid(x, y, z, preferredPid),
+    onPlayerStepped: () => undefined
+  });
 
-function assertStateParity(frameIndex: number, server: SimState, client: SimState): void {
-  assertClose("x", server.x, client.x, frameIndex);
-  assertClose("y", server.y, client.y, frameIndex);
-  assertClose("z", server.z, client.z, frameIndex);
-  assertClose("yaw", server.yaw, client.yaw, frameIndex);
-  assertClose("pitch", server.pitch, client.pitch, frameIndex);
-  assertClose("vx", server.vx, client.vx, frameIndex);
-  assertClose("vy", server.vy, client.vy, frameIndex);
-  assertClose("vz", server.vz, client.vz, frameIndex);
-  if (server.grounded !== client.grounded) {
-    throw new Error(
-      `Parity mismatch at frame ${frameIndex} for grounded: expected=${server.grounded} actual=${client.grounded}`
-    );
-  }
-}
+  local.setReconciliationState({
+    x: serverPlayer.x,
+    y: serverPlayer.y,
+    z: serverPlayer.z,
+    yaw: 0,
+    pitch: 0,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    grounded: true,
+    groundedPlatformPid: 1,
+    serverTimeSeconds: 0
+  });
 
-function runParityTest(): void {
   const trace = createTrace();
-  let serverState = createInitialState();
-  let clientState = createInitialState();
+  let yaw = 0;
+  let pitch = 0;
 
   for (let i = 0; i < trace.length; i += 1) {
     const frame = trace[i];
     if (!frame) {
       continue;
     }
-    serverState = stepServerStyle(serverState, frame);
-    clientState = stepClientStyle(clientState, frame);
-    assertStateParity(i, serverState, clientState);
+
+    yaw = normalizeYaw(yaw + frame.yawDelta);
+    pitch = Math.max(-1.45, Math.min(1.45, pitch + frame.pitchDelta));
+
+    if (frame.movement.jump && serverPlayer.grounded) {
+      serverPlayer.vy = PLAYER_JUMP_VELOCITY;
+      serverPlayer.grounded = false;
+      serverPlayer.groundedPlatformPid = null;
+    }
+    const horizontal = stepHorizontalMovement(
+      { vx: serverPlayer.vx, vz: serverPlayer.vz },
+      {
+        forward: frame.movement.forward,
+        strafe: frame.movement.strafe,
+        sprint: frame.movement.sprint,
+        yaw
+      },
+      serverPlayer.grounded,
+      frame.delta
+    );
+    serverPlayer.vx = horizontal.vx;
+    serverPlayer.vz = horizontal.vz;
+    serverPlayer.yaw = yaw;
+    serverPlayer.pitch = pitch;
+
+    tick += 1;
+    const previousElapsedSeconds = elapsedSeconds;
+    elapsedSeconds += frame.delta;
+    platformSystem.updatePlatforms(previousElapsedSeconds, elapsedSeconds);
+    movementSystem.stepPlayers(serverPlayers, frame.delta);
+    world.step();
+
+    local.step(frame.delta, frame.movement, yaw, pitch);
+
+    const localPose = local.getPose();
+    const localKinematic = local.getKinematicState();
+
+    assertClose("x", i, serverPlayer.x, localPose.x, EPS_POSITION);
+    assertClose("y", i, serverPlayer.y, localPose.y, EPS_POSITION);
+    assertClose("z", i, serverPlayer.z, localPose.z, EPS_POSITION);
+    assertClose("yaw", i, serverPlayer.yaw, localPose.yaw, EPS_ANGLE);
+    assertClose("pitch", i, serverPlayer.pitch, localPose.pitch, EPS_ANGLE);
+
+    assertClose("vx", i, serverPlayer.vx, localKinematic.vx, EPS_VELOCITY);
+    assertClose("vy", i, serverPlayer.vy, localKinematic.vy, EPS_VELOCITY);
+    assertClose("vz", i, serverPlayer.vz, localKinematic.vz, EPS_VELOCITY);
+
+    if (serverPlayer.grounded !== localKinematic.grounded) {
+      throw new Error(
+        `Frame ${i}: grounded mismatch expected=${serverPlayer.grounded} actual=${localKinematic.grounded}`
+      );
+    }
+    if (serverPlayer.groundedPlatformPid !== localKinematic.groundedPlatformPid) {
+      throw new Error(
+        `Frame ${i}: groundedPlatformPid mismatch expected=${String(serverPlayer.groundedPlatformPid)} actual=${String(localKinematic.groundedPlatformPid)}`
+      );
+    }
   }
 
   console.log(
-    `[movement-parity] PASS frames=${trace.length} final_pos=(${serverState.x.toFixed(3)},${serverState.y.toFixed(3)},${serverState.z.toFixed(3)}) final_vel=(${serverState.vx.toFixed(3)},${serverState.vy.toFixed(3)},${serverState.vz.toFixed(3)})`
+    `[movement-parity] PASS frames=${trace.length} final_pos=(${serverPlayer.x.toFixed(3)},${serverPlayer.y.toFixed(3)},${serverPlayer.z.toFixed(3)}) final_vel=(${serverPlayer.vx.toFixed(3)},${serverPlayer.vy.toFixed(3)},${serverPlayer.vz.toFixed(3)}) platformPid=${String(serverPlayer.groundedPlatformPid)}`
   );
 }
 
-try {
-  runParityTest();
-} catch (error) {
+void runParityTest().catch((error) => {
   console.error("[movement-parity] FAIL", error);
   process.exit(1);
-}
+});

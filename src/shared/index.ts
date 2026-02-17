@@ -4,4 +4,6 @@ export * from "./movement";
 export * from "./netcode";
 export * from "./platforms";
 export * from "./platformSpatialIndex";
+export * from "./sim/findGroundedPlatformPid";
+export * from "./sim/kinematicCharacter";
 export * from "./world";
