@@ -3,11 +3,9 @@ import { AABB3D, Channel, ChannelAABB3D } from "nengi";
 import {
   ABILITY_ID_NONE,
   ABILITY_ID_PUNCH,
-  abilityCategoryToWireValue,
   clampHotbarSlotIndex,
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
-  encodeAbilityAttributeMask,
   getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
   NType,
@@ -32,6 +30,7 @@ import {
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 import { InputSystem } from "./input/InputSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
+import { ReplicationMessagingSystem } from "./netcode/ReplicationMessagingSystem";
 import { PlatformSystem } from "./platform/PlatformSystem";
 
 type UserLike = {
@@ -109,6 +108,7 @@ export class GameSimulation {
   private readonly projectileSystem: ProjectileSystem;
   private readonly inputSystem: InputSystem<UserLike, PlayerEntity>;
   private readonly platformSystem: PlatformSystem;
+  private readonly replicationMessaging: ReplicationMessagingSystem<UserLike, PlayerEntity>;
   private readonly playerMovementSystem: PlayerMovementSystem<PlayerEntity>;
   private elapsedSeconds = 0;
   private tickNumber = 0;
@@ -152,6 +152,16 @@ export class GameSimulation {
       spatialChannel: this.spatialChannel,
       getTickNumber: () => this.tickNumber
     });
+    this.replicationMessaging = new ReplicationMessagingSystem<UserLike, PlayerEntity>({
+      getTickNumber: () => this.tickNumber,
+      getUsers: () => this.usersById.values(),
+      getUserById: (userId) => this.usersById.get(userId),
+      getPlayerByUserId: (userId) => this.playersByUserId.get(userId),
+      sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
+      getAbilityDefinitionForPlayer: (player, abilityId) =>
+        this.getAbilityDefinitionForPlayer(player, abilityId),
+      abilityUseEventRadius: ABILITY_USE_EVENT_RADIUS
+    });
     this.playerMovementSystem = new PlayerMovementSystem<PlayerEntity>({
       characterController: this.characterController,
       getTickNumber: () => this.tickNumber,
@@ -164,8 +174,8 @@ export class GameSimulation {
       findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
         this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
-        this.syncUserView(userId, player);
-        this.queueInputAck(userId, player, platformYawDelta);
+        this.replicationMessaging.syncUserView(userId, player);
+        this.replicationMessaging.queueInputAck(userId, player, platformYawDelta);
         this.markPlayerDirty(player, {
           dirtyCharacter: true,
           dirtyAbilityState: false
@@ -254,7 +264,7 @@ export class GameSimulation {
       ntype: NType.IdentityMessage,
       playerNid: player.nid
     });
-    this.sendInitialAbilityState(user, player);
+    this.replicationMessaging.sendInitialAbilityState(user, player);
     this.markPlayerDirty(player, {
       dirtyCharacter: true,
       dirtyAbilityState: true
@@ -462,90 +472,7 @@ export class GameSimulation {
         dirtyCharacter: false,
         dirtyAbilityState: true
       });
-      this.queueLoadoutStateMessage(user, player);
-    }
-  }
-
-  private sendInitialAbilityState(user: UserLike, player: PlayerEntity): void {
-    for (const abilityId of player.unlockedAbilityIds) {
-      const ability = this.getAbilityDefinitionForPlayer(player, abilityId);
-      if (!ability) {
-        continue;
-      }
-      this.queueAbilityDefinitionMessage(user, ability);
-    }
-    this.queueLoadoutStateMessage(user, player);
-  }
-
-  private queueAbilityDefinitionMessage(user: UserLike, ability: AbilityDefinition): void {
-    const projectile = ability.projectile;
-    const melee = ability.melee;
-    const damage = projectile?.damage ?? melee?.damage ?? 0;
-    const radius = projectile?.radius ?? melee?.radius ?? 0;
-    const cooldownSeconds = projectile?.cooldownSeconds ?? melee?.cooldownSeconds ?? 0;
-    user.queueMessage({
-      ntype: NType.AbilityDefinitionMessage,
-      abilityId: ability.id,
-      name: ability.name,
-      category: abilityCategoryToWireValue(ability.category),
-      pointsPower: ability.points.power,
-      pointsVelocity: ability.points.velocity,
-      pointsEfficiency: ability.points.efficiency,
-      pointsControl: ability.points.control,
-      attributeMask: encodeAbilityAttributeMask(ability.attributes),
-      kind: projectile?.kind ?? 0,
-      speed: projectile?.speed ?? 0,
-      damage,
-      radius,
-      cooldownSeconds,
-      lifetimeSeconds: projectile?.lifetimeSeconds ?? 0,
-      spawnForwardOffset: projectile?.spawnForwardOffset ?? 0,
-      spawnVerticalOffset: projectile?.spawnVerticalOffset ?? 0,
-      meleeRange: melee?.range ?? 0,
-      meleeArcDegrees: melee?.arcDegrees ?? 0
-    });
-  }
-
-  private queueLoadoutStateMessage(user: UserLike, player: PlayerEntity): void {
-    user.queueMessage({
-      ntype: NType.LoadoutStateMessage,
-      selectedHotbarSlot: this.sanitizeHotbarSlot(player.activeHotbarSlot, 0),
-      slot0AbilityId: player.hotbarAbilityIds[0] ?? ABILITY_ID_NONE,
-      slot1AbilityId: player.hotbarAbilityIds[1] ?? ABILITY_ID_NONE,
-      slot2AbilityId: player.hotbarAbilityIds[2] ?? ABILITY_ID_NONE,
-      slot3AbilityId: player.hotbarAbilityIds[3] ?? ABILITY_ID_NONE,
-      slot4AbilityId: player.hotbarAbilityIds[4] ?? ABILITY_ID_NONE
-    });
-  }
-
-  private broadcastAbilityUseMessage(player: PlayerEntity, ability: AbilityDefinition): void {
-    const abilityId = Math.max(0, Math.min(0xffff, Math.floor(ability.id)));
-    const category = abilityCategoryToWireValue(ability.category);
-    const eventX = player.x;
-    const eventY = player.y;
-    const eventZ = player.z;
-    for (const user of this.usersById.values()) {
-      const ownerPlayer = this.playersByUserId.get(user.id);
-      const isOwner = ownerPlayer?.nid === player.nid;
-      if (
-        !isOwner &&
-        !this.shouldDeliverAbilityUseToView(
-          user.view,
-          eventX,
-          eventY,
-          eventZ,
-          ABILITY_USE_EVENT_RADIUS
-        )
-      ) {
-        continue;
-      }
-      user.queueMessage({
-        ntype: NType.AbilityUseMessage,
-        ownerNid: player.nid,
-        abilityId,
-        category,
-        serverTick: this.tickNumber
-      });
+      this.replicationMessaging.queueLoadoutStateMessage(user, player);
     }
   }
 
@@ -675,7 +602,7 @@ export class GameSimulation {
       return;
     }
     player.lastPrimaryFireAtSeconds = this.elapsedSeconds;
-    this.broadcastAbilityUseMessage(player, ability);
+    this.replicationMessaging.broadcastAbilityUseMessage(player, ability);
 
     if (projectileProfile) {
       this.spawnProjectileFromAbility(player, projectileProfile);
@@ -943,56 +870,6 @@ export class GameSimulation {
       return 0;
     }
     return Math.max(0, Math.min(1, value));
-  }
-
-  private queueInputAck(userId: number, player: PlayerEntity, platformYawDelta: number): void {
-    const user = this.usersById.get(userId);
-    if (!user) {
-      return;
-    }
-    user.queueMessage({
-      ntype: NType.InputAckMessage,
-      sequence: player.lastProcessedSequence,
-      serverTick: this.tickNumber,
-      x: player.x,
-      y: player.y,
-      z: player.z,
-      yaw: player.yaw,
-      pitch: player.pitch,
-      vx: player.vx,
-      vy: player.vy,
-      vz: player.vz,
-      grounded: player.grounded,
-      groundedPlatformPid: player.groundedPlatformPid ?? -1,
-      platformYawDelta
-    });
-  }
-
-  private syncUserView(userId: number, player: PlayerEntity): void {
-    const user = this.usersById.get(userId);
-    if (!user?.view) {
-      return;
-    }
-    user.view.x = player.x;
-    user.view.y = player.y;
-    user.view.z = player.z;
-  }
-
-  private shouldDeliverAbilityUseToView(
-    view: AABB3D | undefined,
-    x: number,
-    y: number,
-    z: number,
-    radius: number
-  ): boolean {
-    if (!view) {
-      return false;
-    }
-    const clampedRadius = Math.max(0, radius);
-    const dx = Math.max(Math.abs(x - view.x) - view.halfWidth, 0);
-    const dy = Math.max(Math.abs(y - view.y) - view.halfHeight, 0);
-    const dz = Math.max(Math.abs(z - view.z) - view.halfDepth, 0);
-    return dx * dx + dy * dy + dz * dz <= clampedRadius * clampedRadius;
   }
 
   private getSpawnPosition(): { x: number; z: number } {
