@@ -35,6 +35,7 @@ import {
   loadCharacterVRMAnimationAssets,
   type CharacterVRMAnimationAssets
 } from "./animation/characterAnimationLibrary";
+import { AudioEngine } from "./audio/AudioEngine";
 import type {
   AbilityUseEvent,
   PlayerPose,
@@ -160,6 +161,8 @@ export class WorldRenderer {
   private readonly projectileGlowGeometry = new SphereGeometry(0.24, 10, 8);
   private readonly projectileBurstParticleGeometry = new IcosahedronGeometry(0.045, 0);
   private readonly tempVecA = new Vector3();
+  private readonly audio: AudioEngine;
+  private disposed = false;
   private localPlayerNid: number | null = null;
 
   public constructor(canvas: HTMLCanvasElement) {
@@ -180,6 +183,7 @@ export class WorldRenderer {
     this.camera.layers.disable(LOCAL_THIRD_PERSON_ONLY_LAYER);
 
     this.initializeScene();
+    this.audio = new AudioEngine(this.camera, this.scene);
     this.remotePlayerTemplate = this.createRemotePlayerTemplate();
     this.characterAnimationAssets = loadCharacterVRMAnimationAssets();
     const sourceVrm = this.getSourceVrm();
@@ -308,11 +312,33 @@ export class WorldRenderer {
       if (event.category !== "melee") {
         continue;
       }
-      if (this.localPlayerNid !== null && event.ownerNid === this.localPlayerNid) {
+      const isLocalOwner = this.localPlayerNid !== null && event.ownerNid === this.localPlayerNid;
+      const remoteVisual = this.remotePlayers.get(event.ownerNid);
+      if (!isLocalOwner) {
+        remoteVisual?.animator?.triggerPunch();
+      }
+      const sourceRoot = isLocalOwner ? this.localPlayerVisual?.root : remoteVisual?.root;
+      if (!sourceRoot) {
         continue;
       }
-      this.remotePlayers.get(event.ownerNid)?.animator?.triggerPunch();
+      this.audio.play3D(
+        "melee.punch.hit",
+        {
+          x: sourceRoot.position.x,
+          y: sourceRoot.position.y + PLAYER_EYE_HEIGHT * 0.55,
+          z: sourceRoot.position.z
+        },
+        `${event.category}:${event.ownerNid}:${event.abilityId}:${event.serverTick}`
+      );
     }
+  }
+
+  public dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.audio.dispose();
   }
 
   public syncPlatforms(platformStates: Array<{
@@ -464,6 +490,7 @@ export class WorldRenderer {
         propMaterial
       );
       block.position.set(worldBlock.x, worldBlock.y, worldBlock.z);
+      block.rotation.z = worldBlock.rotationZ ?? 0;
       this.scene.add(block);
     }
   }

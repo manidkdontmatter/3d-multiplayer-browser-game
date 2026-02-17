@@ -52,6 +52,10 @@ export class GameClientApp {
   private lastReconcileReplayCount = 0;
   private reconcileCorrectionCount = 0;
   private reconcileHardSnapCount = 0;
+  private totalUngroundedFixedTicks = 0;
+  private totalUngroundedEntries = 0;
+  private groundingSampleInitialized = false;
+  private groundedLastFixedTick = true;
   private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
   private lastAbilityCreateMessage = "Ready.";
   private lastQueuedHotbarSlot = 0;
@@ -139,13 +143,13 @@ export class GameClientApp {
   }
 
   public stop(): void {
-    if (!this.running) {
-      return;
+    if (this.running) {
+      this.running = false;
+      this.input.detach();
+      window.removeEventListener("resize", this.onResize);
+      window.cancelAnimationFrame(this.rafId);
     }
-    this.running = false;
-    this.input.detach();
-    window.removeEventListener("resize", this.onResize);
-    window.cancelAnimationFrame(this.rafId);
+    this.renderer.dispose();
   }
 
   private readonly loop = (): void => {
@@ -300,6 +304,8 @@ export class GameClientApp {
     if (cspActive) {
       this.decayReconciliationSmoothing(delta);
     }
+
+    this.sampleGroundingDiagnostics();
   }
 
   private applyAbilityEvents(): void {
@@ -347,7 +353,7 @@ export class GameClientApp {
     const selectedAbilityId = this.hotbarAbilityIds[activeSlot - 1] ?? ABILITY_ID_NONE;
     const activeAbilityName = this.resolveAbilityName(selectedAbilityId);
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | creator=${this.lastAbilityCreateMessage} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | creator=${this.lastAbilityCreateMessage} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -647,6 +653,22 @@ export class GameClientApp {
     }
     this.queuedTestPrimaryActionCount -= 1;
     return true;
+  }
+
+  private sampleGroundingDiagnostics(): void {
+    const groundedNow = this.resolveLocalGroundedState();
+    if (!this.groundingSampleInitialized) {
+      this.groundingSampleInitialized = true;
+      this.groundedLastFixedTick = groundedNow;
+      return;
+    }
+    if (!groundedNow) {
+      this.totalUngroundedFixedTicks += 1;
+      if (this.groundedLastFixedTick) {
+        this.totalUngroundedEntries += 1;
+      }
+    }
+    this.groundedLastFixedTick = groundedNow;
   }
 
   private static resolveServerUrl(): string {

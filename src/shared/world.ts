@@ -5,6 +5,7 @@ export interface StaticWorldBlock {
   halfX: number;
   halfY: number;
   halfZ: number;
+  rotationZ?: number;
 }
 
 const BLOCK_HALF = 0.6;
@@ -23,5 +24,14 @@ export const STATIC_WORLD_BLOCKS: StaticWorldBlock[] = (() => {
       halfZ: BLOCK_HALF
     });
   }
+  blocks.push({
+    x: 16,
+    y: 1.2,
+    z: -10,
+    halfX: 9,
+    halfY: 3,
+    halfZ: 9,
+    rotationZ: (-24 * Math.PI) / 180
+  });
   return blocks;
 })();

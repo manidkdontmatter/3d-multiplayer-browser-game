@@ -21,7 +21,7 @@
 
 ## Workflow and Tooling
 
-- Commit locally after meaningful verified changes; push at milestones or on request.
+- Commit locally after meaningful verified changes; when the user asks to commit, stage and commit all current workspace changes (not a partial subset). Push at milestones or on request.
 - Ask user approval before any dependency add/install/upgrade.
 - Network can be slow (~3 mbps): prefer retries/longer timeouts and avoid unnecessary downloads.
 - Use Playwright when browser automation/testing is relevant.
@@ -102,6 +102,7 @@
     - Use `avatar-build.exe` for CLI normalization/conversion pipelines for humanoid FBX/GLB->VRM.
   - Avoid reintroducing custom rig-specific track-name remapping as a long-term solution.
   - User preference:
+    - Commit after every task completion, and if asked to commit, include all current workspace changes in that commit (no partial staging); if a task is finished, push to GitHub when the last push was over 30 minutes ago.
     - If a system is fundamentally "frankenstein" and non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.
     - When starting local terminals/processes for testing (especially game server/client dev terminals), always stop/close them when the task/check is complete.
     - Before making changes, do a quick sanity pass to ensure the planned work is logically necessary and technically coherent, then execute.

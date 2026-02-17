@@ -158,7 +158,7 @@ const ABILITY_DEFINITIONS: ReadonlyArray<AbilityDefinition> = [
       damage: 18,
       range: 1.95,
       radius: 0.34,
-      cooldownSeconds: 0.4,
+      cooldownSeconds: 2,
       arcDegrees: 62
     }
   }

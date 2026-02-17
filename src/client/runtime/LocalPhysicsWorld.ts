@@ -9,6 +9,7 @@ import {
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
+  PLAYER_GROUND_STICK_VELOCITY,
   PLAYER_JUMP_VELOCITY,
   STATIC_WORLD_BLOCKS,
   samplePlatformTransform,
@@ -86,15 +87,18 @@ export class LocalPhysicsWorld {
     );
     world.createCollider(RAPIER.ColliderDesc.cuboid(128, 0.5, 128), groundBody);
 
-    const staticWorldBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
     for (const worldBlock of STATIC_WORLD_BLOCKS) {
+      const rotationZ = worldBlock.rotationZ ?? 0;
+      const staticWorldBody = world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(worldBlock.x, worldBlock.y, worldBlock.z)
+      );
       world.createCollider(
-        RAPIER.ColliderDesc.cuboid(worldBlock.halfX, worldBlock.halfY, worldBlock.halfZ).setTranslation(
-          worldBlock.x,
-          worldBlock.y,
-          worldBlock.z
-        ),
+        RAPIER.ColliderDesc.cuboid(worldBlock.halfX, worldBlock.halfY, worldBlock.halfZ),
         staticWorldBody
+      );
+      staticWorldBody.setRotation(
+        { x: 0, y: 0, z: Math.sin(rotationZ * 0.5), w: Math.cos(rotationZ * 0.5) },
+        true
       );
     }
 
@@ -166,21 +170,17 @@ export class LocalPhysicsWorld {
       this.groundedPlatformPid = null;
     }
 
-    const attachedToPlatform = this.groundedPlatformPid !== null;
-    if (attachedToPlatform) {
-      this.verticalVelocity = 0;
-    } else {
-      if (this.grounded && this.verticalVelocity < 0) {
-        this.verticalVelocity = 0;
-      }
-      this.verticalVelocity += GRAVITY * dt;
-    }
-
     const carry = this.samplePlatformCarry(previousSimulationSeconds, this.simulationSeconds);
+    const attachedToPlatformForSolve = this.groundedPlatformPid !== null;
+    const solveVerticalVelocity = attachedToPlatformForSolve
+      ? 0
+      : this.grounded && this.verticalVelocity <= 0
+        ? PLAYER_GROUND_STICK_VELOCITY
+        : this.verticalVelocity;
 
     const desired = {
       x: this.horizontalVelocity.vx * dt + carry.x,
-      y: this.verticalVelocity * dt + carry.y,
+      y: solveVerticalVelocity * dt + carry.y,
       z: this.horizontalVelocity.vz * dt + carry.z
     };
     this.characterController.computeColliderMovement(
@@ -210,8 +210,15 @@ export class LocalPhysicsWorld {
       : null;
     this.grounded = groundedByQuery || groundedPlatformPid !== null;
     this.groundedPlatformPid = this.grounded ? groundedPlatformPid : null;
-    if (this.grounded && this.verticalVelocity < 0) {
+    const attachedToPlatform = this.grounded && this.groundedPlatformPid !== null;
+    if (attachedToPlatform) {
       this.verticalVelocity = 0;
+    } else if (this.grounded) {
+      if (this.verticalVelocity < 0) {
+        this.verticalVelocity = 0;
+      }
+    } else {
+      this.verticalVelocity += GRAVITY * dt;
     }
 
     this.pose.x = position.x;

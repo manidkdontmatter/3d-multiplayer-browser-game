@@ -28,11 +28,10 @@ const RUN_ENTER_SPEED = 4.1;
 const WALK_REFERENCE_SPEED = 2.35;
 const RUN_REFERENCE_SPEED = 6.35;
 const LOCOMOTION_FADE_SECONDS = 0.16;
-const JUMP_ENTER_VERTICAL_SPEED = 1.1;
 const MIN_UPDATE_STEP = 1 / 240;
 const MAX_UPDATE_STEP = 1 / 20;
 
-type LocomotionState = "idle" | "walk" | "run" | "jump";
+type LocomotionState = "idle" | "walk" | "run" | "jump" | "fall";
 
 export class CharacterAnimationController {
   private readonly mixer: AnimationMixer;
@@ -60,7 +59,6 @@ export class CharacterAnimationController {
     this.actions.idle.enabled = true;
     this.actions.walk.enabled = true;
     this.actions.run.enabled = true;
-    this.actions.idle.enabled = true;
     this.actions.idle.setEffectiveWeight(1);
     this.actions.walk.setEffectiveWeight(0);
     this.actions.run.setEffectiveWeight(0);
@@ -99,16 +97,9 @@ export class CharacterAnimationController {
   private resolveLocomotionState(params: CharacterAnimationParams): LocomotionState {
     const airborne = !params.grounded;
     if (airborne) {
-      return "jump";
+      return params.verticalSpeed >= 0 ? "jump" : "fall";
     }
 
-    if (!this.groundedLastFrame && params.grounded) {
-      return "idle";
-    }
-
-    if (params.verticalSpeed > JUMP_ENTER_VERTICAL_SPEED) {
-      return "jump";
-    }
     if (params.horizontalSpeed >= RUN_ENTER_SPEED && params.sprinting) {
       return "run";
     }
@@ -119,8 +110,8 @@ export class CharacterAnimationController {
   }
 
   private transitionTo(next: LocomotionState): void {
-    const from = this.actions[this.locomotionState];
-    const to = this.actions[next];
+    const from = this.actionForState(this.locomotionState);
+    const to = this.actionForState(next);
     if (from === to) {
       return;
     }
@@ -147,6 +138,13 @@ export class CharacterAnimationController {
   private updateLocomotionSpeedScaling(horizontalSpeed: number): void {
     this.actions.walk.timeScale = this.clamp(horizontalSpeed / WALK_REFERENCE_SPEED, 0.75, 1.3);
     this.actions.run.timeScale = this.clamp(horizontalSpeed / RUN_REFERENCE_SPEED, 0.8, 1.35);
+  }
+
+  private actionForState(state: LocomotionState): AnimationAction {
+    if (state === "jump" || state === "fall") {
+      return this.actions.jump;
+    }
+    return this.actions[state];
   }
 
   private configureBaseAction(action: AnimationAction): AnimationAction {

@@ -23,6 +23,7 @@ import {
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
+  PLAYER_GROUND_STICK_VELOCITY,
   PLAYER_JUMP_VELOCITY,
   PLAYER_MAX_HEALTH,
   SERVER_TICK_SECONDS,
@@ -440,21 +441,15 @@ export class GameSimulation {
       }
       const carry = this.samplePlayerPlatformCarry(player);
       player.yaw = normalizeYaw(player.yaw + carry.yaw);
-      const attachedToPlatform = player.groundedPlatformPid !== null;
-      if (attachedToPlatform) {
-        // While attached to a platform, platform Y carry drives vertical motion directly.
-        player.vy = 0;
-      } else {
-        // Gravity is applied through desired Y movement for the KCC query.
-        if (player.grounded && player.vy < 0) {
-          player.vy = 0;
-        }
-        player.vy += GRAVITY * delta;
-      }
-
+      const attachedToPlatformForSolve = player.groundedPlatformPid !== null;
+      const solveVerticalVelocity = attachedToPlatformForSolve
+        ? 0
+        : player.grounded && player.vy <= 0
+          ? PLAYER_GROUND_STICK_VELOCITY
+          : player.vy;
       const desired = {
         x: player.vx * delta + carry.x,
-        y: player.vy * delta + carry.y,
+        y: solveVerticalVelocity * delta + carry.y,
         z: player.vz * delta + carry.z
       };
       this.characterController.computeColliderMovement(
@@ -489,10 +484,19 @@ export class GameSimulation {
         ? this.findGroundedPlatformPid(moved.x, moved.y, moved.z, player.groundedPlatformPid)
         : null;
       player.grounded = groundedByQuery || groundedPlatformPid !== null;
-      if (player.grounded && player.vy < 0) {
-        player.vy = 0;
-      }
       player.groundedPlatformPid = player.grounded ? groundedPlatformPid : null;
+      const attachedToPlatform = player.grounded && player.groundedPlatformPid !== null;
+      if (attachedToPlatform) {
+        // While attached to a platform, platform Y carry drives vertical motion directly.
+        player.vy = 0;
+      } else if (player.grounded) {
+        if (player.vy < 0) {
+          player.vy = 0;
+        }
+      } else {
+        // Apply gravity after this-step grounding resolution.
+        player.vy += GRAVITY * delta;
+      }
 
       player.x = moved.x;
       player.y = moved.y + PLAYER_CAMERA_OFFSET_Y;
@@ -563,15 +567,18 @@ export class GameSimulation {
     );
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(128, 0.5, 128), groundBody);
 
-    const staticBody = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
     for (const block of STATIC_WORLD_BLOCKS) {
+      const rotationZ = block.rotationZ ?? 0;
+      const staticBody = this.world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(block.x, block.y, block.z)
+      );
       this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(block.halfX, block.halfY, block.halfZ).setTranslation(
-          block.x,
-          block.y,
-          block.z
-        ),
+        RAPIER.ColliderDesc.cuboid(block.halfX, block.halfY, block.halfZ),
         staticBody
+      );
+      staticBody.setRotation(
+        { x: 0, y: 0, z: Math.sin(rotationZ * 0.5), w: Math.cos(rotationZ * 0.5) },
+        true
       );
     }
   }
