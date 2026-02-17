@@ -38,6 +38,11 @@ import {
   type PlayerSnapshot,
   PersistenceService
 } from "./persistence/PersistenceService";
+import {
+  DamageSystem,
+  type CombatTarget
+} from "./combat/damage/DamageSystem";
+import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 
 type UserLike = {
   id: number;
@@ -70,24 +75,6 @@ type PlayerEntity = {
   unlockedAbilityIds: Set<number>;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
-};
-
-type ProjectileEntity = {
-  nid: number;
-  ntype: NType.ProjectileEntity;
-  ownerNid: number;
-  kind: number;
-  x: number;
-  y: number;
-  z: number;
-  serverTick: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  radius: number;
-  damage: number;
-  ttlSeconds: number;
-  remainingRange: number;
 };
 
 type PlatformEntity = {
@@ -126,10 +113,6 @@ type TrainingDummyEntity = {
   collider: RAPIER.Collider;
 };
 
-type CombatTarget =
-  | { kind: "player"; player: PlayerEntity }
-  | { kind: "dummy"; dummy: TrainingDummyEntity };
-
 type PendingOfflineSnapshot = {
   snapshot: PlayerSnapshot;
   dirtyCharacter: boolean;
@@ -138,13 +121,7 @@ type PendingOfflineSnapshot = {
 
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
-const PROJECTILE_MAX_RANGE = 260;
 const MELEE_DIRECTION_EPSILON = 1e-6;
-const PROJECTILE_POOL_PREWARM = 96;
-const PROJECTILE_POOL_MAX = 4096;
-const PROJECTILE_MIN_RADIUS = 0.005;
-const PROJECTILE_RADIUS_CACHE_SCALE = 1000;
-const PROJECTILE_SPEED_EPSILON = 1e-6;
 const ABILITY_USE_EVENT_RADIUS = PLAYER_CAPSULE_RADIUS * 2;
 const TRAINING_DUMMY_MAX_HEALTH = 160;
 const TRAINING_DUMMY_RADIUS = 0.42;
@@ -156,20 +133,17 @@ export class GameSimulation {
   private readonly playersByAccountId = new Map<number, PlayerEntity>();
   private readonly playersByNid = new Map<number, PlayerEntity>();
   private readonly trainingDummiesByNid = new Map<number, TrainingDummyEntity>();
-  private readonly combatTargetsByColliderHandle = new Map<number, CombatTarget>();
   private readonly usersById = new Map<number, UserLike>();
   private readonly platformsByPid = new Map<number, PlatformEntity>();
   private readonly platformSpatialIndex = new PlatformSpatialIndex();
   private readonly platformQueryScratch: number[] = [];
-  private readonly projectilesByNid = new Map<number, ProjectileEntity>();
-  private readonly projectilePool: ProjectileEntity[] = [];
-  private readonly projectileCastShapeCache = new Map<number, RAPIER.Ball>();
   private readonly dirtyCharacterAccountIds = new Set<number>();
   private readonly dirtyAbilityStateAccountIds = new Set<number>();
   private readonly pendingOfflineSnapshots = new Map<number, PendingOfflineSnapshot>();
   private readonly world: RAPIER.World;
   private readonly characterController: RAPIER.KinematicCharacterController;
-  private readonly identityRotation: RAPIER.Rotation = { x: 0, y: 0, z: 0, w: 1 };
+  private readonly damageSystem: DamageSystem;
+  private readonly projectileSystem: ProjectileSystem;
   private elapsedSeconds = 0;
   private tickNumber = 0;
 
@@ -186,11 +160,27 @@ export class GameSimulation {
     this.characterController.disableAutostep();
     this.characterController.setMaxSlopeClimbAngle((60 * Math.PI) / 180);
     this.characterController.setMinSlopeSlideAngle((80 * Math.PI) / 180);
+    this.damageSystem = new DamageSystem({
+      maxPlayerHealth: PLAYER_MAX_HEALTH,
+      playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
+      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
+      getTickNumber: () => this.tickNumber,
+      getSpawnPosition: () => this.getSpawnPosition(),
+      markPlayerDirty: (player, options) => this.markPlayerDirty(player as PlayerEntity, options)
+    });
+    this.projectileSystem = new ProjectileSystem({
+      world: this.world,
+      spatialChannel: this.spatialChannel,
+      getTickNumber: () => this.tickNumber,
+      getOwnerCollider: (ownerNid) => this.playersByNid.get(ownerNid)?.collider,
+      resolveTargetByColliderHandle: (colliderHandle) =>
+        this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
+      applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
+    });
 
     this.createStaticWorldColliders();
     this.initializePlatforms();
     this.initializeTrainingDummies();
-    this.prewarmProjectilePool(PROJECTILE_POOL_PREWARM);
   }
 
   public addUser(user: UserLike): void {
@@ -251,7 +241,7 @@ export class GameSimulation {
     this.playersByUserId.set(user.id, player);
     this.playersByAccountId.set(player.accountId, player);
     this.playersByNid.set(player.nid, player);
-    this.combatTargetsByColliderHandle.set(player.collider.handle, { kind: "player", player });
+    this.damageSystem.registerPlayer(player);
     this.usersById.set(user.id, user);
     this.pendingOfflineSnapshots.delete(player.accountId);
     if (!pendingOfflineSnapshot?.dirtyCharacter) {
@@ -293,9 +283,9 @@ export class GameSimulation {
     this.playersByUserId.delete(user.id);
     this.playersByAccountId.delete(player.accountId);
     this.playersByNid.delete(player.nid);
-    this.combatTargetsByColliderHandle.delete(player.collider.handle);
+    this.damageSystem.unregisterCollider(player.collider.handle);
     this.usersById.delete(user.id);
-    this.removeProjectilesByOwner(player.nid);
+    this.projectileSystem.removeByOwner(player.nid);
     this.world.removeCollider(player.collider, true);
     this.world.removeRigidBody(player.body);
   }
@@ -481,7 +471,7 @@ export class GameSimulation {
       });
     }
 
-    this.updateProjectiles(delta);
+    this.projectileSystem.step(delta);
     this.world.step();
   }
 
@@ -526,7 +516,7 @@ export class GameSimulation {
   } {
     return {
       onlinePlayers: this.playersByUserId.size,
-      activeProjectiles: this.projectilesByNid.size,
+      activeProjectiles: this.projectileSystem.getActiveCount(),
       pendingOfflineSnapshots: this.pendingOfflineSnapshots.size
     };
   }
@@ -615,7 +605,7 @@ export class GameSimulation {
       };
       this.spatialChannel.addEntity(dummy);
       this.trainingDummiesByNid.set(dummy.nid, dummy);
-      this.combatTargetsByColliderHandle.set(dummy.collider.handle, { kind: "dummy", dummy });
+      this.damageSystem.registerDummy(dummy);
     }
   }
 
@@ -1020,7 +1010,7 @@ export class GameSimulation {
     this.broadcastAbilityUseMessage(player, ability);
 
     if (projectileProfile) {
-      this.spawnProjectileAbility(player, projectileProfile);
+      this.spawnProjectileFromAbility(player, projectileProfile);
       return;
     }
     if (meleeProfile) {
@@ -1028,7 +1018,7 @@ export class GameSimulation {
     }
   }
 
-  private spawnProjectileAbility(
+  private spawnProjectileFromAbility(
     player: PlayerEntity,
     projectileProfile: NonNullable<AbilityDefinition["projectile"]>
   ): void {
@@ -1041,23 +1031,21 @@ export class GameSimulation {
     const spawnY = player.y + projectileProfile.spawnVerticalOffset + dirY * projectileProfile.spawnForwardOffset;
     const spawnZ = player.z + dirZ * projectileProfile.spawnForwardOffset;
 
-    const projectile = this.acquireProjectile();
-    projectile.ownerNid = player.nid;
-    projectile.kind = projectileProfile.kind;
-    projectile.x = spawnX;
-    projectile.y = spawnY;
-    projectile.z = spawnZ;
-    projectile.serverTick = this.tickNumber;
-    projectile.vx = dirX * projectileProfile.speed;
-    projectile.vy = dirY * projectileProfile.speed;
-    projectile.vz = dirZ * projectileProfile.speed;
-    projectile.radius = projectileProfile.radius;
-    projectile.damage = projectileProfile.damage;
-    projectile.ttlSeconds = projectileProfile.lifetimeSeconds;
-    projectile.remainingRange = PROJECTILE_MAX_RANGE;
-
-    this.spatialChannel.addEntity(projectile);
-    this.projectilesByNid.set(projectile.nid, projectile);
+    this.projectileSystem.spawn({
+      ownerNid: player.nid,
+      kind: projectileProfile.kind,
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: dirX * projectileProfile.speed,
+      vy: dirY * projectileProfile.speed,
+      vz: dirZ * projectileProfile.speed,
+      radius: projectileProfile.radius,
+      damage: projectileProfile.damage,
+      lifetimeSeconds: projectileProfile.lifetimeSeconds,
+      // Per-projectile range is resolved at spawn time instead of a shared mutable global.
+      maxRange: Math.max(0, projectileProfile.speed * projectileProfile.lifetimeSeconds)
+    });
   }
 
   private tryApplyMeleeHit(player: PlayerEntity, meleeProfile: MeleeAbilityProfile): void {
@@ -1065,7 +1053,7 @@ export class GameSimulation {
     if (!hitTarget) {
       return;
     }
-    this.applyCombatDamage(hitTarget, meleeProfile.damage);
+    this.damageSystem.applyDamage(hitTarget, meleeProfile.damage);
   }
 
   private findMeleeHitTarget(
@@ -1088,7 +1076,7 @@ export class GameSimulation {
     let bestTarget: CombatTarget | null = null;
     let bestForwardDistance = Number.POSITIVE_INFINITY;
 
-    for (const target of this.combatTargetsByColliderHandle.values()) {
+    for (const target of this.damageSystem.getTargets()) {
       if (target.kind === "player" && target.player.nid === attacker.nid) {
         continue;
       }
@@ -1294,225 +1282,6 @@ export class GameSimulation {
       return 0;
     }
     return Math.max(-1, Math.min(1, value));
-  }
-
-  private updateProjectiles(delta: number): void {
-    for (const [nid, projectile] of this.projectilesByNid) {
-      projectile.ttlSeconds -= delta;
-      if (projectile.ttlSeconds <= 0) {
-        this.removeProjectile(nid, projectile);
-        continue;
-      }
-
-      const speed = Math.hypot(projectile.vx, projectile.vy, projectile.vz);
-      if (speed <= PROJECTILE_SPEED_EPSILON) {
-        this.removeProjectile(nid, projectile);
-        continue;
-      }
-      const maxTravelTime = this.resolveProjectileMaxTravelTime(delta, projectile.remainingRange, speed);
-      const collision = this.castProjectileCollision(projectile, maxTravelTime);
-      const traveledTime = collision ? collision.timeOfImpact : maxTravelTime;
-      const traveledDistance = speed * traveledTime;
-      projectile.remainingRange -= traveledDistance;
-      if (projectile.remainingRange <= 0) {
-        this.removeProjectile(nid, projectile);
-        continue;
-      }
-      if (collision) {
-        if (collision.target) {
-          this.applyCombatDamage(collision.target, projectile.damage);
-        }
-        this.removeProjectile(nid, projectile);
-        continue;
-      }
-
-      projectile.x += projectile.vx * traveledTime;
-      projectile.y += projectile.vy * traveledTime;
-      projectile.z += projectile.vz * traveledTime;
-      projectile.serverTick = this.tickNumber;
-    }
-  }
-
-  private resolveProjectileMaxTravelTime(
-    tickDeltaSeconds: number,
-    remainingRange: number,
-    speed: number
-  ): number {
-    if (speed <= PROJECTILE_SPEED_EPSILON || remainingRange <= 0) {
-      return 0;
-    }
-    const rangeLimitedTime = remainingRange / speed;
-    return Math.max(0, Math.min(tickDeltaSeconds, rangeLimitedTime));
-  }
-
-  private castProjectileCollision(
-    projectile: ProjectileEntity,
-    maxTravelTime: number
-  ): { timeOfImpact: number; target: CombatTarget | null } | null {
-    if (maxTravelTime <= 0) {
-      return null;
-    }
-    const ownerCollider = this.playersByNid.get(projectile.ownerNid)?.collider;
-    const shape = this.getProjectileCastShape(projectile.radius);
-    const hit = this.world.castShape(
-      { x: projectile.x, y: projectile.y, z: projectile.z },
-      this.identityRotation,
-      { x: projectile.vx, y: projectile.vy, z: projectile.vz },
-      shape,
-      0,
-      maxTravelTime,
-      true,
-      undefined,
-      undefined,
-      ownerCollider
-    );
-    if (!hit) {
-      return null;
-    }
-    const timeOfImpact = Math.max(0, Math.min(maxTravelTime, hit.time_of_impact));
-    const hitTarget = this.combatTargetsByColliderHandle.get(hit.collider.handle) ?? null;
-    return {
-      timeOfImpact,
-      target: hitTarget
-    };
-  }
-
-  private getProjectileCastShape(radius: number): RAPIER.Ball {
-    const clampedRadius = Math.max(PROJECTILE_MIN_RADIUS, radius);
-    const cacheKey = Math.max(1, Math.round(clampedRadius * PROJECTILE_RADIUS_CACHE_SCALE));
-    let shape = this.projectileCastShapeCache.get(cacheKey);
-    if (!shape) {
-      shape = new RAPIER.Ball(cacheKey / PROJECTILE_RADIUS_CACHE_SCALE);
-      this.projectileCastShapeCache.set(cacheKey, shape);
-    }
-    return shape;
-  }
-
-  private applyCombatDamage(target: CombatTarget, damage: number): void {
-    const appliedDamage = Math.max(0, Math.floor(damage));
-    if (appliedDamage <= 0) {
-      return;
-    }
-    if (target.kind === "player") {
-      const player = target.player;
-      player.health = Math.max(0, player.health - appliedDamage);
-      this.markPlayerDirty(player, {
-        dirtyCharacter: true,
-        dirtyAbilityState: false
-      });
-      if (player.health <= 0) {
-        this.respawnPlayer(player);
-      }
-      return;
-    }
-    const dummy = target.dummy;
-    dummy.health = Math.max(0, dummy.health - appliedDamage);
-    dummy.serverTick = this.tickNumber;
-    if (dummy.health <= 0) {
-      dummy.health = dummy.maxHealth;
-    }
-  }
-
-  private respawnPlayer(player: PlayerEntity): void {
-    const spawn = this.getSpawnPosition();
-    player.body.setTranslation(
-      { x: spawn.x, y: PLAYER_BODY_CENTER_HEIGHT, z: spawn.z },
-      true
-    );
-    player.vx = 0;
-    player.vy = 0;
-    player.vz = 0;
-    player.grounded = true;
-    player.groundedPlatformPid = null;
-    player.health = PLAYER_MAX_HEALTH;
-    player.x = spawn.x;
-    player.y = PLAYER_BODY_CENTER_HEIGHT + PLAYER_CAMERA_OFFSET_Y;
-    player.z = spawn.z;
-    player.serverTick = this.tickNumber;
-    this.markPlayerDirty(player, {
-      dirtyCharacter: true,
-      dirtyAbilityState: false
-    });
-  }
-
-  private removeProjectilesByOwner(ownerNid: number): void {
-    for (const [nid, projectile] of this.projectilesByNid) {
-      if (projectile.ownerNid === ownerNid) {
-        this.removeProjectile(nid, projectile);
-      }
-    }
-  }
-
-  private removeProjectile(nid: number, projectile: ProjectileEntity): void {
-    this.spatialChannel.removeEntity(projectile);
-    this.projectilesByNid.delete(nid);
-    this.releaseProjectile(projectile);
-  }
-
-  private prewarmProjectilePool(count: number): void {
-    for (let i = this.projectilePool.length; i < count; i += 1) {
-      this.projectilePool.push(this.createPooledProjectile());
-    }
-  }
-
-  private acquireProjectile(): ProjectileEntity {
-    const projectile = this.projectilePool.pop() ?? this.createPooledProjectile();
-    projectile.nid = 0;
-    projectile.ntype = NType.ProjectileEntity;
-    projectile.ownerNid = 0;
-    projectile.kind = 0;
-    projectile.x = 0;
-    projectile.y = 0;
-    projectile.z = 0;
-    projectile.serverTick = this.tickNumber;
-    projectile.vx = 0;
-    projectile.vy = 0;
-    projectile.vz = 0;
-    projectile.radius = 0;
-    projectile.damage = 0;
-    projectile.ttlSeconds = 0;
-    projectile.remainingRange = 0;
-    return projectile;
-  }
-
-  private releaseProjectile(projectile: ProjectileEntity): void {
-    if (this.projectilePool.length >= PROJECTILE_POOL_MAX) {
-      return;
-    }
-    projectile.nid = 0;
-    projectile.ownerNid = 0;
-    projectile.kind = 0;
-    projectile.x = 0;
-    projectile.y = -1000;
-    projectile.z = 0;
-    projectile.vx = 0;
-    projectile.vy = 0;
-    projectile.vz = 0;
-    projectile.radius = 0;
-    projectile.damage = 0;
-    projectile.ttlSeconds = 0;
-    projectile.remainingRange = 0;
-    this.projectilePool.push(projectile);
-  }
-
-  private createPooledProjectile(): ProjectileEntity {
-    return {
-      nid: 0,
-      ntype: NType.ProjectileEntity,
-      ownerNid: 0,
-      kind: 0,
-      x: 0,
-      y: -1000,
-      z: 0,
-      serverTick: 0,
-      vx: 0,
-      vy: 0,
-      vz: 0,
-      radius: 0,
-      damage: 0,
-      ttlSeconds: 0,
-      remainingRange: 0
-    };
   }
 
   private queueInputAck(userId: number, player: PlayerEntity, platformYawDelta: number): void {

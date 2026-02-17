@@ -44,6 +44,8 @@ Runtime entry points:
 Core modules:
 - `src/server/GameServer.ts`: server lifecycle + networking setup.
 - `src/server/GameSimulation.ts`: authoritative tick/simulation.
+- `src/server/combat/projectiles/ProjectileSystem.ts`: authoritative projectile lifecycle, collision casts, pooling, and replication lifecycle.
+- `src/server/combat/damage/DamageSystem.ts`: unified damage application and damageable target registry.
 - `src/server/persistence/PersistenceService.ts`: SQLite-backed auth + character/loadout persistence.
 - `src/client/bootstrap.ts`: staged startup orchestration.
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
@@ -62,8 +64,9 @@ Core modules:
 - Client prediction mirrors server movement/collision as closely as possible.
 
 Authoritative combat and physics highlights:
-- Projectile abilities: pooled server projectile objects.
-- Projectile collision: authoritative Rapier swept shape-cast queries.
+- Projectile abilities: `GameSimulation` emits spawn requests to `ProjectileSystem` (projectile internals are not owned by ability code).
+- Projectile collision: authoritative Rapier swept shape-cast queries in `ProjectileSystem`.
+- Unified damage path: melee/projectile damage resolves through `DamageSystem` for registered damageable targets.
 - Melee abilities: server-side range/radius/arc checks.
 
 ## Key Gameplay Systems (Current)
