@@ -44,12 +44,12 @@ Runtime entry points:
 Core modules:
 - `src/server/GameServer.ts`: server lifecycle + networking setup.
 - `src/server/GameSimulation.ts`: authoritative tick/simulation.
-- `src/server/persistence/PersistenceService.ts`: SQLite-backed auth + character/loadout/runtime-ability persistence.
+- `src/server/persistence/PersistenceService.ts`: SQLite-backed auth + character/loadout persistence.
 - `src/client/bootstrap.ts`: staged startup orchestration.
 - `src/client/runtime/NetworkClient.ts`: client netcode integration.
 - `src/client/runtime/LocalPhysicsWorld.ts`: local prediction/collision path.
 - `src/client/runtime/WorldRenderer.ts`: Three.js scene/render runtime.
-- `src/client/ui/AbilityHud.ts`: hotbar + loadout + creator panels.
+- `src/client/ui/AbilityHud.ts`: hotbar + loadout panel.
 
 ## Netcode Model
 
@@ -68,9 +68,9 @@ Authoritative combat and physics highlights:
 
 ## Key Gameplay Systems (Current)
 
-- Runtime ability pipeline with server-authoritative creation/validation/execution.
+- Server-authoritative projectile and melee ability execution from static ability definitions.
 - Access-key-based auth (`#k=...` URL fragment + local storage fallback).
-- SQLite persistence for account/character/loadout/runtime-ability state.
+- SQLite persistence for account/character/loadout state.
 
 ## Common Commands
 

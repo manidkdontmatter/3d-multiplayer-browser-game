@@ -7,7 +7,6 @@ export class InputController {
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
   private abilityLoadoutToggleQueued = false;
-  private abilityCreatorToggleQueued = false;
   private primaryActionHeld = false;
   private primaryActionQueued = false;
   private selectedHotbarSlot = 0;
@@ -105,12 +104,6 @@ export class InputController {
     return queued;
   }
 
-  public consumeAbilityCreatorToggle(): boolean {
-    const queued = this.abilityCreatorToggleQueued;
-    this.abilityCreatorToggleQueued = false;
-    return queued;
-  }
-
   public getSelectedHotbarSlot(): number {
     return this.selectedHotbarSlot;
   }
@@ -126,12 +119,8 @@ export class InputController {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (!event.repeat && (event.code === "KeyB" || event.code === "KeyN")) {
-      if (event.code === "KeyB") {
-        this.abilityLoadoutToggleQueued = true;
-      } else {
-        this.abilityCreatorToggleQueued = true;
-      }
+    if (!event.repeat && event.code === "KeyB") {
+      this.abilityLoadoutToggleQueued = true;
       return;
     }
     if (this.isTypingTarget(event.target)) {

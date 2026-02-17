@@ -7,10 +7,8 @@ export enum NType {
   PlatformEntity = 4,
   InputAckMessage = 5,
   ProjectileEntity = 6,
-  AbilityCreateCommand = 7,
   AbilityDefinitionMessage = 8,
   LoadoutStateMessage = 9,
-  AbilityCreateResultMessage = 10,
   LoadoutCommand = 11,
   TrainingDummyEntity = 12,
   AbilityUseMessage = 13
@@ -27,18 +25,6 @@ export const inputCommandSchema = defineSchema({
   yaw: Binary.Rotation32,
   yawDelta: Binary.Float32,
   pitch: Binary.Rotation32
-});
-
-export const abilityCreateCommandSchema = defineSchema({
-  submitNonce: Binary.UInt16,
-  name: Binary.String,
-  category: Binary.UInt8,
-  pointsPower: Binary.UInt8,
-  pointsVelocity: Binary.UInt8,
-  pointsEfficiency: Binary.UInt8,
-  pointsControl: Binary.UInt8,
-  attributeMask: Binary.UInt16,
-  targetHotbarSlot: Binary.UInt8
 });
 
 export const loadoutCommandSchema = defineSchema({
@@ -142,13 +128,6 @@ export const loadoutStateMessageSchema = defineSchema({
   slot4AbilityId: Binary.UInt16
 });
 
-export const abilityCreateResultMessageSchema = defineSchema({
-  submitNonce: Binary.UInt16,
-  success: Binary.Boolean,
-  createdAbilityId: Binary.UInt16,
-  message: Binary.String
-});
-
 export const abilityUseMessageSchema = defineSchema({
   ownerNid: Binary.UInt16,
   abilityId: Binary.UInt16,
@@ -158,7 +137,6 @@ export const abilityUseMessageSchema = defineSchema({
 
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
-ncontext.register(NType.AbilityCreateCommand, abilityCreateCommandSchema);
 ncontext.register(NType.LoadoutCommand, loadoutCommandSchema);
 ncontext.register(NType.PlayerEntity, playerEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
@@ -168,7 +146,6 @@ ncontext.register(NType.ProjectileEntity, projectileEntitySchema);
 ncontext.register(NType.TrainingDummyEntity, trainingDummyEntitySchema);
 ncontext.register(NType.AbilityDefinitionMessage, abilityDefinitionMessageSchema);
 ncontext.register(NType.LoadoutStateMessage, loadoutStateMessageSchema);
-ncontext.register(NType.AbilityCreateResultMessage, abilityCreateResultMessageSchema);
 ncontext.register(NType.AbilityUseMessage, abilityUseMessageSchema);
 
 export interface InputCommand {
@@ -183,19 +160,6 @@ export interface InputCommand {
   yaw: number;
   yawDelta: number;
   pitch: number;
-}
-
-export interface AbilityCreateCommand {
-  ntype: NType.AbilityCreateCommand;
-  submitNonce: number;
-  name: string;
-  category: number;
-  pointsPower: number;
-  pointsVelocity: number;
-  pointsEfficiency: number;
-  pointsControl: number;
-  attributeMask: number;
-  targetHotbarSlot: number;
 }
 
 export interface LoadoutCommand {
@@ -310,14 +274,6 @@ export interface LoadoutStateMessage {
   slot2AbilityId: number;
   slot3AbilityId: number;
   slot4AbilityId: number;
-}
-
-export interface AbilityCreateResultMessage {
-  ntype: NType.AbilityCreateResultMessage;
-  submitNonce: number;
-  success: boolean;
-  createdAbilityId: number;
-  message: string;
 }
 
 export interface AbilityUseMessage {

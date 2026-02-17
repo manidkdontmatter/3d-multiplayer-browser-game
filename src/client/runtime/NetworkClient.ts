@@ -12,7 +12,6 @@ import {
 import {
   type AbilityUseMessage,
   NType,
-  type AbilityCreateResultMessage,
   type AbilityDefinitionMessage,
   type IdentityMessage,
   type InputAckMessage,
@@ -57,24 +56,6 @@ export interface ReconciliationFrame {
   replay: PendingInput[];
 }
 
-export interface AbilityCreateDraftCommandPayload {
-  name: string;
-  category: number;
-  pointsPower: number;
-  pointsVelocity: number;
-  pointsEfficiency: number;
-  pointsControl: number;
-  attributeMask: number;
-  targetHotbarSlot: number;
-}
-
-export interface AbilityCreateResult {
-  submitNonce: number;
-  success: boolean;
-  createdAbilityId: number;
-  message: string;
-}
-
 export interface LoadoutState {
   selectedHotbarSlot: number;
   abilityIds: number[];
@@ -83,7 +64,6 @@ export interface LoadoutState {
 export interface AbilityEventBatch {
   definitions: AbilityDefinition[];
   loadout: LoadoutState | null;
-  createResults: AbilityCreateResult[];
 }
 
 const INPUT_SEQUENCE_MODULO = 0x10000;
@@ -109,10 +89,6 @@ interface BufferedAck {
   message: InputAckMessage;
 }
 
-interface QueuedAbilityCreateCommand extends AbilityCreateDraftCommandPayload {
-  submitNonce: number;
-}
-
 interface QueuedLoadoutCommand {
   applySelectedHotbarSlot: boolean;
   selectedHotbarSlot: number;
@@ -129,16 +105,13 @@ export class NetworkClient {
   private readonly bufferedAcks: BufferedAck[] = [];
   private readonly abilityDefinitions = new Map<number, AbilityDefinition>();
   private readonly pendingAbilityDefinitions = new Map<number, AbilityDefinition>();
-  private readonly pendingAbilityCreateResults: AbilityCreateResult[] = [];
   // Presentation-only ability-use cues (animation/VFX). Never used for authoritative gameplay state.
   private readonly pendingAbilityUseEvents: AbilityUseEvent[] = [];
   private pendingLoadoutState: LoadoutState | null = null;
-  private queuedAbilityCreateCommand: QueuedAbilityCreateCommand | null = null;
   private queuedLoadoutCommand: QueuedLoadoutCommand | null = null;
   private localPlayerNid: number | null = null;
   private connected = false;
   private nextCommandSequence = 0;
-  private nextAbilitySubmitNonce = 0;
   private readonly pendingInputs: PendingInput[] = [];
   private latestAck: ReconciliationFrame["ack"] | null = null;
   private lastAckSequence: number | null = null;
@@ -165,11 +138,9 @@ export class NetworkClient {
       this.serverGroundedPlatformPid = -1;
       this.lastSentYaw = 0;
       this.hasSentYaw = false;
-      this.pendingAbilityCreateResults.length = 0;
       this.pendingAbilityUseEvents.length = 0;
       this.pendingAbilityDefinitions.clear();
       this.pendingLoadoutState = null;
-      this.queuedAbilityCreateCommand = null;
       this.queuedLoadoutCommand = null;
     });
     this.client.setWebsocketErrorHandler(() => {
@@ -252,23 +223,6 @@ export class NetworkClient {
       pitch: orientation.pitch
     });
 
-    const abilityCommand = this.queuedAbilityCreateCommand;
-    if (abilityCommand) {
-      this.client.addCommand({
-        ntype: NType.AbilityCreateCommand,
-        submitNonce: this.clampUnsignedInt(abilityCommand.submitNonce, 0xffff),
-        name: abilityCommand.name.slice(0, 64),
-        category: this.clampUnsignedInt(abilityCommand.category, 0xff),
-        pointsPower: this.clampUnsignedInt(abilityCommand.pointsPower, 0xff),
-        pointsVelocity: this.clampUnsignedInt(abilityCommand.pointsVelocity, 0xff),
-        pointsEfficiency: this.clampUnsignedInt(abilityCommand.pointsEfficiency, 0xff),
-        pointsControl: this.clampUnsignedInt(abilityCommand.pointsControl, 0xff),
-        attributeMask: this.clampUnsignedInt(abilityCommand.attributeMask, 0xffff),
-        targetHotbarSlot: this.clampUnsignedInt(abilityCommand.targetHotbarSlot, 0xff)
-      });
-      this.queuedAbilityCreateCommand = null;
-    }
-
     this.client.flush();
   }
 
@@ -299,19 +253,9 @@ export class NetworkClient {
     this.queuedLoadoutCommand = queued;
   }
 
-  public queueAbilityCreateDraft(payload: AbilityCreateDraftCommandPayload): number {
-    this.nextAbilitySubmitNonce = (this.nextAbilitySubmitNonce + 1) & 0xffff;
-    this.queuedAbilityCreateCommand = {
-      submitNonce: this.nextAbilitySubmitNonce,
-      ...payload
-    };
-    return this.nextAbilitySubmitNonce;
-  }
-
   public consumeAbilityEvents(): AbilityEventBatch | null {
     if (
       this.pendingAbilityDefinitions.size === 0 &&
-      this.pendingAbilityCreateResults.length === 0 &&
       this.pendingLoadoutState === null
     ) {
       return null;
@@ -319,15 +263,12 @@ export class NetworkClient {
 
     const definitions = Array.from(this.pendingAbilityDefinitions.values()).sort((a, b) => a.id - b.id);
     const loadout = this.pendingLoadoutState;
-    const createResults = [...this.pendingAbilityCreateResults];
     this.pendingAbilityDefinitions.clear();
-    this.pendingAbilityCreateResults.length = 0;
     this.pendingLoadoutState = null;
 
     return {
       definitions,
-      loadout,
-      createResults
+      loadout
     };
   }
 
@@ -487,7 +428,6 @@ export class NetworkClient {
         | InputAckMessage
         | AbilityDefinitionMessage
         | LoadoutStateMessage
-        | AbilityCreateResultMessage
         | AbilityUseMessage
         | TrainingDummyEntity
         | undefined;
@@ -510,15 +450,6 @@ export class NetworkClient {
       }
       if (message?.ntype === NType.LoadoutStateMessage) {
         this.pendingLoadoutState = this.toLoadoutState(message);
-        continue;
-      }
-      if (message?.ntype === NType.AbilityCreateResultMessage) {
-        this.pendingAbilityCreateResults.push({
-          submitNonce: message.submitNonce,
-          success: message.success,
-          createdAbilityId: message.createdAbilityId,
-          message: message.message
-        });
         continue;
       }
       if (message?.ntype === NType.AbilityUseMessage) {

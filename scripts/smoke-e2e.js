@@ -13,7 +13,6 @@ const SERVER_URL = "ws://127.0.0.1:9001";
 const SERVER_START_TIMEOUT_MS = readEnvNumber("E2E_SERVER_START_TIMEOUT_MS", 18000);
 const CLIENT_START_TIMEOUT_MS = readEnvNumber("E2E_CLIENT_START_TIMEOUT_MS", 22000);
 const CONNECT_TIMEOUT_MS = readEnvNumber("E2E_CONNECT_TIMEOUT_MS", 12000);
-const CREATOR_TEST_TIMEOUT_MS = readEnvNumber("E2E_CREATOR_TIMEOUT_MS", 6000);
 const ARTIFACTS_ON_PASS = process.env.E2E_ARTIFACTS_ON_PASS === "1";
 const ARTIFACTS_ON_FAIL = process.env.E2E_ARTIFACTS_ON_FAIL !== "0";
 
@@ -125,17 +124,24 @@ async function waitForConnectedState(page, timeoutMs) {
   throw new Error("Timed out waiting for connected state.");
 }
 
-async function waitForCreatorCreatedState(page, timeoutMs) {
+async function waitForLoadoutPanelState(page, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const state = await readState(page);
-    const status = state?.localAbility?.creatorStatus;
-    if (typeof status === "string" && status.toLowerCase().includes("created ability #")) {
+    if (state?.localAbility?.ui?.loadoutPanelOpen === true) {
       return state;
     }
     await delay(120);
   }
-  throw new Error("Timed out waiting for ability creator success state.");
+  throw new Error("Timed out waiting for loadout panel open state.");
+}
+
+async function openLoadoutPanel(page) {
+  await page.evaluate(() => {
+    const eventInit = { code: "KeyB", key: "b", bubbles: true };
+    window.dispatchEvent(new KeyboardEvent("keydown", eventInit));
+    window.dispatchEvent(new KeyboardEvent("keyup", eventInit));
+  });
 }
 
 async function main() {
@@ -189,20 +195,12 @@ async function main() {
     await page.goto(CLIENT_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.mouse.click(640, 360);
     finalState = await waitForConnectedState(page, CONNECT_TIMEOUT_MS);
-    await page.keyboard.press("KeyB");
+    await openLoadoutPanel(page);
+    finalState = await waitForLoadoutPanelState(page, 3000);
     await page.waitForSelector("#ability-loadout-panel.ability-panel-visible", {
       state: "visible",
       timeout: 3000
     });
-    await page.waitForSelector("#ability-creator-panel.ability-panel-hidden", {
-      state: "attached",
-      timeout: 3000
-    });
-    await page.keyboard.press("KeyN");
-    await page.waitForSelector(".ability-creator-input", { state: "visible", timeout: 3000 });
-    await page.fill(".ability-creator-input", "Smoke Bolt");
-    await page.click(".ability-creator-submit");
-    finalState = await waitForCreatorCreatedState(page, CREATOR_TEST_TIMEOUT_MS);
 
     const hasFatalConsoleError = logs.some(
       (entry) =>

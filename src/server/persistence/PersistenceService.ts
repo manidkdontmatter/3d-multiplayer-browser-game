@@ -3,19 +3,15 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
 import {
-  ABILITY_DYNAMIC_ID_START,
   ABILITY_ID_NONE,
   DEFAULT_HOTBAR_ABILITY_IDS,
   HOTBAR_SLOT_COUNT,
-  PLAYER_MAX_HEALTH,
-  type AbilityDefinition
+  PLAYER_MAX_HEALTH
 } from "../../shared/index";
 
 const ACCESS_KEY_PATTERN = /^[A-Za-z0-9]{12}$/;
 const KEY_SCRYPT_BYTES = 64;
 const KEY_SALT_BYTES = 16;
-const RUNTIME_ABILITY_ID_MAX = 0xffff;
-const RUNTIME_ABILITY_ID_MIN = ABILITY_DYNAMIC_ID_START;
 const CHARACTER_SCHEMA_VERSION = 1;
 
 const IP_BUCKET_CAPACITY = 10;
@@ -50,7 +46,6 @@ export interface PersistedPlayerState {
   health: number;
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
-  runtimeAbilities: AbilityDefinition[];
 }
 
 export interface PlayerSnapshot {
@@ -66,7 +61,6 @@ export interface PlayerSnapshot {
   health: number;
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
-  runtimeAbilities: AbilityDefinition[];
 }
 
 type TokenBucketState = {
@@ -225,36 +219,7 @@ export class PersistenceService {
       )
       .all(accountId) as Array<{ slotIndex: number; abilityId: number }>;
 
-    const runtimeRows = this.db
-      .prepare(
-        `SELECT
-            ability_id AS abilityId,
-            name,
-            category,
-            points_power AS pointsPower,
-            points_velocity AS pointsVelocity,
-            points_efficiency AS pointsEfficiency,
-            points_control AS pointsControl,
-            attribute_mask AS attributeMask,
-            projectile_kind AS projectileKind,
-            projectile_speed AS projectileSpeed,
-            projectile_damage AS projectileDamage,
-            projectile_radius AS projectileRadius,
-            projectile_cooldown_seconds AS projectileCooldownSeconds,
-            projectile_lifetime_seconds AS projectileLifetimeSeconds,
-            projectile_spawn_forward_offset AS projectileSpawnForwardOffset,
-            projectile_spawn_vertical_offset AS projectileSpawnVerticalOffset,
-            melee_damage AS meleeDamage,
-            melee_range AS meleeRange,
-            melee_radius AS meleeRadius,
-            melee_cooldown_seconds AS meleeCooldownSeconds,
-            melee_arc_degrees AS meleeArcDegrees
-         FROM player_runtime_abilities
-         WHERE player_id = ?`
-      )
-      .all(accountId) as RuntimeAbilityRow[];
-
-    if (!character && slots.length === 0 && runtimeRows.length === 0) {
+    if (!character && slots.length === 0) {
       return null;
     }
 
@@ -278,8 +243,7 @@ export class PersistenceService {
       vz: character?.vz ?? 0,
       health: this.clampInteger(character?.health ?? PLAYER_MAX_HEALTH, 0, PLAYER_MAX_HEALTH),
       activeHotbarSlot: this.clampInteger(character?.activeHotbarSlot ?? 0, 0, HOTBAR_SLOT_COUNT - 1),
-      hotbarAbilityIds: hotbar,
-      runtimeAbilities: runtimeRows.map((row) => this.rowToRuntimeAbility(row))
+      hotbarAbilityIds: hotbar
     };
   }
 
@@ -339,97 +303,9 @@ export class PersistenceService {
         const abilityId = state.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE;
         insertSlot.run(state.accountId, slot, Math.max(ABILITY_ID_NONE, Math.floor(abilityId)));
       }
-
-      this.db
-        .prepare("DELETE FROM player_runtime_abilities WHERE player_id = ?")
-        .run(state.accountId);
-
-      const insertRuntimeAbility = this.db.prepare(
-        `INSERT INTO player_runtime_abilities (
-            player_id,
-            ability_id,
-            name,
-            category,
-            points_power,
-            points_velocity,
-            points_efficiency,
-            points_control,
-            attribute_mask,
-            projectile_kind,
-            projectile_speed,
-            projectile_damage,
-            projectile_radius,
-            projectile_cooldown_seconds,
-            projectile_lifetime_seconds,
-            projectile_spawn_forward_offset,
-            projectile_spawn_vertical_offset,
-            melee_damage,
-            melee_range,
-            melee_radius,
-            melee_cooldown_seconds,
-            melee_arc_degrees
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-      for (const ability of state.runtimeAbilities) {
-        insertRuntimeAbility.run(
-          state.accountId,
-          this.clampInteger(ability.id, RUNTIME_ABILITY_ID_MIN, RUNTIME_ABILITY_ID_MAX),
-          ability.name,
-          ability.category,
-          ability.points.power,
-          ability.points.velocity,
-          ability.points.efficiency,
-          ability.points.control,
-          this.encodeAttributeMask(ability.attributes),
-          ability.projectile?.kind ?? 0,
-          ability.projectile?.speed ?? 0,
-          ability.projectile?.damage ?? 0,
-          ability.projectile?.radius ?? 0,
-          ability.projectile?.cooldownSeconds ?? 0,
-          ability.projectile?.lifetimeSeconds ?? 0,
-          ability.projectile?.spawnForwardOffset ?? 0,
-          ability.projectile?.spawnVerticalOffset ?? 0,
-          ability.melee?.damage ?? 0,
-          ability.melee?.range ?? 0,
-          ability.melee?.radius ?? 0,
-          ability.melee?.cooldownSeconds ?? 0,
-          ability.melee?.arcDegrees ?? 0
-        );
-      }
     });
 
     tx(snapshot);
-  }
-
-  public allocateRuntimeAbilityId(): number {
-    const tx = this.db.transaction(() => {
-      const row = this.db
-        .prepare("SELECT value FROM meta WHERE key = 'next_runtime_ability_id'")
-        .get() as { value: string } | undefined;
-
-      let candidate = this.clampInteger(Number(row?.value ?? RUNTIME_ABILITY_ID_MIN), RUNTIME_ABILITY_ID_MIN, RUNTIME_ABILITY_ID_MAX);
-      let attempts = 0;
-      while (attempts <= RUNTIME_ABILITY_ID_MAX - RUNTIME_ABILITY_ID_MIN + 1) {
-        const inUse = this.db
-          .prepare("SELECT 1 AS one FROM player_runtime_abilities WHERE ability_id = ? LIMIT 1")
-          .get(candidate) as { one: number } | undefined;
-        if (!inUse) {
-          const next = candidate >= RUNTIME_ABILITY_ID_MAX ? RUNTIME_ABILITY_ID_MIN : candidate + 1;
-          this.db
-            .prepare(
-              `INSERT INTO meta (key, value) VALUES ('next_runtime_ability_id', ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-            )
-            .run(String(next));
-          return candidate;
-        }
-        candidate = candidate >= RUNTIME_ABILITY_ID_MAX ? RUNTIME_ABILITY_ID_MIN : candidate + 1;
-        attempts += 1;
-      }
-      throw new Error("No runtime ability IDs available.");
-    });
-
-    return tx();
   }
 
   private initializeSchema(): void {
@@ -468,37 +344,6 @@ export class PersistenceService {
         FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS player_runtime_abilities (
-        player_id INTEGER NOT NULL,
-        ability_id INTEGER NOT NULL PRIMARY KEY,
-        name TEXT NOT NULL,
-        category TEXT NOT NULL,
-        points_power INTEGER NOT NULL,
-        points_velocity INTEGER NOT NULL,
-        points_efficiency INTEGER NOT NULL,
-        points_control INTEGER NOT NULL,
-        attribute_mask INTEGER NOT NULL,
-        projectile_kind INTEGER NOT NULL,
-        projectile_speed REAL NOT NULL,
-        projectile_damage REAL NOT NULL,
-        projectile_radius REAL NOT NULL,
-        projectile_cooldown_seconds REAL NOT NULL,
-        projectile_lifetime_seconds REAL NOT NULL,
-        projectile_spawn_forward_offset REAL NOT NULL,
-        projectile_spawn_vertical_offset REAL NOT NULL,
-        melee_damage REAL NOT NULL,
-        melee_range REAL NOT NULL,
-        melee_radius REAL NOT NULL,
-        melee_cooldown_seconds REAL NOT NULL,
-        melee_arc_degrees REAL NOT NULL,
-        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS auth_audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts INTEGER NOT NULL,
@@ -507,14 +352,6 @@ export class PersistenceService {
         reason TEXT NOT NULL
       );
     `);
-
-    this.db
-      .prepare(
-        `INSERT INTO meta (key, value)
-         VALUES ('next_runtime_ability_id', ?)
-         ON CONFLICT(key) DO NOTHING`
-      )
-      .run(String(RUNTIME_ABILITY_ID_MIN));
   }
 
   private createPlayer(keyFingerprint: string, keySalt: Buffer, keyHash: Buffer, now: number): number {
@@ -682,88 +519,6 @@ export class PersistenceService {
     bucket.tokens = Math.min(capacity, bucket.tokens + elapsed * refillPerMs);
   }
 
-  private rowToRuntimeAbility(row: RuntimeAbilityRow): AbilityDefinition {
-    const attributes = this.decodeAttributeMask(row.attributeMask);
-    const hasProjectile = row.category === "projectile" && row.projectileKind > 0;
-    const hasMelee = row.category === "melee" && row.meleeDamage > 0;
-    return {
-      id: this.clampInteger(row.abilityId, RUNTIME_ABILITY_ID_MIN, RUNTIME_ABILITY_ID_MAX),
-      key: `custom-${row.abilityId}`,
-      name: row.name,
-      description: `${row.category} | attrs: ${attributes.length > 0 ? attributes.join(", ") : "none"}`,
-      category: row.category,
-      points: {
-        power: row.pointsPower,
-        velocity: row.pointsVelocity,
-        efficiency: row.pointsEfficiency,
-        control: row.pointsControl
-      },
-      attributes,
-      projectile: hasProjectile
-        ? {
-            kind: row.projectileKind,
-            speed: row.projectileSpeed,
-            damage: row.projectileDamage,
-            radius: row.projectileRadius,
-            cooldownSeconds: row.projectileCooldownSeconds,
-            lifetimeSeconds: row.projectileLifetimeSeconds,
-            spawnForwardOffset: row.projectileSpawnForwardOffset,
-            spawnVerticalOffset: row.projectileSpawnVerticalOffset
-          }
-        : undefined,
-      melee: hasMelee
-        ? {
-            damage: row.meleeDamage,
-            range: row.meleeRange,
-            radius: row.meleeRadius,
-            cooldownSeconds: row.meleeCooldownSeconds,
-            arcDegrees: row.meleeArcDegrees
-          }
-        : undefined
-    };
-  }
-
-  private encodeAttributeMask(attributes: string[]): number {
-    let mask = 0;
-    for (const attribute of attributes) {
-      switch (attribute) {
-        case "homing-lite":
-          mask |= 1 << 0;
-          break;
-        case "wide-impact":
-          mask |= 1 << 1;
-          break;
-        case "quick-cast":
-          mask |= 1 << 2;
-          break;
-        case "long-reach":
-          mask |= 1 << 3;
-          break;
-        default:
-          break;
-      }
-    }
-    return mask;
-  }
-
-  private decodeAttributeMask(mask: number): Array<"homing-lite" | "wide-impact" | "quick-cast" | "long-reach"> {
-    const attributes: Array<"homing-lite" | "wide-impact" | "quick-cast" | "long-reach"> = [];
-    const normalized = this.clampInteger(mask, 0, 0xffff);
-    if ((normalized & (1 << 0)) !== 0) {
-      attributes.push("homing-lite");
-    }
-    if ((normalized & (1 << 1)) !== 0) {
-      attributes.push("wide-impact");
-    }
-    if ((normalized & (1 << 2)) !== 0) {
-      attributes.push("quick-cast");
-    }
-    if ((normalized & (1 << 3)) !== 0) {
-      attributes.push("long-reach");
-    }
-    return attributes;
-  }
-
   private normalizeRemoteIp(remoteIpRaw: unknown): string {
     const value = typeof remoteIpRaw === "string" ? remoteIpRaw.trim() : "";
     return value.length > 0 ? value : "unknown";
@@ -776,27 +531,3 @@ export class PersistenceService {
     return Math.max(min, Math.min(max, Math.floor(value)));
   }
 }
-
-type RuntimeAbilityRow = {
-  abilityId: number;
-  name: string;
-  category: "projectile" | "melee" | "passive";
-  pointsPower: number;
-  pointsVelocity: number;
-  pointsEfficiency: number;
-  pointsControl: number;
-  attributeMask: number;
-  projectileKind: number;
-  projectileSpeed: number;
-  projectileDamage: number;
-  projectileRadius: number;
-  projectileCooldownSeconds: number;
-  projectileLifetimeSeconds: number;
-  projectileSpawnForwardOffset: number;
-  projectileSpawnVerticalOffset: number;
-  meleeDamage: number;
-  meleeRange: number;
-  meleeRadius: number;
-  meleeCooldownSeconds: number;
-  meleeArcDegrees: number;
-};

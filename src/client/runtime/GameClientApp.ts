@@ -57,7 +57,6 @@ export class GameClientApp {
   private groundingSampleInitialized = false;
   private groundedLastFixedTick = true;
   private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
-  private lastAbilityCreateMessage = "Ready.";
   private lastQueuedHotbarSlot = 0;
   private queuedTestPrimaryActionCount = 0;
   private testPrimaryHeld = false;
@@ -89,11 +88,6 @@ export class GameClientApp {
         this.network.queueLoadoutSelection(slot);
         this.network.queueLoadoutAssignment(slot, abilityId);
         this.lastQueuedHotbarSlot = slot;
-      },
-      onCreateAbilityRequested: (draft) => {
-        const submitNonce = this.network.queueAbilityCreateDraft(draft);
-        this.lastAbilityCreateMessage = `Create request #${submitNonce} queued`;
-        this.abilityHud.setCreatorStatus(this.lastAbilityCreateMessage);
       }
     });
     this.authPanel = AuthPanel.mount(document, {
@@ -172,10 +166,6 @@ export class GameClientApp {
     if (this.input.consumeAbilityLoadoutToggle()) {
       const loadoutOpen = this.abilityHud.toggleLoadoutPanel();
       shouldReleasePointerLock = shouldReleasePointerLock || loadoutOpen;
-    }
-    if (this.input.consumeAbilityCreatorToggle()) {
-      const creatorOpen = this.abilityHud.toggleCreatorPanel();
-      shouldReleasePointerLock = shouldReleasePointerLock || creatorOpen;
     }
     if (shouldReleasePointerLock && document.pointerLockElement === this.canvas) {
       void document.exitPointerLock();
@@ -326,12 +316,6 @@ export class GameClientApp {
       this.abilityHud.setSelectedSlot(events.loadout.selectedHotbarSlot, false);
     }
 
-    for (const result of events.createResults) {
-      this.lastAbilityCreateMessage = result.success
-        ? `Created ability #${result.createdAbilityId}`
-        : `Create failed: ${result.message}`;
-      this.abilityHud.setCreatorStatus(this.lastAbilityCreateMessage);
-    }
   }
 
   private updateStatus(): void {
@@ -353,7 +337,7 @@ export class GameClientApp {
     const selectedAbilityId = this.hotbarAbilityIds[activeSlot - 1] ?? ABILITY_ID_NONE;
     const activeAbilityName = this.resolveAbilityName(selectedAbilityId);
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | creator=${this.lastAbilityCreateMessage} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -450,10 +434,8 @@ export class GameClientApp {
         localAbility: {
           selectedSlot,
           selectedAbilityId,
-          creatorStatus: this.lastAbilityCreateMessage,
           ui: {
-            loadoutPanelOpen: this.abilityHud.isLoadoutPanelOpen(),
-            creatorPanelOpen: this.abilityHud.isCreatorPanelOpen()
+            loadoutPanelOpen: this.abilityHud.isLoadoutPanelOpen()
           },
           selectedAbilityName: this.resolveAbilityName(selectedAbilityId),
           hotbar: this.hotbarAbilityIds.map((abilityId, slot) => ({

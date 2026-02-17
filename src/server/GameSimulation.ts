@@ -3,14 +3,11 @@ import { AABB3D, Channel, ChannelAABB3D } from "nengi";
 import {
   ABILITY_ID_NONE,
   ABILITY_ID_PUNCH,
-  abilityCategoryFromWireValue,
   abilityCategoryToWireValue,
   applyPlatformCarry,
   clampHotbarSlotIndex,
-  createAbilityDefinitionFromDraft,
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
-  decodeAbilityAttributeMask,
   encodeAbilityAttributeMask,
   GRAVITY,
   getAbilityDefinitionById,
@@ -34,7 +31,6 @@ import {
 } from "../shared/index";
 import type { AbilityDefinition, MeleeAbilityProfile } from "../shared/index";
 import type {
-  AbilityCreateCommand as AbilityCreateWireCommand,
   InputCommand as InputWireCommand,
   LoadoutCommand as LoadoutWireCommand
 } from "../shared/netcode";
@@ -71,7 +67,6 @@ type PlayerEntity = {
   lastPrimaryFireAtSeconds: number;
   lastProcessedSequence: number;
   primaryHeld: boolean;
-  lastAbilitySubmitNonce: number;
   unlockedAbilityIds: Set<number>;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
@@ -135,11 +130,6 @@ type CombatTarget =
   | { kind: "player"; player: PlayerEntity }
   | { kind: "dummy"; dummy: TrainingDummyEntity };
 
-type RuntimeAbilityEntry = {
-  ownerNid: number;
-  definition: AbilityDefinition;
-};
-
 type PendingOfflineSnapshot = {
   snapshot: PlayerSnapshot;
   dirtyCharacter: boolean;
@@ -174,7 +164,6 @@ export class GameSimulation {
   private readonly projectilesByNid = new Map<number, ProjectileEntity>();
   private readonly projectilePool: ProjectileEntity[] = [];
   private readonly projectileCastShapeCache = new Map<number, RAPIER.Ball>();
-  private readonly runtimeAbilitiesById = new Map<number, RuntimeAbilityEntry>();
   private readonly dirtyCharacterAccountIds = new Set<number>();
   private readonly dirtyAbilityStateAccountIds = new Set<number>();
   private readonly pendingOfflineSnapshots = new Map<number, PendingOfflineSnapshot>();
@@ -250,7 +239,6 @@ export class GameSimulation {
       lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
       lastProcessedSequence: 0,
       primaryHeld: false,
-      lastAbilitySubmitNonce: 0,
       unlockedAbilityIds: new Set<number>(DEFAULT_UNLOCKED_ABILITY_IDS),
       body,
       collider
@@ -271,19 +259,6 @@ export class GameSimulation {
     }
     if (!pendingOfflineSnapshot?.dirtyAbilityState) {
       this.dirtyAbilityStateAccountIds.delete(player.accountId);
-    }
-
-    if (loaded) {
-      for (const runtimeAbility of loaded.runtimeAbilities) {
-        if (this.runtimeAbilitiesById.has(runtimeAbility.id)) {
-          continue;
-        }
-        this.runtimeAbilitiesById.set(runtimeAbility.id, {
-          ownerNid: player.nid,
-          definition: runtimeAbility
-        });
-        player.unlockedAbilityIds.add(runtimeAbility.id);
-      }
     }
 
     const view = new AABB3D(player.x, player.y, player.z, 128, 64, 128);
@@ -321,7 +296,6 @@ export class GameSimulation {
     this.combatTargetsByColliderHandle.delete(player.collider.handle);
     this.usersById.delete(user.id);
     this.removeProjectilesByOwner(player.nid);
-    this.removeRuntimeAbilitiesByOwner(player.nid);
     this.world.removeCollider(player.collider, true);
     this.world.removeRigidBody(player.body);
   }
@@ -345,10 +319,6 @@ export class GameSimulation {
 
     for (const rawCommand of commands) {
       const ntype = (rawCommand as { ntype?: unknown })?.ntype;
-      if (ntype === NType.AbilityCreateCommand) {
-        this.processAbilityCreateCommand(user, player, rawCommand as Partial<AbilityCreateWireCommand>);
-        continue;
-      }
       if (ntype === NType.LoadoutCommand) {
         this.processLoadoutCommand(user, player, rawCommand as Partial<LoadoutWireCommand>);
         continue;
@@ -838,91 +808,6 @@ export class GameSimulation {
     }
   }
 
-  private processAbilityCreateCommand(
-    user: UserLike,
-    player: PlayerEntity,
-    command: Partial<AbilityCreateWireCommand>
-  ): void {
-    if (typeof command.submitNonce !== "number") {
-      return;
-    }
-    const submitNonce = command.submitNonce & 0xffff;
-    if (!this.isSequenceAheadOf(player.lastAbilitySubmitNonce, submitNonce)) {
-      return;
-    }
-    player.lastAbilitySubmitNonce = submitNonce;
-
-    const category = abilityCategoryFromWireValue(command.category ?? 0);
-    if (!category) {
-      this.queueAbilityCreateResultMessage(user, submitNonce, false, ABILITY_ID_NONE, "Invalid category.");
-      return;
-    }
-
-    let allocatedAbilityId = ABILITY_ID_NONE;
-    try {
-      allocatedAbilityId = this.persistence.allocateRuntimeAbilityId();
-    } catch (error) {
-      console.error("[server] allocateRuntimeAbilityId failed", error);
-      this.queueAbilityCreateResultMessage(
-        user,
-        submitNonce,
-        false,
-        ABILITY_ID_NONE,
-        "Ability allocation unavailable."
-      );
-      return;
-    }
-
-    const abilityDefinition = createAbilityDefinitionFromDraft(allocatedAbilityId, {
-      name: typeof command.name === "string" ? command.name : "",
-      category,
-      points: {
-        power: typeof command.pointsPower === "number" ? command.pointsPower : 0,
-        velocity: typeof command.pointsVelocity === "number" ? command.pointsVelocity : 0,
-        efficiency: typeof command.pointsEfficiency === "number" ? command.pointsEfficiency : 0,
-        control: typeof command.pointsControl === "number" ? command.pointsControl : 0
-      },
-      attributes: decodeAbilityAttributeMask(
-        typeof command.attributeMask === "number" ? command.attributeMask : 0
-      )
-    });
-
-    if (!abilityDefinition) {
-      this.queueAbilityCreateResultMessage(
-        user,
-        submitNonce,
-        false,
-        ABILITY_ID_NONE,
-        "Draft validation failed."
-      );
-      return;
-    }
-
-    this.runtimeAbilitiesById.set(abilityDefinition.id, {
-      ownerNid: player.nid,
-      definition: abilityDefinition
-    });
-    player.unlockedAbilityIds.add(abilityDefinition.id);
-
-    const targetSlot = this.sanitizeHotbarSlot(command.targetHotbarSlot, player.activeHotbarSlot);
-    player.hotbarAbilityIds[targetSlot] = abilityDefinition.id;
-    player.activeHotbarSlot = targetSlot;
-
-    this.markPlayerDirty(player, {
-      dirtyCharacter: false,
-      dirtyAbilityState: true
-    });
-    this.queueAbilityDefinitionMessage(user, abilityDefinition);
-    this.queueLoadoutStateMessage(user, player);
-    this.queueAbilityCreateResultMessage(
-      user,
-      submitNonce,
-      true,
-      abilityDefinition.id,
-      `${abilityDefinition.name} created.`
-    );
-  }
-
   private sendInitialAbilityState(user: UserLike, player: PlayerEntity): void {
     for (const abilityId of player.unlockedAbilityIds) {
       const ability = this.getAbilityDefinitionForPlayer(player, abilityId);
@@ -975,22 +860,6 @@ export class GameSimulation {
     });
   }
 
-  private queueAbilityCreateResultMessage(
-    user: UserLike,
-    submitNonce: number,
-    success: boolean,
-    createdAbilityId: number,
-    message: string
-  ): void {
-    user.queueMessage({
-      ntype: NType.AbilityCreateResultMessage,
-      submitNonce: submitNonce & 0xffff,
-      success,
-      createdAbilityId: Math.max(0, Math.min(0xffff, Math.floor(createdAbilityId))),
-      message
-    });
-  }
-
   private broadcastAbilityUseMessage(player: PlayerEntity, ability: AbilityDefinition): void {
     const abilityId = Math.max(0, Math.min(0xffff, Math.floor(ability.id)));
     const category = abilityCategoryToWireValue(ability.category);
@@ -1022,14 +891,6 @@ export class GameSimulation {
     }
   }
 
-  private removeRuntimeAbilitiesByOwner(ownerNid: number): void {
-    for (const [abilityId, abilityEntry] of this.runtimeAbilitiesById) {
-      if (abilityEntry.ownerNid === ownerNid) {
-        this.runtimeAbilitiesById.delete(abilityId);
-      }
-    }
-  }
-
   private getAbilityDefinitionForPlayer(
     player: PlayerEntity,
     abilityId: number
@@ -1039,18 +900,7 @@ export class GameSimulation {
     }
 
     const staticAbility = getAbilityDefinitionById(abilityId);
-    if (staticAbility) {
-      return staticAbility;
-    }
-
-    const runtimeAbility = this.runtimeAbilitiesById.get(abilityId);
-    if (!runtimeAbility) {
-      return null;
-    }
-    if (runtimeAbility.ownerNid !== player.nid) {
-      return null;
-    }
-    return runtimeAbility.definition;
+    return staticAbility ?? null;
   }
 
   private sanitizeHotbarSlot(rawSlot: unknown, fallbackSlot: number): number {
@@ -1128,15 +978,6 @@ export class GameSimulation {
   }
 
   private capturePlayerSnapshot(player: PlayerEntity): PlayerSnapshot {
-    const runtimeAbilities: AbilityDefinition[] = [];
-    for (const runtimeAbility of this.runtimeAbilitiesById.values()) {
-      if (runtimeAbility.ownerNid !== player.nid) {
-        continue;
-      }
-      runtimeAbilities.push(runtimeAbility.definition);
-    }
-    runtimeAbilities.sort((a, b) => a.id - b.id);
-
     return {
       accountId: player.accountId,
       x: player.x,
@@ -1149,8 +990,7 @@ export class GameSimulation {
       vz: player.vz,
       health: player.health,
       activeHotbarSlot: this.sanitizeHotbarSlot(player.activeHotbarSlot, 0),
-      hotbarAbilityIds: [...player.hotbarAbilityIds],
-      runtimeAbilities
+      hotbarAbilityIds: [...player.hotbarAbilityIds]
     };
   }
 
