@@ -16,7 +16,6 @@ import { resolveAccessKey, storeAccessKey, writeAccessKeyToFragment } from "../a
 import { AuthPanel } from "../ui/AuthPanel";
 
 const FIXED_STEP = 1 / 60;
-const YAW_RECONCILE_EPSILON = 0.03;
 const RECONCILE_POSITION_SMOOTH_RATE = 14;
 const RECONCILE_POSITION_SNAP_THRESHOLD = 2.5;
 const RECONCILE_YAW_SNAP_THRESHOLD = Math.PI * 0.75;
@@ -260,21 +259,15 @@ export class GameClientApp {
         // Keep delta baseline aligned after external yaw adjustment to avoid double-applying carry.
         this.network.syncSentYaw(this.input.getYaw());
       } else {
-        const yawError = normalizeYaw(recon.ack.yaw - this.input.getYaw());
-        if (Math.abs(yawError) > YAW_RECONCILE_EPSILON) {
-          this.input.applyYawDelta(yawError);
-          this.network.shiftPendingInputYaw(yawError);
-        }
         this.predictedPlatformYawCarrySinceAck = 0;
-        this.network.syncSentYaw(this.input.getYaw());
       }
 
       this.physics.setReconciliationState({
         x: recon.ack.x,
         y: recon.ack.y,
         z: recon.ack.z,
-        yaw: recon.ack.yaw,
-        pitch: recon.ack.pitch,
+        yaw: this.input.getYaw(),
+        pitch: this.input.getPitch(),
         vx: recon.ack.vx,
         vy: recon.ack.vy,
         vz: recon.ack.vz,

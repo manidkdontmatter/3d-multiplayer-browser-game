@@ -339,7 +339,7 @@ export class GameSimulation {
     let queuedUsePrimaryPressed = false;
     let mergedUsePrimaryHeld = player.primaryHeld;
     let queuedJump = false;
-    let accumulatedYawDelta = 0;
+    let mergedYaw = player.yaw;
 
     for (const rawCommand of commands) {
       const ntype = (rawCommand as { ntype?: unknown })?.ntype;
@@ -361,8 +361,6 @@ export class GameSimulation {
         !Number.isFinite(command.forward) ||
         typeof command.strafe !== "number" ||
         !Number.isFinite(command.strafe) ||
-        typeof command.yawDelta !== "number" ||
-        !Number.isFinite(command.yawDelta) ||
         typeof command.pitch !== "number" ||
         !Number.isFinite(command.pitch)
       ) {
@@ -370,7 +368,14 @@ export class GameSimulation {
       }
 
       const pitch = command.pitch ?? mergedPitch;
-      const yawDelta = normalizeYaw(command.yawDelta ?? 0);
+      const hasAbsoluteYaw = typeof command.yaw === "number" && Number.isFinite(command.yaw);
+      const hasYawDelta = typeof command.yawDelta === "number" && Number.isFinite(command.yawDelta);
+      if (!hasAbsoluteYaw && !hasYawDelta) {
+        continue;
+      }
+      const yaw = hasAbsoluteYaw
+        ? normalizeYaw(command.yaw as number)
+        : normalizeYaw(mergedYaw + normalizeYaw(command.yawDelta ?? 0));
       const forward = this.clampAxis(command.forward ?? mergedForward);
       const strafe = this.clampAxis(command.strafe ?? mergedStrafe);
       const sprint = Boolean(command.sprint);
@@ -386,12 +391,12 @@ export class GameSimulation {
       latestSequence = sequence;
       mergedForward = forward;
       mergedStrafe = strafe;
+      mergedYaw = yaw;
       mergedPitch = pitch;
       mergedSprint = sprint;
       queuedUsePrimaryPressed = queuedUsePrimaryPressed || Boolean(command.usePrimaryPressed);
       mergedUsePrimaryHeld = Boolean(command.usePrimaryHeld);
       queuedJump = queuedJump || Boolean(command.jump);
-      accumulatedYawDelta = normalizeYaw(accumulatedYawDelta + yawDelta);
     }
 
     if (!hasAcceptedCommand) {
@@ -404,7 +409,7 @@ export class GameSimulation {
       player.groundedPlatformPid = null;
     }
 
-    player.yaw = normalizeYaw(player.yaw + accumulatedYawDelta);
+    player.yaw = mergedYaw;
     const horizontal = stepHorizontalMovement(
       { vx: player.vx, vz: player.vz },
       { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw },

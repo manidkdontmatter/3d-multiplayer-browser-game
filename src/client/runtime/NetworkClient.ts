@@ -243,6 +243,7 @@ export class NetworkClient {
       sprint: movement.sprint,
       usePrimaryPressed: actions.usePrimaryPressed,
       usePrimaryHeld: actions.usePrimaryHeld,
+      yaw: orientation.yaw,
       yawDelta,
       pitch: orientation.pitch
     });

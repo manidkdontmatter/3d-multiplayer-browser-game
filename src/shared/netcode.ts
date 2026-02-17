@@ -24,6 +24,7 @@ export const inputCommandSchema = defineSchema({
   sprint: Binary.Boolean,
   usePrimaryPressed: Binary.Boolean,
   usePrimaryHeld: Binary.Boolean,
+  yaw: Binary.Rotation32,
   yawDelta: Binary.Float32,
   pitch: Binary.Rotation32
 });
@@ -179,6 +180,7 @@ export interface InputCommand {
   sprint: boolean;
   usePrimaryPressed: boolean;
   usePrimaryHeld: boolean;
+  yaw: number;
   yawDelta: number;
   pitch: number;
 }
