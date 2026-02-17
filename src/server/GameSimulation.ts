@@ -14,24 +14,27 @@ import {
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_MAX_HEALTH,
-  SERVER_TICK_SECONDS,
-  STATIC_WORLD_BLOCKS
+  SERVER_TICK_SECONDS
 } from "../shared/index";
-import type { AbilityDefinition, MeleeAbilityProfile } from "../shared/index";
+import type { AbilityDefinition } from "../shared/index";
 import type { LoadoutCommand as LoadoutWireCommand } from "../shared/netcode";
 import {
   type PlayerSnapshot,
   PersistenceService
 } from "./persistence/PersistenceService";
+import { PersistenceSyncSystem } from "./persistence/PersistenceSyncSystem";
 import {
-  DamageSystem,
-  type CombatTarget
+  DamageSystem
 } from "./combat/damage/DamageSystem";
+import { AbilityExecutionSystem } from "./combat/abilities/AbilityExecutionSystem";
+import { MeleeCombatSystem } from "./combat/melee/MeleeCombatSystem";
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 import { InputSystem } from "./input/InputSystem";
+import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { ReplicationMessagingSystem } from "./netcode/ReplicationMessagingSystem";
 import { PlatformSystem } from "./platform/PlatformSystem";
+import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
 
 type UserLike = {
   id: number;
@@ -66,27 +69,6 @@ type PlayerEntity = {
   collider: RAPIER.Collider;
 };
 
-type TrainingDummyEntity = {
-  nid: number;
-  ntype: NType.TrainingDummyEntity;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  serverTick: number;
-  health: number;
-  maxHealth: number;
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
-};
-
-type PendingOfflineSnapshot = {
-  snapshot: PlayerSnapshot;
-  dirtyCharacter: boolean;
-  dirtyAbilityState: boolean;
-};
-
-const MELEE_DIRECTION_EPSILON = 1e-6;
 const ABILITY_USE_EVENT_RADIUS = PLAYER_CAPSULE_RADIUS * 2;
 const TRAINING_DUMMY_MAX_HEALTH = 160;
 const TRAINING_DUMMY_RADIUS = 0.42;
@@ -97,14 +79,15 @@ export class GameSimulation {
   private readonly playersByUserId = new Map<number, PlayerEntity>();
   private readonly playersByAccountId = new Map<number, PlayerEntity>();
   private readonly playersByNid = new Map<number, PlayerEntity>();
-  private readonly trainingDummiesByNid = new Map<number, TrainingDummyEntity>();
   private readonly usersById = new Map<number, UserLike>();
-  private readonly dirtyCharacterAccountIds = new Set<number>();
-  private readonly dirtyAbilityStateAccountIds = new Set<number>();
-  private readonly pendingOfflineSnapshots = new Map<number, PendingOfflineSnapshot>();
   private readonly world: RAPIER.World;
   private readonly characterController: RAPIER.KinematicCharacterController;
+  private readonly persistenceSyncSystem = new PersistenceSyncSystem<PlayerEntity>();
+  private readonly worldBootstrapSystem: WorldBootstrapSystem;
+  private readonly playerLifecycleSystem: PlayerLifecycleSystem<UserLike, PlayerEntity>;
   private readonly damageSystem: DamageSystem;
+  private readonly meleeCombatSystem: MeleeCombatSystem;
+  private readonly abilityExecutionSystem: AbilityExecutionSystem<PlayerEntity>;
   private readonly projectileSystem: ProjectileSystem;
   private readonly inputSystem: InputSystem<UserLike, PlayerEntity>;
   private readonly platformSystem: PlatformSystem;
@@ -132,7 +115,13 @@ export class GameSimulation {
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       getTickNumber: () => this.tickNumber,
       getSpawnPosition: () => this.getSpawnPosition(),
-      markPlayerDirty: (player, options) => this.markPlayerDirty(player as PlayerEntity, options)
+      markPlayerDirty: (player, options) =>
+        this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options)
+    });
+    this.worldBootstrapSystem = new WorldBootstrapSystem({
+      world: this.world,
+      spatialChannel: this.spatialChannel,
+      getTickNumber: () => this.tickNumber
     });
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
@@ -143,9 +132,27 @@ export class GameSimulation {
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
     });
+    this.meleeCombatSystem = new MeleeCombatSystem({
+      world: this.world,
+      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
+      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
+      dummyRadius: TRAINING_DUMMY_RADIUS,
+      dummyHalfHeight: TRAINING_DUMMY_HALF_HEIGHT,
+      getTargets: () => this.damageSystem.getTargets(),
+      applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
+    });
+    this.abilityExecutionSystem = new AbilityExecutionSystem<PlayerEntity>({
+      getElapsedSeconds: () => this.elapsedSeconds,
+      resolveSelectedAbility: (player) => this.resolveSelectedAbility(player),
+      broadcastAbilityUse: (player, ability) =>
+        this.replicationMessaging.broadcastAbilityUseMessage(player, ability),
+      spawnProjectile: (request) => this.projectileSystem.spawn(request),
+      applyMeleeHit: (player, meleeProfile) =>
+        this.meleeCombatSystem.tryApplyMeleeHit(player, meleeProfile)
+    });
     this.inputSystem = new InputSystem<UserLike, PlayerEntity>({
       onLoadoutCommand: (user, player, command) => this.processLoadoutCommand(user, player, command),
-      onPrimaryPressed: (player) => this.tryUsePrimaryAbility(player)
+      onPrimaryPressed: (player) => this.abilityExecutionSystem.tryUsePrimaryAbility(player)
     });
     this.platformSystem = new PlatformSystem({
       world: this.world,
@@ -167,7 +174,7 @@ export class GameSimulation {
       getTickNumber: () => this.tickNumber,
       beforePlayerMove: (player) => {
         if (player.primaryHeld) {
-          this.tryUsePrimaryAbility(player);
+          this.abilityExecutionSystem.tryUsePrimaryAbility(player);
         }
       },
       samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
@@ -176,123 +183,97 @@ export class GameSimulation {
       onPlayerStepped: (userId, player, platformYawDelta) => {
         this.replicationMessaging.syncUserView(userId, player);
         this.replicationMessaging.queueInputAck(userId, player, platformYawDelta);
-        this.markPlayerDirty(player, {
+        this.persistenceSyncSystem.markPlayerDirty(player, {
           dirtyCharacter: true,
           dirtyAbilityState: false
         });
       }
     });
+    this.playerLifecycleSystem = new PlayerLifecycleSystem<UserLike, PlayerEntity>({
+      world: this.world,
+      globalChannel: this.globalChannel,
+      spatialChannel: this.spatialChannel,
+      playersByUserId: this.playersByUserId,
+      playersByAccountId: this.playersByAccountId,
+      playersByNid: this.playersByNid,
+      usersById: this.usersById,
+      getTickNumber: () => this.tickNumber,
+      takePendingSnapshotForLogin: (accountId) =>
+        this.persistenceSyncSystem.takePendingSnapshotForLogin(accountId),
+      loadPlayerState: (accountId) => this.persistence.loadPlayerState(accountId),
+      getSpawnPosition: () => this.getSpawnPosition(),
+      playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
+      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
+      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
+      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
+      maxPlayerHealth: PLAYER_MAX_HEALTH,
+      defaultUnlockedAbilityIds: DEFAULT_UNLOCKED_ABILITY_IDS,
+      sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
+      createInitialHotbar: (savedHotbar) => this.createInitialHotbar(savedHotbar),
+      clampHealth: (value) => this.clampHealth(value),
+      ensurePunchAssigned: (player) => this.ensurePunchAssigned(player),
+      buildPlayerEntity: (options) => ({
+        accountId: options.accountId,
+        nid: 0,
+        ntype: NType.PlayerEntity,
+        x: options.spawnX,
+        y: options.spawnCameraY,
+        z: options.spawnZ,
+        yaw: options.loaded?.yaw ?? 0,
+        pitch: options.loaded?.pitch ?? 0,
+        serverTick: options.tickNumber,
+        vy: options.loaded?.vy ?? 0,
+        vx: options.loaded?.vx ?? 0,
+        vz: options.loaded?.vz ?? 0,
+        grounded: false,
+        groundedPlatformPid: null,
+        health: options.health,
+        activeHotbarSlot: options.activeHotbarSlot,
+        hotbarAbilityIds: options.hotbarAbilityIds,
+        lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
+        lastProcessedSequence: 0,
+        primaryHeld: false,
+        unlockedAbilityIds: options.unlockedAbilityIds,
+        body: options.body,
+        collider: options.collider
+      }),
+      markPlayerDirty: (player, options) => this.persistenceSyncSystem.markPlayerDirty(player, options),
+      registerPlayerForDamage: (player) => this.damageSystem.registerPlayer(player),
+      unregisterPlayerCollider: (colliderHandle) => this.damageSystem.unregisterCollider(colliderHandle),
+      removeProjectilesByOwner: (ownerNid) => this.projectileSystem.removeByOwner(ownerNid),
+      queueIdentityMessage: (user, playerNid) => {
+        user.queueMessage({
+          ntype: NType.IdentityMessage,
+          playerNid
+        });
+      },
+      sendInitialReplicationState: (user, player) => this.replicationMessaging.sendInitialAbilityState(user, player),
+      queueOfflineSnapshot: (accountId, snapshot) =>
+        this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
+      capturePlayerSnapshot: (player) => this.capturePlayerSnapshot(player),
+      viewHalfWidth: 128,
+      viewHalfHeight: 64,
+      viewHalfDepth: 128
+    });
 
-    this.createStaticWorldColliders();
+    this.worldBootstrapSystem.createStaticWorldColliders();
     this.platformSystem.initializePlatforms();
-    this.initializeTrainingDummies();
+    for (const dummy of this.worldBootstrapSystem.initializeTrainingDummies(
+      TRAINING_DUMMY_SPAWNS,
+      TRAINING_DUMMY_HALF_HEIGHT,
+      TRAINING_DUMMY_RADIUS,
+      TRAINING_DUMMY_MAX_HEALTH
+    )) {
+      this.damageSystem.registerDummy(dummy);
+    }
   }
 
   public addUser(user: UserLike): void {
-    const accountId = typeof user.accountId === "number" && Number.isFinite(user.accountId)
-      ? Math.max(1, Math.floor(user.accountId))
-      : null;
-    if (accountId === null) {
-      return;
-    }
-
-    const pendingOfflineSnapshot = this.pendingOfflineSnapshots.get(accountId);
-    const loaded = pendingOfflineSnapshot?.snapshot ?? this.persistence.loadPlayerState(accountId);
-    const spawn = loaded ? { x: loaded.x, z: loaded.z } : this.getSpawnPosition();
-    const initialCameraY = loaded?.y ?? (PLAYER_BODY_CENTER_HEIGHT + PLAYER_CAMERA_OFFSET_Y);
-    const initialBodyY = initialCameraY - PLAYER_CAMERA_OFFSET_Y;
-    const body = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
-        spawn.x,
-        initialBodyY,
-        spawn.z
-      )
-    );
-    const collider = this.world.createCollider(
-      RAPIER.ColliderDesc.capsule(PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS).setFriction(0),
-      body
-    );
-
-    const player: PlayerEntity = {
-      accountId,
-      nid: 0,
-      ntype: NType.PlayerEntity,
-      x: spawn.x,
-      y: initialCameraY,
-      z: spawn.z,
-      yaw: loaded?.yaw ?? 0,
-      pitch: loaded?.pitch ?? 0,
-      serverTick: this.tickNumber,
-      vy: loaded?.vy ?? 0,
-      vx: loaded?.vx ?? 0,
-      vz: loaded?.vz ?? 0,
-      grounded: false,
-      groundedPlatformPid: null,
-      health: this.clampHealth(loaded?.health ?? PLAYER_MAX_HEALTH),
-      activeHotbarSlot: this.sanitizeHotbarSlot(loaded?.activeHotbarSlot ?? 0, 0),
-      hotbarAbilityIds: this.createInitialHotbar(loaded?.hotbarAbilityIds),
-      lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
-      lastProcessedSequence: 0,
-      primaryHeld: false,
-      unlockedAbilityIds: new Set<number>(DEFAULT_UNLOCKED_ABILITY_IDS),
-      body,
-      collider
-    };
-
-    this.ensurePunchAssigned(player);
-
-    this.globalChannel.subscribe(user);
-    this.spatialChannel.addEntity(player);
-    this.playersByUserId.set(user.id, player);
-    this.playersByAccountId.set(player.accountId, player);
-    this.playersByNid.set(player.nid, player);
-    this.damageSystem.registerPlayer(player);
-    this.usersById.set(user.id, user);
-    this.pendingOfflineSnapshots.delete(player.accountId);
-    if (!pendingOfflineSnapshot?.dirtyCharacter) {
-      this.dirtyCharacterAccountIds.delete(player.accountId);
-    }
-    if (!pendingOfflineSnapshot?.dirtyAbilityState) {
-      this.dirtyAbilityStateAccountIds.delete(player.accountId);
-    }
-
-    const view = new AABB3D(player.x, player.y, player.z, 128, 64, 128);
-    user.view = view;
-    this.spatialChannel.subscribe(user, view);
-
-    user.queueMessage({
-      ntype: NType.IdentityMessage,
-      playerNid: player.nid
-    });
-    this.replicationMessaging.sendInitialAbilityState(user, player);
-    this.markPlayerDirty(player, {
-      dirtyCharacter: true,
-      dirtyAbilityState: true
-    });
+    this.playerLifecycleSystem.addUser(user);
   }
 
   public removeUser(user: UserLike): void {
-    const player = this.playersByUserId.get(user.id);
-    if (!player) {
-      return;
-    }
-
-    this.pendingOfflineSnapshots.set(player.accountId, {
-      snapshot: this.capturePlayerSnapshot(player),
-      dirtyCharacter: true,
-      dirtyAbilityState: true
-    });
-    this.dirtyCharacterAccountIds.add(player.accountId);
-    this.dirtyAbilityStateAccountIds.add(player.accountId);
-    this.spatialChannel.removeEntity(player);
-    this.playersByUserId.delete(user.id);
-    this.playersByAccountId.delete(player.accountId);
-    this.playersByNid.delete(player.nid);
-    this.damageSystem.unregisterCollider(player.collider.handle);
-    this.usersById.delete(user.id);
-    this.projectileSystem.removeByOwner(player.nid);
-    this.world.removeCollider(player.collider, true);
-    this.world.removeRigidBody(player.body);
+    this.playerLifecycleSystem.removeUser(user);
   }
 
   public applyCommands(user: UserLike, commands: unknown[]): void {
@@ -316,37 +297,12 @@ export class GameSimulation {
   }
 
   public flushDirtyPlayerState(): void {
-    const dirtyAccounts = new Set<number>([
-      ...this.dirtyCharacterAccountIds,
-      ...this.dirtyAbilityStateAccountIds
-    ]);
-
-    for (const accountId of dirtyAccounts) {
-      const onlinePlayer = this.playersByAccountId.get(accountId);
-      const pendingOfflineSnapshot = this.pendingOfflineSnapshots.get(accountId);
-      const snapshot = onlinePlayer
-        ? this.capturePlayerSnapshot(onlinePlayer)
-        : pendingOfflineSnapshot?.snapshot;
-      if (!snapshot) {
-        continue;
-      }
-
-      const shouldSaveCharacter =
-        this.dirtyCharacterAccountIds.has(accountId) || Boolean(pendingOfflineSnapshot?.dirtyCharacter);
-      const shouldSaveAbilityState =
-        this.dirtyAbilityStateAccountIds.has(accountId) || Boolean(pendingOfflineSnapshot?.dirtyAbilityState);
-
-      if (shouldSaveCharacter) {
-        this.persistence.saveCharacterSnapshot(snapshot);
-      }
-      if (shouldSaveAbilityState) {
-        this.persistence.saveAbilityStateSnapshot(snapshot);
-      }
-
-      this.pendingOfflineSnapshots.delete(accountId);
-    }
-    this.dirtyCharacterAccountIds.clear();
-    this.dirtyAbilityStateAccountIds.clear();
+    this.persistenceSyncSystem.flushDirtyPlayerState(
+      this.playersByAccountId,
+      (player) => this.capturePlayerSnapshot(player),
+      (snapshot) => this.persistence.saveCharacterSnapshot(snapshot),
+      (snapshot) => this.persistence.saveAbilityStateSnapshot(snapshot)
+    );
   }
 
   public getRuntimeStats(): {
@@ -357,58 +313,8 @@ export class GameSimulation {
     return {
       onlinePlayers: this.playersByUserId.size,
       activeProjectiles: this.projectileSystem.getActiveCount(),
-      pendingOfflineSnapshots: this.pendingOfflineSnapshots.size
+      pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount()
     };
-  }
-
-  private createStaticWorldColliders(): void {
-    const groundBody = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0)
-    );
-    this.world.createCollider(RAPIER.ColliderDesc.cuboid(128, 0.5, 128), groundBody);
-
-    for (const block of STATIC_WORLD_BLOCKS) {
-      const rotationZ = block.rotationZ ?? 0;
-      const staticBody = this.world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(block.x, block.y, block.z)
-      );
-      this.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(block.halfX, block.halfY, block.halfZ),
-        staticBody
-      );
-      staticBody.setRotation(
-        { x: 0, y: 0, z: Math.sin(rotationZ * 0.5), w: Math.cos(rotationZ * 0.5) },
-        true
-      );
-    }
-  }
-
-  private initializeTrainingDummies(): void {
-    for (const spawn of TRAINING_DUMMY_SPAWNS) {
-      const body = this.world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(spawn.x, spawn.y, spawn.z)
-      );
-      const collider = this.world.createCollider(
-        RAPIER.ColliderDesc.capsule(TRAINING_DUMMY_HALF_HEIGHT, TRAINING_DUMMY_RADIUS),
-        body
-      );
-      const dummy: TrainingDummyEntity = {
-        nid: 0,
-        ntype: NType.TrainingDummyEntity,
-        x: spawn.x,
-        y: spawn.y,
-        z: spawn.z,
-        yaw: spawn.yaw,
-        serverTick: this.tickNumber,
-        health: TRAINING_DUMMY_MAX_HEALTH,
-        maxHealth: TRAINING_DUMMY_MAX_HEALTH,
-        body,
-        collider
-      };
-      this.spatialChannel.addEntity(dummy);
-      this.trainingDummiesByNid.set(dummy.nid, dummy);
-      this.damageSystem.registerDummy(dummy);
-    }
   }
 
   private processLoadoutCommand(
@@ -468,7 +374,7 @@ export class GameSimulation {
       previousAssignedAbilityId !== nextAssignedAbilityId ||
       didAssignMutation;
     if (loadoutChanged || requiresLoadoutResync) {
-      this.markPlayerDirty(player, {
+      this.persistenceSyncSystem.markPlayerDirty(player, {
         dirtyCharacter: false,
         dirtyAbilityState: true
       });
@@ -548,20 +454,6 @@ export class GameSimulation {
     return Math.max(0, Math.min(PLAYER_MAX_HEALTH, Math.floor(value)));
   }
 
-  private markPlayerDirty(
-    player: PlayerEntity,
-    options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean }
-  ): void {
-    const dirtyCharacter = options?.dirtyCharacter ?? true;
-    const dirtyAbilityState = options?.dirtyAbilityState ?? true;
-    if (dirtyCharacter) {
-      this.dirtyCharacterAccountIds.add(player.accountId);
-    }
-    if (dirtyAbilityState) {
-      this.dirtyAbilityStateAccountIds.add(player.accountId);
-    }
-  }
-
   private capturePlayerSnapshot(player: PlayerEntity): PlayerSnapshot {
     return {
       accountId: player.accountId,
@@ -579,297 +471,14 @@ export class GameSimulation {
     };
   }
 
-  private tryUsePrimaryAbility(player: PlayerEntity): void {
-    const slot = clampHotbarSlotIndex(player.activeHotbarSlot);
+  private resolveSelectedAbility(player: PlayerEntity): AbilityDefinition | null {
+    const slot = this.abilityExecutionSystem.resolveActiveHotbarSlot(player);
     const abilityId = this.sanitizeSelectedAbilityId(
       player.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE,
       ABILITY_ID_NONE,
       player
     );
-    const ability = this.getAbilityDefinitionForPlayer(player, abilityId);
-    if (!ability) {
-      return;
-    }
-    const projectileProfile = ability.projectile;
-    const meleeProfile = ability.melee;
-    const activeCooldownSeconds = projectileProfile?.cooldownSeconds ?? meleeProfile?.cooldownSeconds;
-    if (activeCooldownSeconds === undefined) {
-      return;
-    }
-
-    const secondsSinceLastFire = this.elapsedSeconds - player.lastPrimaryFireAtSeconds;
-    if (secondsSinceLastFire < activeCooldownSeconds) {
-      return;
-    }
-    player.lastPrimaryFireAtSeconds = this.elapsedSeconds;
-    this.replicationMessaging.broadcastAbilityUseMessage(player, ability);
-
-    if (projectileProfile) {
-      this.spawnProjectileFromAbility(player, projectileProfile);
-      return;
-    }
-    if (meleeProfile) {
-      this.tryApplyMeleeHit(player, meleeProfile);
-    }
-  }
-
-  private spawnProjectileFromAbility(
-    player: PlayerEntity,
-    projectileProfile: NonNullable<AbilityDefinition["projectile"]>
-  ): void {
-    const direction = this.computeViewDirection(player.yaw, player.pitch);
-    const dirX = direction.x;
-    const dirY = direction.y;
-    const dirZ = direction.z;
-
-    const spawnX = player.x + dirX * projectileProfile.spawnForwardOffset;
-    const spawnY = player.y + projectileProfile.spawnVerticalOffset + dirY * projectileProfile.spawnForwardOffset;
-    const spawnZ = player.z + dirZ * projectileProfile.spawnForwardOffset;
-
-    this.projectileSystem.spawn({
-      ownerNid: player.nid,
-      kind: projectileProfile.kind,
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: dirX * projectileProfile.speed,
-      vy: dirY * projectileProfile.speed,
-      vz: dirZ * projectileProfile.speed,
-      radius: projectileProfile.radius,
-      damage: projectileProfile.damage,
-      lifetimeSeconds: projectileProfile.lifetimeSeconds,
-      // Per-projectile range is resolved at spawn time instead of a shared mutable global.
-      maxRange: Math.max(0, projectileProfile.speed * projectileProfile.lifetimeSeconds)
-    });
-  }
-
-  private tryApplyMeleeHit(player: PlayerEntity, meleeProfile: MeleeAbilityProfile): void {
-    const hitTarget = this.findMeleeHitTarget(player, meleeProfile);
-    if (!hitTarget) {
-      return;
-    }
-    this.damageSystem.applyDamage(hitTarget, meleeProfile.damage);
-  }
-
-  private findMeleeHitTarget(
-    attacker: PlayerEntity,
-    meleeProfile: MeleeAbilityProfile
-  ): CombatTarget | null {
-    const direction = this.computeViewDirection(attacker.yaw, attacker.pitch);
-    const attackerBody = attacker.body.translation();
-    const originX = attackerBody.x;
-    const originY = attackerBody.y;
-    const originZ = attackerBody.z;
-    const range = Math.max(0.1, meleeProfile.range);
-    const halfArcRadians = (Math.max(5, Math.min(175, meleeProfile.arcDegrees)) * Math.PI) / 360;
-    const minFacingDot = Math.cos(halfArcRadians);
-    const maxCenterDistance = range + PLAYER_CAPSULE_RADIUS * 2 + meleeProfile.radius + TRAINING_DUMMY_RADIUS;
-    const maxCenterDistanceSq = maxCenterDistance * maxCenterDistance;
-    const attackEndX = originX + direction.x * range;
-    const attackEndY = originY + direction.y * range;
-    const attackEndZ = originZ + direction.z * range;
-    let bestTarget: CombatTarget | null = null;
-    let bestForwardDistance = Number.POSITIVE_INFINITY;
-
-    for (const target of this.damageSystem.getTargets()) {
-      if (target.kind === "player" && target.player.nid === attacker.nid) {
-        continue;
-      }
-
-      const targetBody = this.getCombatTargetBody(target);
-      const targetRadius = this.getCombatTargetRadius(target);
-      const targetHalfHeight = this.getCombatTargetHalfHeight(target);
-      const bodyPos = targetBody.translation();
-      const centerDx = bodyPos.x - originX;
-      const centerDy = bodyPos.y - originY;
-      const centerDz = bodyPos.z - originZ;
-      const centerDistanceSq = centerDx * centerDx + centerDy * centerDy + centerDz * centerDz;
-      if (centerDistanceSq > maxCenterDistanceSq) {
-        continue;
-      }
-
-      const centerDistance = Math.sqrt(Math.max(centerDistanceSq, 0));
-      if (centerDistance > 1e-6) {
-        const facingDot =
-          (centerDx * direction.x + centerDy * direction.y + centerDz * direction.z) / centerDistance;
-        if (facingDot < minFacingDot) {
-          continue;
-        }
-      }
-
-      const segmentMinY = bodyPos.y - targetHalfHeight;
-      const segmentMaxY = bodyPos.y + targetHalfHeight;
-      const combinedRadius = meleeProfile.radius + targetRadius;
-      const combinedRadiusSq = combinedRadius * combinedRadius;
-      const distanceSq = this.segmentSegmentDistanceSq(
-        originX,
-        originY,
-        originZ,
-        attackEndX,
-        attackEndY,
-        attackEndZ,
-        bodyPos.x,
-        segmentMinY,
-        bodyPos.z,
-        bodyPos.x,
-        segmentMaxY,
-        bodyPos.z
-      );
-      if (distanceSq > combinedRadiusSq) {
-        continue;
-      }
-
-      const forwardDistance =
-        centerDx * direction.x + centerDy * direction.y + centerDz * direction.z;
-      if (forwardDistance < bestForwardDistance && this.hasMeleeLineOfSight(attacker, target, range)) {
-        bestForwardDistance = forwardDistance;
-        bestTarget = target;
-      }
-    }
-
-    return bestTarget;
-  }
-
-  private hasMeleeLineOfSight(attacker: PlayerEntity, target: CombatTarget, range: number): boolean {
-    const targetBody = this.getCombatTargetBody(target);
-    const start = attacker.body.translation();
-    const end = targetBody.translation();
-    const deltaX = end.x - start.x;
-    const deltaY = end.y - start.y;
-    const deltaZ = end.z - start.z;
-    const distance = Math.hypot(deltaX, deltaY, deltaZ);
-    if (distance <= 1e-6) {
-      return true;
-    }
-    const dir = { x: deltaX / distance, y: deltaY / distance, z: deltaZ / distance };
-    const castDistance = Math.min(range + this.getCombatTargetRadius(target), distance);
-    const hit = this.world.castRay(
-      new RAPIER.Ray({ x: start.x, y: start.y, z: start.z }, dir),
-      castDistance,
-      true,
-      undefined,
-      undefined,
-      attacker.collider
-    );
-    if (!hit) {
-      return true;
-    }
-    return hit.collider.handle === this.getCombatTargetCollider(target).handle;
-  }
-
-  private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
-    const cosPitch = Math.cos(pitch);
-    const x = -Math.sin(yaw) * cosPitch;
-    const y = Math.sin(pitch);
-    const z = -Math.cos(yaw) * cosPitch;
-    const magnitude = Math.hypot(x, y, z);
-    if (magnitude <= MELEE_DIRECTION_EPSILON) {
-      return { x: 0, y: 0, z: -1 };
-    }
-    const invMagnitude = 1 / magnitude;
-    return {
-      x: x * invMagnitude,
-      y: y * invMagnitude,
-      z: z * invMagnitude
-    };
-  }
-
-  private getCombatTargetBody(target: CombatTarget): RAPIER.RigidBody {
-    return target.kind === "player" ? target.player.body : target.dummy.body;
-  }
-
-  private getCombatTargetCollider(target: CombatTarget): RAPIER.Collider {
-    return target.kind === "player" ? target.player.collider : target.dummy.collider;
-  }
-
-  private getCombatTargetRadius(target: CombatTarget): number {
-    return target.kind === "player" ? PLAYER_CAPSULE_RADIUS : TRAINING_DUMMY_RADIUS;
-  }
-
-  private getCombatTargetHalfHeight(target: CombatTarget): number {
-    return target.kind === "player" ? PLAYER_CAPSULE_HALF_HEIGHT : TRAINING_DUMMY_HALF_HEIGHT;
-  }
-
-  private segmentSegmentDistanceSq(
-    p1x: number,
-    p1y: number,
-    p1z: number,
-    q1x: number,
-    q1y: number,
-    q1z: number,
-    p2x: number,
-    p2y: number,
-    p2z: number,
-    q2x: number,
-    q2y: number,
-    q2z: number
-  ): number {
-    const d1x = q1x - p1x;
-    const d1y = q1y - p1y;
-    const d1z = q1z - p1z;
-    const d2x = q2x - p2x;
-    const d2y = q2y - p2y;
-    const d2z = q2z - p2z;
-    const rx = p1x - p2x;
-    const ry = p1y - p2y;
-    const rz = p1z - p2z;
-    const a = d1x * d1x + d1y * d1y + d1z * d1z;
-    const e = d2x * d2x + d2y * d2y + d2z * d2z;
-    const f = d2x * rx + d2y * ry + d2z * rz;
-    const epsilon = 1e-6;
-
-    let s = 0;
-    let t = 0;
-
-    if (a <= epsilon && e <= epsilon) {
-      return rx * rx + ry * ry + rz * rz;
-    }
-
-    if (a <= epsilon) {
-      s = 0;
-      t = this.clamp01(f / e);
-    } else {
-      const c = d1x * rx + d1y * ry + d1z * rz;
-      if (e <= epsilon) {
-        t = 0;
-        s = this.clamp01(-c / a);
-      } else {
-        const b = d1x * d2x + d1y * d2y + d1z * d2z;
-        const denom = a * e - b * b;
-        if (denom > epsilon) {
-          s = this.clamp01((b * f - c * e) / denom);
-        } else {
-          s = 0;
-        }
-        t = (b * s + f) / e;
-
-        if (t < 0) {
-          t = 0;
-          s = this.clamp01(-c / a);
-        } else if (t > 1) {
-          t = 1;
-          s = this.clamp01((b - c) / a);
-        }
-      }
-    }
-
-    const c1x = p1x + d1x * s;
-    const c1y = p1y + d1y * s;
-    const c1z = p1z + d1z * s;
-    const c2x = p2x + d2x * t;
-    const c2y = p2y + d2y * t;
-    const c2z = p2z + d2z * t;
-    const dx = c1x - c2x;
-    const dy = c1y - c2y;
-    const dz = c1z - c2z;
-    return dx * dx + dy * dy + dz * dz;
-  }
-
-  private clamp01(value: number): number {
-    if (!Number.isFinite(value)) {
-      return 0;
-    }
-    return Math.max(0, Math.min(1, value));
+    return this.getAbilityDefinitionForPlayer(player, abilityId);
   }
 
   private getSpawnPosition(): { x: number; z: number } {
