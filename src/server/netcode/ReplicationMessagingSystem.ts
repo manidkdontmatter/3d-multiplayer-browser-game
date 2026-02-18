@@ -60,7 +60,6 @@ export interface ReplicationMessagingSystemOptions<
   readonly getUserById: (userId: number) => TUser | undefined;
   readonly getPlayerNidByUserId: (userId: number) => number | null;
   readonly sanitizeHotbarSlot: (rawSlot: unknown, fallbackSlot: number) => number;
-  readonly getAbilityDefinitionForPlayer: (player: TPlayer, abilityId: number) => AbilityDefinition | null;
   readonly getAbilityDefinitionById: (abilityId: number) => AbilityDefinition | null;
   readonly abilityUseEventRadius: number;
 }
@@ -116,17 +115,6 @@ export class ReplicationMessagingSystem<
     });
   }
 
-  public sendInitialAbilityState(user: TUser, player: TPlayer): void {
-    for (const abilityId of player.unlockedAbilityIds) {
-      const ability = this.options.getAbilityDefinitionForPlayer(player, abilityId);
-      if (!ability) {
-        continue;
-      }
-      this.queueAbilityDefinitionMessage(user, ability);
-    }
-    this.queueLoadoutStateMessage(user, player);
-  }
-
   public sendInitialAbilityStateFromSnapshot(user: TUser, snapshot: LoadoutStateSnapshot): void {
     for (const abilityId of snapshot.unlockedAbilityIds) {
       const ability = this.options.getAbilityDefinitionById(abilityId);
@@ -136,14 +124,6 @@ export class ReplicationMessagingSystem<
       this.queueAbilityDefinitionMessage(user, ability);
     }
     this.queueLoadoutStateMessageFromSnapshot(user, snapshot);
-  }
-
-  public queueLoadoutStateMessage(user: TUser, player: TPlayer): void {
-    this.queueLoadoutStateMessageFromSnapshot(user, {
-      activeHotbarSlot: player.activeHotbarSlot,
-      hotbarAbilityIds: player.hotbarAbilityIds,
-      unlockedAbilityIds: Array.from(player.unlockedAbilityIds)
-    });
   }
 
   public queueLoadoutStateMessageFromSnapshot(user: TUser, snapshot: LoadoutStateSnapshot): void {

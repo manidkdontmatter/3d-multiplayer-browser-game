@@ -189,8 +189,6 @@ export class GameSimulation {
       getUserById: (userId) => this.usersById.get(userId),
       getPlayerNidByUserId: (userId) => this.simulationEcs.getPlayerNidByUserId(userId),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
-      getAbilityDefinitionForPlayer: (player, abilityId) =>
-        this.getAbilityDefinitionForPlayer(player, abilityId),
       getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId),
       abilityUseEventRadius: ABILITY_USE_EVENT_RADIUS
     });
