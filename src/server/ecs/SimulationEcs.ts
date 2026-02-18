@@ -1,4 +1,5 @@
 import { addComponent, addEntity, createWorld, query, removeEntity } from "bitecs";
+import { HOTBAR_SLOT_COUNT } from "../../shared/index";
 
 type SimObject = {
   nid: number;
@@ -18,6 +19,7 @@ type PlayerObject = SimObject & {
   lastPrimaryFireAtSeconds: number;
   primaryHeld: boolean;
   activeHotbarSlot: number;
+  hotbarAbilityIds: number[];
   vx: number;
   vy: number;
   vz: number;
@@ -47,6 +49,13 @@ type WorldWithComponents = {
     LastPrimaryFireAtSeconds: { value: number[] };
     PrimaryHeld: { value: number[] };
     ActiveHotbarSlot: { value: number[] };
+    Hotbar: {
+      slot0: number[];
+      slot1: number[];
+      slot2: number[];
+      slot3: number[];
+      slot4: number[];
+    };
     PlayerTag: number[];
     PlatformTag: number[];
     ProjectileTag: number[];
@@ -72,6 +81,13 @@ export class SimulationEcs {
       LastPrimaryFireAtSeconds: { value: [] as number[] },
       PrimaryHeld: { value: [] as number[] },
       ActiveHotbarSlot: { value: [] as number[] },
+      Hotbar: {
+        slot0: [] as number[],
+        slot1: [] as number[],
+        slot2: [] as number[],
+        slot3: [] as number[],
+        slot4: [] as number[]
+      },
       PlayerTag: [] as number[],
       PlatformTag: [] as number[],
       ProjectileTag: [] as number[],
@@ -96,6 +112,7 @@ export class SimulationEcs {
     addComponent(this.world, eid, this.world.components.LastPrimaryFireAtSeconds);
     addComponent(this.world, eid, this.world.components.PrimaryHeld);
     addComponent(this.world, eid, this.world.components.ActiveHotbarSlot);
+    addComponent(this.world, eid, this.world.components.Hotbar);
     this.syncPlayer(player);
     this.bindPlayerAccessors(player, eid);
   }
@@ -121,6 +138,11 @@ export class SimulationEcs {
       0,
       Math.floor(player.activeHotbarSlot)
     );
+    this.world.components.Hotbar.slot0[eid] = Math.max(0, Math.floor(player.hotbarAbilityIds[0] ?? 0));
+    this.world.components.Hotbar.slot1[eid] = Math.max(0, Math.floor(player.hotbarAbilityIds[1] ?? 0));
+    this.world.components.Hotbar.slot2[eid] = Math.max(0, Math.floor(player.hotbarAbilityIds[2] ?? 0));
+    this.world.components.Hotbar.slot3[eid] = Math.max(0, Math.floor(player.hotbarAbilityIds[3] ?? 0));
+    this.world.components.Hotbar.slot4[eid] = Math.max(0, Math.floor(player.hotbarAbilityIds[4] ?? 0));
   }
 
   public registerPlatform(platform: SimObject): void {
@@ -349,6 +371,11 @@ export class SimulationEcs {
       enumerable: true,
       configurable: true
     });
+    Object.defineProperty(player, "hotbarAbilityIds", {
+      value: this.createHotbarProxy(eid),
+      enumerable: true,
+      configurable: true
+    });
     Object.defineProperty(player, "groundedPlatformPid", {
       get: () => {
         const raw = this.world.components.GroundedPlatformPid.value[eid] ?? -1;
@@ -501,6 +528,100 @@ export class SimulationEcs {
       },
       enumerable: true,
       configurable: true
+    });
+  }
+
+  private createHotbarProxy(eid: number): number[] {
+    const hotbar = this.world.components.Hotbar;
+    const getSlot = (slot: number): number => {
+      if (slot === 0) return hotbar.slot0[eid] ?? 0;
+      if (slot === 1) return hotbar.slot1[eid] ?? 0;
+      if (slot === 2) return hotbar.slot2[eid] ?? 0;
+      if (slot === 3) return hotbar.slot3[eid] ?? 0;
+      if (slot === 4) return hotbar.slot4[eid] ?? 0;
+      return 0;
+    };
+    const setSlot = (slot: number, value: number): void => {
+      const normalized = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
+      if (slot === 0) hotbar.slot0[eid] = normalized;
+      if (slot === 1) hotbar.slot1[eid] = normalized;
+      if (slot === 2) hotbar.slot2[eid] = normalized;
+      if (slot === 3) hotbar.slot3[eid] = normalized;
+      if (slot === 4) hotbar.slot4[eid] = normalized;
+    };
+
+    const target: number[] = [];
+    return new Proxy(target, {
+      get: (_obj, prop) => {
+        if (prop === "length") {
+          return HOTBAR_SLOT_COUNT;
+        }
+        if (prop === Symbol.iterator) {
+          return function* iterator(): IterableIterator<number> {
+            for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+              yield getSlot(slot);
+            }
+          };
+        }
+        if (prop === "includes") {
+          return (value: unknown): boolean => {
+            const normalized = typeof value === "number" && Number.isFinite(value) ? value : 0;
+            for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+              if (getSlot(slot) === normalized) {
+                return true;
+              }
+            }
+            return false;
+          };
+        }
+        if (prop === "findIndex") {
+          return (predicate: (value: number, index: number, array: number[]) => boolean): number => {
+            for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+              if (predicate(getSlot(slot), slot, target)) {
+                return slot;
+              }
+            }
+            return -1;
+          };
+        }
+        if (prop === "slice") {
+          return (start?: number, end?: number): number[] => {
+            const copy = Array.from({ length: HOTBAR_SLOT_COUNT }, (_, slot) => getSlot(slot));
+            return copy.slice(start, end);
+          };
+        }
+        if (typeof prop === "string" && /^[0-9]+$/.test(prop)) {
+          return getSlot(Number(prop));
+        }
+        return Reflect.get(target, prop);
+      },
+      set: (_obj, prop, value) => {
+        if (typeof prop === "string" && /^[0-9]+$/.test(prop)) {
+          setSlot(Number(prop), typeof value === "number" ? value : 0);
+          return true;
+        }
+        return Reflect.set(target, prop, value);
+      },
+      ownKeys: () => ["0", "1", "2", "3", "4", "length"],
+      getOwnPropertyDescriptor: (_obj, prop) => {
+        if (prop === "length") {
+          return {
+            configurable: true,
+            enumerable: false,
+            value: HOTBAR_SLOT_COUNT,
+            writable: false
+          };
+        }
+        if (typeof prop === "string" && /^[0-9]+$/.test(prop)) {
+          return {
+            configurable: true,
+            enumerable: true,
+            value: getSlot(Number(prop)),
+            writable: true
+          };
+        }
+        return Reflect.getOwnPropertyDescriptor(target, prop);
+      }
     });
   }
 }
