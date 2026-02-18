@@ -87,6 +87,8 @@ export class GameSimulation {
   private readonly playersByNid = new Map<number, PlayerEntity>();
   private readonly usersById = new Map<number, UserLike>();
   private readonly playerEidByUserId = new Map<number, number>();
+  private readonly playerEidByNid = new Map<number, number>();
+  private readonly playerEidByAccountId = new Map<number, number>();
   private readonly world: RAPIER.World;
   private readonly simulationEcs = new SimulationEcs();
   private readonly replicationBridge: NetReplicationBridge;
@@ -136,7 +138,7 @@ export class GameSimulation {
     });
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
-      getOwnerCollider: (ownerNid) => this.playersByNid.get(ownerNid)?.collider,
+      getOwnerCollider: (ownerNid) => this.getPlayerByNidViaEcs(ownerNid)?.collider,
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
@@ -285,10 +287,14 @@ export class GameSimulation {
         const playerEid = this.simulationEcs.getEidForObject(player);
         if (typeof playerEid === "number") {
           this.playerEidByUserId.set(user.id, playerEid);
+          this.playerEidByNid.set(player.nid, playerEid);
+          this.playerEidByAccountId.set(player.accountId, playerEid);
         }
       },
       onPlayerRemoved: (user, player) => {
         this.playerEidByUserId.delete(user.id);
+        this.playerEidByNid.delete(player.nid);
+        this.playerEidByAccountId.delete(player.accountId);
         this.replicationBridge.despawn(player);
         this.simulationEcs.unregister(player);
       }
@@ -339,7 +345,7 @@ export class GameSimulation {
 
   public flushDirtyPlayerState(): void {
     this.persistenceSyncSystem.flushDirtyPlayerState(
-      this.playersByAccountId,
+      this.getOnlinePlayersByAccountIdViaEcs(),
       (player) => this.capturePlayerSnapshot(player),
       (snapshot) => this.persistence.saveCharacterSnapshot(snapshot),
       (snapshot) => this.persistence.saveAbilityStateSnapshot(snapshot)
@@ -354,7 +360,7 @@ export class GameSimulation {
   } {
     const ecsStats = this.simulationEcs.getStats();
     return {
-      onlinePlayers: this.playersByUserId.size,
+      onlinePlayers: this.playerEidByUserId.size,
       activeProjectiles: this.projectileSystem.getActiveCount(),
       pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount(),
       ecsEntities: ecsStats.total
@@ -614,6 +620,26 @@ export class GameSimulation {
     }
     const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
     return player ?? undefined;
+  }
+
+  private getPlayerByNidViaEcs(nid: number): PlayerEntity | undefined {
+    const eid = this.playerEidByNid.get(nid);
+    if (typeof eid !== "number") {
+      return undefined;
+    }
+    const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
+    return player ?? undefined;
+  }
+
+  private getOnlinePlayersByAccountIdViaEcs(): ReadonlyMap<number, PlayerEntity> {
+    const byAccount = new Map<number, PlayerEntity>();
+    for (const [accountId, eid] of this.playerEidByAccountId.entries()) {
+      const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
+      if (player) {
+        byAccount.set(accountId, player);
+      }
+    }
+    return byAccount;
   }
 
 }
