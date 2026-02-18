@@ -76,6 +76,31 @@ type PlayerEntity = {
   collider: RAPIER.Collider;
 };
 
+type RuntimePlayerState = {
+  accountId: number;
+  nid: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  grounded: boolean;
+  groundedPlatformPid: number | null;
+  lastProcessedSequence: number;
+  lastPrimaryFireAtSeconds: number;
+  primaryHeld: boolean;
+  activeHotbarSlot: number;
+  hotbarAbilityIds: number[];
+  unlockedAbilityIds: Set<number>;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
+};
+
 const ABILITY_USE_EVENT_RADIUS = PLAYER_CAPSULE_RADIUS * 2;
 
 export class GameSimulation {
@@ -89,12 +114,12 @@ export class GameSimulation {
   private readonly playerLifecycleSystem: PlayerLifecycleSystem<UserLike, PlayerEntity>;
   private readonly damageSystem: DamageSystem;
   private readonly meleeCombatSystem: MeleeCombatSystem;
-  private readonly abilityExecutionSystem: AbilityExecutionSystem<PlayerEntity>;
+  private readonly abilityExecutionSystem: AbilityExecutionSystem<RuntimePlayerState>;
   private readonly projectileSystem: ProjectileSystem;
-  private readonly inputSystem: InputSystem<UserLike, PlayerEntity>;
+  private readonly inputSystem: InputSystem<UserLike, RuntimePlayerState>;
   private readonly platformSystem: PlatformSystem;
-  private readonly replicationMessaging: ReplicationMessagingSystem<UserLike, PlayerEntity>;
-  private readonly playerMovementSystem: PlayerMovementSystem<PlayerEntity>;
+  private readonly replicationMessaging: ReplicationMessagingSystem<UserLike, RuntimePlayerState>;
+  private readonly playerMovementSystem: PlayerMovementSystem<RuntimePlayerState>;
   private readonly archetypes: ServerArchetypeCatalog;
   private elapsedSeconds = 0;
   private tickNumber = 0;
@@ -161,7 +186,7 @@ export class GameSimulation {
       getTargets: () => this.damageSystem.getTargets(),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
     });
-    this.abilityExecutionSystem = new AbilityExecutionSystem<PlayerEntity>({
+    this.abilityExecutionSystem = new AbilityExecutionSystem<RuntimePlayerState>({
       getElapsedSeconds: () => this.elapsedSeconds,
       resolveSelectedAbility: (player) => this.resolveSelectedAbility(player),
       broadcastAbilityUse: (player, ability) =>
@@ -170,8 +195,8 @@ export class GameSimulation {
       applyMeleeHit: (player, meleeProfile) =>
         this.meleeCombatSystem.tryApplyMeleeHit(player, meleeProfile)
     });
-    this.inputSystem = new InputSystem<UserLike, PlayerEntity>({
-      onLoadoutCommand: (user, player, command) => this.processLoadoutCommand(user, player, command),
+    this.inputSystem = new InputSystem<UserLike, RuntimePlayerState>({
+      onLoadoutCommand: (user, _player, command) => this.processLoadoutCommand(user, command),
       onPrimaryPressed: (player) => this.abilityExecutionSystem.tryUsePrimaryAbility(player)
     });
     this.platformSystem = new PlatformSystem({
@@ -183,7 +208,7 @@ export class GameSimulation {
         platform.nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(platform));
       }
     });
-    this.replicationMessaging = new ReplicationMessagingSystem<UserLike, PlayerEntity>({
+    this.replicationMessaging = new ReplicationMessagingSystem<UserLike, RuntimePlayerState>({
       getTickNumber: () => this.tickNumber,
       getUsers: () => this.usersById.values(),
       getUserById: (userId) => this.usersById.get(userId),
@@ -192,7 +217,7 @@ export class GameSimulation {
       getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId),
       abilityUseEventRadius: ABILITY_USE_EVENT_RADIUS
     });
-    this.playerMovementSystem = new PlayerMovementSystem<PlayerEntity>({
+    this.playerMovementSystem = new PlayerMovementSystem<RuntimePlayerState>({
       characterController: this.characterController,
       beforePlayerMove: (player) => {
         if (player.primaryHeld) {
@@ -203,12 +228,13 @@ export class GameSimulation {
       findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
         this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
+        this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, player);
         const ackState = this.simulationEcs.getPlayerInputAckStateByUserId(userId);
         if (ackState) {
           this.replicationMessaging.syncUserViewPosition(userId, ackState.x, ackState.y, ackState.z);
           this.replicationMessaging.queueInputAckFromState(userId, ackState, platformYawDelta);
         }
-        this.persistenceSyncSystem.markPlayerDirty(player, {
+        this.persistenceSyncSystem.markAccountDirty(player.accountId, {
           dirtyCharacter: true,
           dirtyAbilityState: false
         });
@@ -328,11 +354,12 @@ export class GameSimulation {
   }
 
   public applyCommands(user: UserLike, commands: unknown[]): void {
-    const player = this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(user.id);
-    if (!player) {
+    const runtimePlayer = this.simulationEcs.getPlayerRuntimeStateByUserId(user.id);
+    if (!runtimePlayer) {
       return;
     }
-    this.inputSystem.applyCommands(user, player, commands);
+    this.inputSystem.applyCommands(user, runtimePlayer, commands);
+    this.simulationEcs.applyPlayerRuntimeStateByUserId(user.id, runtimePlayer);
   }
 
   public step(delta: number): void {
@@ -377,7 +404,6 @@ export class GameSimulation {
 
   private processLoadoutCommand(
     user: UserLike,
-    player: PlayerEntity,
     command: Partial<LoadoutWireCommand>
   ): void {
     const applySelectedHotbarSlot = Boolean(command.applySelectedHotbarSlot);
@@ -397,6 +423,7 @@ export class GameSimulation {
     let didAssignMutation = false;
     let nextActiveHotbarSlot = loadout.activeHotbarSlot;
     const unlockedAbilityIds = new Set<number>(loadout.unlockedAbilityIds);
+    const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
 
     if (applySelectedHotbarSlot) {
       const requestedSlot =
@@ -439,10 +466,12 @@ export class GameSimulation {
       previousAssignedAbilityId !== nextAssignedAbilityId ||
       didAssignMutation;
     if (loadoutChanged || requiresLoadoutResync) {
-      this.persistenceSyncSystem.markPlayerDirty(player, {
-        dirtyCharacter: false,
-        dirtyAbilityState: true
-      });
+      if (accountId !== null) {
+        this.persistenceSyncSystem.markAccountDirty(accountId, {
+          dirtyCharacter: false,
+          dirtyAbilityState: true
+        });
+      }
       const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
       if (loadout) {
         this.replicationMessaging.queueLoadoutStateMessageFromSnapshot(user, loadout);
@@ -450,11 +479,11 @@ export class GameSimulation {
     }
   }
 
-  private getAbilityDefinitionForPlayer(
-    player: PlayerEntity,
+  private getAbilityDefinitionForUnlockedSet(
+    unlockedAbilityIds: Set<number>,
     abilityId: number
   ): AbilityDefinition | null {
-    if (!player.unlockedAbilityIds.has(abilityId)) {
+    if (!unlockedAbilityIds.has(abilityId)) {
       return null;
     }
 
@@ -522,14 +551,14 @@ export class GameSimulation {
     return Math.max(0, Math.min(this.archetypes.player.maxHealth, Math.floor(value)));
   }
 
-  private resolveSelectedAbility(player: PlayerEntity): AbilityDefinition | null {
+  private resolveSelectedAbility(player: RuntimePlayerState): AbilityDefinition | null {
     const slot = this.abilityExecutionSystem.resolveActiveHotbarSlot(player);
     const abilityId = this.sanitizeSelectedAbilityId(
       player.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE,
       ABILITY_ID_NONE,
       player.unlockedAbilityIds
     );
-    return this.getAbilityDefinitionForPlayer(player, abilityId);
+    return this.getAbilityDefinitionForUnlockedSet(player.unlockedAbilityIds, abilityId);
   }
 
   private toReplicationSnapshot(entity: {
@@ -599,11 +628,15 @@ export class GameSimulation {
     return { x: baseRadius + (maxRings + 1) * ringStep, z: 0 };
   }
 
-  private getMovementPlayerEntries(): Array<readonly [number, PlayerEntity]> {
-    const entries: Array<readonly [number, PlayerEntity]> = [];
-    this.simulationEcs.forEachOnlinePlayer<PlayerEntity>((userId, player) => {
-      entries.push([userId, player] as const);
-    });
+  private getMovementPlayerEntries(): Array<readonly [number, RuntimePlayerState]> {
+    const entries: Array<readonly [number, RuntimePlayerState]> = [];
+    for (const userId of this.simulationEcs.getOnlinePlayerUserIds()) {
+      const runtimePlayer = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+      if (!runtimePlayer) {
+        continue;
+      }
+      entries.push([userId, runtimePlayer] as const);
+    }
     return entries;
   }
 

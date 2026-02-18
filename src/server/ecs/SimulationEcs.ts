@@ -22,6 +22,7 @@ type PlayerObject = SimObject & {
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
   unlockedAbilityIds: Set<number>;
+  body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
   vx: number;
   vy: number;
@@ -106,6 +107,7 @@ export class SimulationEcs {
   private readonly playerEidByUserId = new Map<number, number>();
   private readonly playerEidByNid = new Map<number, number>();
   private readonly playerEidByAccountId = new Map<number, number>();
+  private readonly playerBodyByEid = new Map<number, RAPIER.RigidBody>();
   private readonly playerColliderByEid = new Map<number, RAPIER.Collider>();
   private readonly unlockedAbilityIdsByPlayerEid = new Map<number, Set<number>>();
 
@@ -124,6 +126,7 @@ export class SimulationEcs {
     addComponent(this.world, eid, this.world.components.PrimaryHeld);
     addComponent(this.world, eid, this.world.components.ActiveHotbarSlot);
     addComponent(this.world, eid, this.world.components.Hotbar);
+    this.playerBodyByEid.set(eid, player.body);
     this.playerColliderByEid.set(eid, player.collider);
     this.unlockedAbilityIdsByPlayerEid.set(eid, new Set<number>(player.unlockedAbilityIds));
     this.syncPlayer(player);
@@ -210,6 +213,7 @@ export class SimulationEcs {
       return;
     }
     this.removePlayerLookupIndexesForEid(eid);
+    this.playerBodyByEid.delete(eid);
     this.playerColliderByEid.delete(eid);
     this.unlockedAbilityIdsByPlayerEid.delete(eid);
     removeEntity(this.world, eid);
@@ -304,6 +308,18 @@ export class SimulationEcs {
     return this.world.components.NengiNid.value[eid] ?? null;
   }
 
+  public getPlayerAccountIdByUserId(userId: number): number | null {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return null;
+    }
+    return this.world.components.AccountId.value[eid] ?? null;
+  }
+
+  public getOnlinePlayerUserIds(): number[] {
+    return Array.from(this.playerEidByUserId.keys());
+  }
+
   public getPlayerObjectByNid<T extends object>(nid: number): T | undefined {
     const eid = this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
     if (typeof eid !== "number") {
@@ -319,6 +335,128 @@ export class SimulationEcs {
       return undefined;
     }
     return this.playerColliderByEid.get(eid);
+  }
+
+  public getPlayerRuntimeStateByUserId(userId: number): {
+    accountId: number;
+    nid: number;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    grounded: boolean;
+    groundedPlatformPid: number | null;
+    lastProcessedSequence: number;
+    lastPrimaryFireAtSeconds: number;
+    primaryHeld: boolean;
+    activeHotbarSlot: number;
+    hotbarAbilityIds: number[];
+    unlockedAbilityIds: Set<number>;
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number; w: number };
+    body: RAPIER.RigidBody;
+    collider: RAPIER.Collider;
+  } | null {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return null;
+    }
+    const body = this.playerBodyByEid.get(eid);
+    const collider = this.playerColliderByEid.get(eid);
+    if (!body || !collider) {
+      return null;
+    }
+    const groundedPlatformPidRaw = this.world.components.GroundedPlatformPid.value[eid] ?? -1;
+    return {
+      accountId: Math.max(1, Math.floor(this.world.components.AccountId.value[eid] ?? 1)),
+      nid: this.world.components.NengiNid.value[eid] ?? 0,
+      x: this.world.components.Position.x[eid] ?? 0,
+      y: this.world.components.Position.y[eid] ?? 0,
+      z: this.world.components.Position.z[eid] ?? 0,
+      yaw: this.world.components.Yaw.value[eid] ?? 0,
+      pitch: this.world.components.Pitch.value[eid] ?? 0,
+      vx: this.world.components.Velocity.x[eid] ?? 0,
+      vy: this.world.components.Velocity.y[eid] ?? 0,
+      vz: this.world.components.Velocity.z[eid] ?? 0,
+      grounded: (this.world.components.Grounded.value[eid] ?? 0) !== 0,
+      groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw,
+      lastProcessedSequence: this.world.components.LastProcessedSequence.value[eid] ?? 0,
+      lastPrimaryFireAtSeconds:
+        this.world.components.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY,
+      primaryHeld: (this.world.components.PrimaryHeld.value[eid] ?? 0) !== 0,
+      activeHotbarSlot: Math.max(0, Math.floor(this.world.components.ActiveHotbarSlot.value[eid] ?? 0)),
+      hotbarAbilityIds: [
+        this.world.components.Hotbar.slot0[eid] ?? 0,
+        this.world.components.Hotbar.slot1[eid] ?? 0,
+        this.world.components.Hotbar.slot2[eid] ?? 0,
+        this.world.components.Hotbar.slot3[eid] ?? 0,
+        this.world.components.Hotbar.slot4[eid] ?? 0
+      ],
+      unlockedAbilityIds: new Set<number>(this.unlockedAbilityIdsByPlayerEid.get(eid) ?? []),
+      position: {
+        x: this.world.components.Position.x[eid] ?? 0,
+        y: this.world.components.Position.y[eid] ?? 0,
+        z: this.world.components.Position.z[eid] ?? 0
+      },
+      rotation: {
+        x: this.world.components.Rotation.x[eid] ?? 0,
+        y: this.world.components.Rotation.y[eid] ?? 0,
+        z: this.world.components.Rotation.z[eid] ?? 0,
+        w: this.world.components.Rotation.w[eid] ?? 1
+      },
+      body,
+      collider
+    };
+  }
+
+  public applyPlayerRuntimeStateByUserId(
+    userId: number,
+    state: {
+      x: number;
+      y: number;
+      z: number;
+      yaw: number;
+      pitch: number;
+      vx: number;
+      vy: number;
+      vz: number;
+      grounded: boolean;
+      groundedPlatformPid: number | null;
+      lastProcessedSequence: number;
+      lastPrimaryFireAtSeconds: number;
+      primaryHeld: boolean;
+      rotation: { x: number; y: number; z: number; w: number };
+    }
+  ): void {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return;
+    }
+    this.world.components.Position.x[eid] = state.x;
+    this.world.components.Position.y[eid] = state.y;
+    this.world.components.Position.z[eid] = state.z;
+    this.world.components.Yaw.value[eid] = state.yaw;
+    this.world.components.Pitch.value[eid] = state.pitch;
+    this.world.components.Velocity.x[eid] = state.vx;
+    this.world.components.Velocity.y[eid] = state.vy;
+    this.world.components.Velocity.z[eid] = state.vz;
+    this.world.components.Grounded.value[eid] = state.grounded ? 1 : 0;
+    this.world.components.GroundedPlatformPid.value[eid] =
+      state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
+    this.world.components.LastProcessedSequence.value[eid] = Math.max(
+      0,
+      Math.floor(state.lastProcessedSequence)
+    );
+    this.world.components.LastPrimaryFireAtSeconds.value[eid] = state.lastPrimaryFireAtSeconds;
+    this.world.components.PrimaryHeld.value[eid] = state.primaryHeld ? 1 : 0;
+    this.world.components.Rotation.x[eid] = state.rotation.x;
+    this.world.components.Rotation.y[eid] = state.rotation.y;
+    this.world.components.Rotation.z[eid] = state.rotation.z;
+    this.world.components.Rotation.w[eid] = state.rotation.w;
   }
 
   public getPlayerInputAckStateByUserId(userId: number): {

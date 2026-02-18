@@ -15,13 +15,21 @@ export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
     player: TPlayer,
     options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean }
   ): void {
+    this.markAccountDirty(player.accountId, options);
+  }
+
+  public markAccountDirty(
+    accountId: number,
+    options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean }
+  ): void {
+    const normalizedAccountId = Math.max(1, Math.floor(Number.isFinite(accountId) ? accountId : 1));
     const dirtyCharacter = options?.dirtyCharacter ?? true;
     const dirtyAbilityState = options?.dirtyAbilityState ?? true;
     if (dirtyCharacter) {
-      this.dirtyCharacterAccountIds.add(player.accountId);
+      this.dirtyCharacterAccountIds.add(normalizedAccountId);
     }
     if (dirtyAbilityState) {
-      this.dirtyAbilityStateAccountIds.add(player.accountId);
+      this.dirtyAbilityStateAccountIds.add(normalizedAccountId);
     }
   }
 
