@@ -1,12 +1,10 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 
-export interface DamageablePlayerEntity {
+export interface DamageablePlayerState {
+  accountId: number;
   nid: number;
-  modelId: number;
-  rotation: { x: number; y: number; z: number; w: number };
   health: number;
   maxHealth: number;
-  position: { x: number; y: number; z: number };
   x: number;
   y: number;
   z: number;
@@ -16,36 +14,32 @@ export interface DamageablePlayerEntity {
   grounded: boolean;
   groundedPlatformPid: number | null;
   body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
 }
 
-export interface DamageableDummyEntity {
-  nid: number;
-  modelId: number;
-  rotation: { x: number; y: number; z: number; w: number };
-  grounded: boolean;
+export interface DamageableDummyState {
   health: number;
   maxHealth: number;
-  position: { x: number; y: number; z: number };
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
 }
 
 export type CombatTarget =
-  | { kind: "player"; player: DamageablePlayerEntity }
-  | { kind: "dummy"; dummy: DamageableDummyEntity };
+  | { kind: "player"; eid: number }
+  | { kind: "dummy"; eid: number };
 
 export interface DamageSystemOptions {
   readonly maxPlayerHealth: number;
   readonly playerBodyCenterHeight: number;
   readonly playerCameraOffsetY: number;
   readonly getSpawnPosition: () => { x: number; z: number };
-  readonly markPlayerDirty: (
-    player: DamageablePlayerEntity,
+  readonly markPlayerDirtyByAccountId: (
+    accountId: number,
     options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }
   ) => void;
-  readonly onPlayerDamaged?: (player: DamageablePlayerEntity) => void;
-  readonly onDummyDamaged?: (dummy: DamageableDummyEntity) => void;
+  readonly getPlayerStateByEid: (eid: number) => DamageablePlayerState | null;
+  readonly applyPlayerStateByEid: (eid: number, next: DamageablePlayerState) => void;
+  readonly getDummyStateByEid: (eid: number) => DamageableDummyState | null;
+  readonly applyDummyStateByEid: (eid: number, next: DamageableDummyState) => void;
+  readonly onPlayerDamaged?: (eid: number) => void;
+  readonly onDummyDamaged?: (eid: number) => void;
 }
 
 export class DamageSystem {
@@ -53,12 +47,12 @@ export class DamageSystem {
 
   public constructor(private readonly options: DamageSystemOptions) {}
 
-  public registerPlayer(player: DamageablePlayerEntity): void {
-    this.targetsByColliderHandle.set(player.collider.handle, { kind: "player", player });
+  public registerPlayerCollider(colliderHandle: number, eid: number): void {
+    this.targetsByColliderHandle.set(colliderHandle, { kind: "player", eid });
   }
 
-  public registerDummy(dummy: DamageableDummyEntity): void {
-    this.targetsByColliderHandle.set(dummy.collider.handle, { kind: "dummy", dummy });
+  public registerDummyCollider(colliderHandle: number, eid: number): void {
+    this.targetsByColliderHandle.set(colliderHandle, { kind: "dummy", eid });
   }
 
   public unregisterCollider(colliderHandle: number): void {
@@ -79,27 +73,35 @@ export class DamageSystem {
       return;
     }
     if (target.kind === "player") {
-      const player = target.player;
+      const player = this.options.getPlayerStateByEid(target.eid);
+      if (!player) {
+        return;
+      }
       player.health = Math.max(0, player.health - appliedDamage);
-      this.options.markPlayerDirty(player, {
+      this.options.markPlayerDirtyByAccountId(player.accountId, {
         dirtyCharacter: true,
         dirtyAbilityState: false
       });
-      this.options.onPlayerDamaged?.(player);
+      this.options.onPlayerDamaged?.(target.eid);
       if (player.health <= 0) {
         this.respawnPlayer(player);
       }
+      this.options.applyPlayerStateByEid(target.eid, player);
       return;
     }
-    const dummy = target.dummy;
+    const dummy = this.options.getDummyStateByEid(target.eid);
+    if (!dummy) {
+      return;
+    }
     dummy.health = Math.max(0, dummy.health - appliedDamage);
     if (dummy.health <= 0) {
       dummy.health = dummy.maxHealth;
     }
-    this.options.onDummyDamaged?.(dummy);
+    this.options.applyDummyStateByEid(target.eid, dummy);
+    this.options.onDummyDamaged?.(target.eid);
   }
 
-  private respawnPlayer(player: DamageablePlayerEntity): void {
+  private respawnPlayer(player: DamageablePlayerState): void {
     const spawn = this.options.getSpawnPosition();
     player.body.setTranslation(
       { x: spawn.x, y: this.options.playerBodyCenterHeight, z: spawn.z },
@@ -115,13 +117,9 @@ export class DamageSystem {
     player.x = spawn.x;
     player.y = this.options.playerBodyCenterHeight + this.options.playerCameraOffsetY;
     player.z = spawn.z;
-    player.position.x = player.x;
-    player.position.y = player.y;
-    player.position.z = player.z;
-    this.options.markPlayerDirty(player, {
+    this.options.markPlayerDirtyByAccountId(player.accountId, {
       dirtyCharacter: true,
       dirtyAbilityState: false
     });
-    this.options.onPlayerDamaged?.(player);
   }
 }

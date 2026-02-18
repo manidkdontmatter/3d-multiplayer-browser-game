@@ -19,6 +19,11 @@ export interface MeleeCombatSystemOptions {
   readonly dummyRadius: number;
   readonly dummyHalfHeight: number;
   readonly getTargets: () => Iterable<CombatTarget>;
+  readonly resolveTargetRuntime: (target: CombatTarget) => {
+    nid: number;
+    body: RAPIER.RigidBody;
+    collider: RAPIER.Collider;
+  } | null;
   readonly applyDamage: (target: CombatTarget, damage: number) => void;
 }
 
@@ -58,11 +63,15 @@ export class MeleeCombatSystem {
     let bestForwardDistance = Number.POSITIVE_INFINITY;
 
     for (const target of this.options.getTargets()) {
-      if (target.kind === "player" && target.player.nid === attacker.nid) {
+      const runtime = this.options.resolveTargetRuntime(target);
+      if (!runtime) {
+        continue;
+      }
+      if (target.kind === "player" && runtime.nid === attacker.nid) {
         continue;
       }
 
-      const targetBody = this.getCombatTargetBody(target);
+      const targetBody = runtime.body;
       const targetRadius = this.getCombatTargetRadius(target);
       const targetHalfHeight = this.getCombatTargetHalfHeight(target);
       const bodyPos = targetBody.translation();
@@ -117,7 +126,11 @@ export class MeleeCombatSystem {
   }
 
   private hasMeleeLineOfSight(attacker: MeleeAttacker, target: CombatTarget, range: number): boolean {
-    const targetBody = this.getCombatTargetBody(target);
+    const runtime = this.options.resolveTargetRuntime(target);
+    if (!runtime) {
+      return false;
+    }
+    const targetBody = runtime.body;
     const start = attacker.body.translation();
     const end = targetBody.translation();
     const deltaX = end.x - start.x;
@@ -140,7 +153,7 @@ export class MeleeCombatSystem {
     if (!hit) {
       return true;
     }
-    return hit.collider.handle === this.getCombatTargetCollider(target).handle;
+    return hit.collider.handle === runtime.collider.handle;
   }
 
   private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
@@ -158,14 +171,6 @@ export class MeleeCombatSystem {
       y: y * invMagnitude,
       z: z * invMagnitude
     };
-  }
-
-  private getCombatTargetBody(target: CombatTarget): RAPIER.RigidBody {
-    return target.kind === "player" ? target.player.body : target.dummy.body;
-  }
-
-  private getCombatTargetCollider(target: CombatTarget): RAPIER.Collider {
-    return target.kind === "player" ? target.player.collider : target.dummy.collider;
   }
 
   private getCombatTargetRadius(target: CombatTarget): number {
@@ -260,4 +265,3 @@ export class MeleeCombatSystem {
     return Math.max(0, Math.min(1, value));
   }
 }
-

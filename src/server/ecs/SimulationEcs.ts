@@ -36,6 +36,12 @@ type ProjectileObject = SimObject & {
   vz: number;
 };
 
+type DummyObject = SimObject & {
+  nid: number;
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
+};
+
 type WorldWithComponents = {
   components: {
     NengiNid: { value: number[] };
@@ -109,6 +115,8 @@ export class SimulationEcs {
   private readonly playerEidByAccountId = new Map<number, number>();
   private readonly playerBodyByEid = new Map<number, RAPIER.RigidBody>();
   private readonly playerColliderByEid = new Map<number, RAPIER.Collider>();
+  private readonly dummyBodyByEid = new Map<number, RAPIER.RigidBody>();
+  private readonly dummyColliderByEid = new Map<number, RAPIER.Collider>();
   private readonly unlockedAbilityIdsByPlayerEid = new Map<number, Set<number>>();
 
   public registerPlayer(player: PlayerObject): void {
@@ -193,16 +201,18 @@ export class SimulationEcs {
     this.world.components.Velocity.z[eid] = projectile.vz;
   }
 
-  public registerDummy(dummy: SimObject): void {
+  public registerDummy(dummy: DummyObject): void {
     const eid = this.getOrCreateEid(dummy);
     this.ensureBaseComponents(eid);
     addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.DummyTag);
+    this.dummyBodyByEid.set(eid, dummy.body);
+    this.dummyColliderByEid.set(eid, dummy.collider);
     this.syncDummy(dummy);
     this.bindDummyAccessors(dummy, eid);
   }
 
-  public syncDummy(dummy: SimObject): void {
+  public syncDummy(dummy: DummyObject): void {
     const eid = this.getEid(dummy);
     this.syncBase(eid, dummy);
   }
@@ -215,6 +225,8 @@ export class SimulationEcs {
     this.removePlayerLookupIndexesForEid(eid);
     this.playerBodyByEid.delete(eid);
     this.playerColliderByEid.delete(eid);
+    this.dummyBodyByEid.delete(eid);
+    this.dummyColliderByEid.delete(eid);
     this.unlockedAbilityIdsByPlayerEid.delete(eid);
     removeEntity(this.world, eid);
     this.objectToEid.delete(entity);
@@ -408,6 +420,115 @@ export class SimulationEcs {
         z: this.world.components.Rotation.z[eid] ?? 0,
         w: this.world.components.Rotation.w[eid] ?? 1
       },
+      body,
+      collider
+    };
+  }
+
+  public getPlayerDamageStateByEid(eid: number): {
+    accountId: number;
+    nid: number;
+    health: number;
+    maxHealth: number;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    grounded: boolean;
+    groundedPlatformPid: number | null;
+    body: RAPIER.RigidBody;
+  } | null {
+    const body = this.playerBodyByEid.get(eid);
+    if (!body) {
+      return null;
+    }
+    const groundedPlatformPidRaw = this.world.components.GroundedPlatformPid.value[eid] ?? -1;
+    return {
+      accountId: Math.max(1, Math.floor(this.world.components.AccountId.value[eid] ?? 1)),
+      nid: this.world.components.NengiNid.value[eid] ?? 0,
+      health: this.world.components.Health.value[eid] ?? 0,
+      maxHealth: this.world.components.Health.max[eid] ?? 0,
+      x: this.world.components.Position.x[eid] ?? 0,
+      y: this.world.components.Position.y[eid] ?? 0,
+      z: this.world.components.Position.z[eid] ?? 0,
+      vx: this.world.components.Velocity.x[eid] ?? 0,
+      vy: this.world.components.Velocity.y[eid] ?? 0,
+      vz: this.world.components.Velocity.z[eid] ?? 0,
+      grounded: (this.world.components.Grounded.value[eid] ?? 0) !== 0,
+      groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw,
+      body
+    };
+  }
+
+  public applyPlayerDamageStateByEid(
+    eid: number,
+    state: {
+      health: number;
+      maxHealth: number;
+      x: number;
+      y: number;
+      z: number;
+      vx: number;
+      vy: number;
+      vz: number;
+      grounded: boolean;
+      groundedPlatformPid: number | null;
+    }
+  ): void {
+    this.world.components.Health.value[eid] = Math.max(0, Math.floor(state.health));
+    this.world.components.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
+    this.world.components.Position.x[eid] = state.x;
+    this.world.components.Position.y[eid] = state.y;
+    this.world.components.Position.z[eid] = state.z;
+    this.world.components.Velocity.x[eid] = state.vx;
+    this.world.components.Velocity.y[eid] = state.vy;
+    this.world.components.Velocity.z[eid] = state.vz;
+    this.world.components.Grounded.value[eid] = state.grounded ? 1 : 0;
+    this.world.components.GroundedPlatformPid.value[eid] =
+      state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
+  }
+
+  public getDummyDamageStateByEid(eid: number): { health: number; maxHealth: number } | null {
+    if (!this.dummyBodyByEid.has(eid)) {
+      return null;
+    }
+    return {
+      health: this.world.components.Health.value[eid] ?? 0,
+      maxHealth: this.world.components.Health.max[eid] ?? 0
+    };
+  }
+
+  public applyDummyDamageStateByEid(eid: number, state: { health: number; maxHealth: number }): void {
+    this.world.components.Health.value[eid] = Math.max(0, Math.floor(state.health));
+    this.world.components.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
+  }
+
+  public resolveCombatTargetRuntime(target: { kind: "player" | "dummy"; eid: number }): {
+    nid: number;
+    body: RAPIER.RigidBody;
+    collider: RAPIER.Collider;
+  } | null {
+    if (target.kind === "player") {
+      const body = this.playerBodyByEid.get(target.eid);
+      const collider = this.playerColliderByEid.get(target.eid);
+      if (!body || !collider) {
+        return null;
+      }
+      return {
+        nid: this.world.components.NengiNid.value[target.eid] ?? 0,
+        body,
+        collider
+      };
+    }
+    const body = this.dummyBodyByEid.get(target.eid);
+    const collider = this.dummyColliderByEid.get(target.eid);
+    if (!body || !collider) {
+      return null;
+    }
+    return {
+      nid: this.world.components.NengiNid.value[target.eid] ?? 0,
       body,
       collider
     };
@@ -819,7 +940,7 @@ export class SimulationEcs {
     this.boundEntities.add(projectile);
   }
 
-  private bindDummyAccessors(dummy: SimObject, eid: number): void {
+  private bindDummyAccessors(dummy: DummyObject, eid: number): void {
     if (this.boundEntities.has(dummy)) {
       return;
     }

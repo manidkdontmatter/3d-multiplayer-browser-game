@@ -134,9 +134,9 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     this.options.ensurePunchAssigned(player);
 
     this.options.globalChannel.subscribe(user);
-    this.options.registerPlayerForDamage(player);
     this.options.usersById.set(user.id, user);
     this.options.onPlayerAdded?.(user, player);
+    this.options.registerPlayerForDamage(player);
 
     const view = new AABB3D(
       player.x,

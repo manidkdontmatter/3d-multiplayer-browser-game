@@ -144,8 +144,12 @@ export class GameSimulation {
       playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       getSpawnPosition: () => this.getSpawnPosition(),
-      markPlayerDirty: (player, options) =>
-        this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options)
+      markPlayerDirtyByAccountId: (accountId, options) =>
+        this.persistenceSyncSystem.markAccountDirty(accountId, options),
+      getPlayerStateByEid: (eid) => this.simulationEcs.getPlayerDamageStateByEid(eid),
+      applyPlayerStateByEid: (eid, state) => this.simulationEcs.applyPlayerDamageStateByEid(eid, state),
+      getDummyStateByEid: (eid) => this.simulationEcs.getDummyDamageStateByEid(eid),
+      applyDummyStateByEid: (eid, state) => this.simulationEcs.applyDummyDamageStateByEid(eid, state)
     });
     this.worldBootstrapSystem = new WorldBootstrapSystem({
       world: this.world,
@@ -184,6 +188,7 @@ export class GameSimulation {
       dummyRadius: this.archetypes.trainingDummy.capsuleRadius,
       dummyHalfHeight: this.archetypes.trainingDummy.capsuleHalfHeight,
       getTargets: () => this.damageSystem.getTargets(),
+      resolveTargetRuntime: (target) => this.simulationEcs.resolveCombatTargetRuntime(target),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
     });
     this.abilityExecutionSystem = new AbilityExecutionSystem<RuntimePlayerState>({
@@ -292,7 +297,10 @@ export class GameSimulation {
         collider: options.collider
       }),
       markPlayerDirty: (player, options) => this.persistenceSyncSystem.markPlayerDirty(player, options),
-      registerPlayerForDamage: (player) => this.damageSystem.registerPlayer(player),
+      registerPlayerForDamage: (player) => {
+        const eid = this.requireEid(player);
+        this.damageSystem.registerPlayerCollider(player.collider.handle, eid);
+      },
       unregisterPlayerCollider: (colliderHandle) => this.damageSystem.unregisterCollider(colliderHandle),
       removeProjectilesByOwner: (ownerNid) => this.projectileSystem.removeByOwner(ownerNid),
       queueIdentityMessage: (user, playerNid) => {
@@ -341,7 +349,8 @@ export class GameSimulation {
       this.archetypes.trainingDummy.maxHealth,
       this.archetypes.trainingDummy.modelId
     )) {
-      this.damageSystem.registerDummy(dummy);
+      const eid = this.requireEid(dummy);
+      this.damageSystem.registerDummyCollider(dummy.collider.handle, eid);
     }
   }
 
