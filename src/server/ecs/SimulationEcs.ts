@@ -30,12 +30,6 @@ type PlayerObject = SimObject & {
   groundedPlatformPid: number | null;
 };
 
-type ProjectileObject = SimObject & {
-  vx: number;
-  vy: number;
-  vz: number;
-};
-
 type DummyObject = SimObject & {
   nid: number;
   body: RAPIER.RigidBody;
@@ -58,6 +52,19 @@ type WorldWithComponents = {
     LastProcessedSequence: { value: number[] };
     LastPrimaryFireAtSeconds: { value: number[] };
     PrimaryHeld: { value: number[] };
+    ProjectileOwnerNid: { value: number[] };
+    ProjectileKind: { value: number[] };
+    ProjectileRadius: { value: number[] };
+    ProjectileDamage: { value: number[] };
+    ProjectileTtl: { value: number[] };
+    ProjectileRemainingRange: { value: number[] };
+    ProjectileGravity: { value: number[] };
+    ProjectileDrag: { value: number[] };
+    ProjectileMaxSpeed: { value: number[] };
+    ProjectileMinSpeed: { value: number[] };
+    ProjectileRemainingPierces: { value: number[] };
+    ProjectileDespawnOnDamageableHit: { value: number[] };
+    ProjectileDespawnOnWorldHit: { value: number[] };
     ActiveHotbarSlot: { value: number[] };
     Hotbar: {
       slot0: number[];
@@ -91,6 +98,19 @@ export class SimulationEcs {
       LastProcessedSequence: { value: [] as number[] },
       LastPrimaryFireAtSeconds: { value: [] as number[] },
       PrimaryHeld: { value: [] as number[] },
+      ProjectileOwnerNid: { value: [] as number[] },
+      ProjectileKind: { value: [] as number[] },
+      ProjectileRadius: { value: [] as number[] },
+      ProjectileDamage: { value: [] as number[] },
+      ProjectileTtl: { value: [] as number[] },
+      ProjectileRemainingRange: { value: [] as number[] },
+      ProjectileGravity: { value: [] as number[] },
+      ProjectileDrag: { value: [] as number[] },
+      ProjectileMaxSpeed: { value: [] as number[] },
+      ProjectileMinSpeed: { value: [] as number[] },
+      ProjectileRemainingPierces: { value: [] as number[] },
+      ProjectileDespawnOnDamageableHit: { value: [] as number[] },
+      ProjectileDespawnOnWorldHit: { value: [] as number[] },
       ActiveHotbarSlot: { value: [] as number[] },
       Hotbar: {
         slot0: [] as number[],
@@ -183,22 +203,80 @@ export class SimulationEcs {
     this.syncBase(eid, platform);
   }
 
-  public registerProjectile(projectile: ProjectileObject): void {
-    const eid = this.getOrCreateEid(projectile);
+  public createProjectile(projectile: {
+    modelId: number;
+    ownerNid: number;
+    kind: number;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    radius: number;
+    damage: number;
+    ttlSeconds: number;
+    remainingRange: number;
+    gravity: number;
+    drag: number;
+    maxSpeed: number;
+    minSpeed: number;
+    remainingPierces: number;
+    despawnOnDamageableHit: boolean;
+    despawnOnWorldHit: boolean;
+  }): number {
+    const eid = addEntity(this.world);
     this.ensureBaseComponents(eid);
     addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.ProjectileTag);
     addComponent(this.world, eid, this.world.components.Velocity);
-    this.syncProjectile(projectile);
-    this.bindProjectileAccessors(projectile, eid);
-  }
-
-  public syncProjectile(projectile: ProjectileObject): void {
-    const eid = this.getEid(projectile);
-    this.syncBase(eid, projectile);
+    addComponent(this.world, eid, this.world.components.ProjectileOwnerNid);
+    addComponent(this.world, eid, this.world.components.ProjectileKind);
+    addComponent(this.world, eid, this.world.components.ProjectileRadius);
+    addComponent(this.world, eid, this.world.components.ProjectileDamage);
+    addComponent(this.world, eid, this.world.components.ProjectileTtl);
+    addComponent(this.world, eid, this.world.components.ProjectileRemainingRange);
+    addComponent(this.world, eid, this.world.components.ProjectileGravity);
+    addComponent(this.world, eid, this.world.components.ProjectileDrag);
+    addComponent(this.world, eid, this.world.components.ProjectileMaxSpeed);
+    addComponent(this.world, eid, this.world.components.ProjectileMinSpeed);
+    addComponent(this.world, eid, this.world.components.ProjectileRemainingPierces);
+    addComponent(this.world, eid, this.world.components.ProjectileDespawnOnDamageableHit);
+    addComponent(this.world, eid, this.world.components.ProjectileDespawnOnWorldHit);
+    this.world.components.NengiNid.value[eid] = 0;
+    this.world.components.ModelId.value[eid] = Math.max(0, Math.floor(projectile.modelId));
+    this.world.components.Position.x[eid] = projectile.x;
+    this.world.components.Position.y[eid] = projectile.y;
+    this.world.components.Position.z[eid] = projectile.z;
+    this.world.components.Rotation.x[eid] = 0;
+    this.world.components.Rotation.y[eid] = 0;
+    this.world.components.Rotation.z[eid] = 0;
+    this.world.components.Rotation.w[eid] = 1;
+    this.world.components.Grounded.value[eid] = 0;
+    this.world.components.Health.value[eid] = 0;
+    this.world.components.Health.max[eid] = 0;
     this.world.components.Velocity.x[eid] = projectile.vx;
     this.world.components.Velocity.y[eid] = projectile.vy;
     this.world.components.Velocity.z[eid] = projectile.vz;
+    this.world.components.ProjectileOwnerNid.value[eid] = Math.max(0, Math.floor(projectile.ownerNid));
+    this.world.components.ProjectileKind.value[eid] = Math.max(0, Math.floor(projectile.kind));
+    this.world.components.ProjectileRadius.value[eid] = Math.max(0, projectile.radius);
+    this.world.components.ProjectileDamage.value[eid] = Math.max(0, projectile.damage);
+    this.world.components.ProjectileTtl.value[eid] = projectile.ttlSeconds;
+    this.world.components.ProjectileRemainingRange.value[eid] = projectile.remainingRange;
+    this.world.components.ProjectileGravity.value[eid] = projectile.gravity;
+    this.world.components.ProjectileDrag.value[eid] = Math.max(0, projectile.drag);
+    this.world.components.ProjectileMaxSpeed.value[eid] = Math.max(0, projectile.maxSpeed);
+    this.world.components.ProjectileMinSpeed.value[eid] = Math.max(0, projectile.minSpeed);
+    this.world.components.ProjectileRemainingPierces.value[eid] = Math.max(
+      0,
+      Math.floor(projectile.remainingPierces)
+    );
+    this.world.components.ProjectileDespawnOnDamageableHit.value[eid] = projectile.despawnOnDamageableHit
+      ? 1
+      : 0;
+    this.world.components.ProjectileDespawnOnWorldHit.value[eid] = projectile.despawnOnWorldHit ? 1 : 0;
+    return eid;
   }
 
   public registerDummy(dummy: DummyObject): void {
@@ -222,24 +300,12 @@ export class SimulationEcs {
     if (typeof eid !== "number") {
       return;
     }
-    this.removePlayerLookupIndexesForEid(eid);
-    this.playerBodyByEid.delete(eid);
-    this.playerColliderByEid.delete(eid);
-    this.dummyBodyByEid.delete(eid);
-    this.dummyColliderByEid.delete(eid);
-    this.unlockedAbilityIdsByPlayerEid.delete(eid);
-    removeEntity(this.world, eid);
-    this.objectToEid.delete(entity);
-    this.eidToObject.delete(eid);
+    this.removeEntityByEid(eid);
   }
 
   public getEidForObject(entity: object): number | null {
     const eid = this.objectToEid.get(entity);
     return typeof eid === "number" ? eid : null;
-  }
-
-  public getObjectByEid(eid: number): object | null {
-    return this.eidToObject.get(eid) ?? null;
   }
 
   public getPlayerPersistenceSnapshotByEid(eid: number): {
@@ -332,21 +398,140 @@ export class SimulationEcs {
     return Array.from(this.playerEidByUserId.keys());
   }
 
-  public getPlayerObjectByNid<T extends object>(nid: number): T | undefined {
-    const eid = this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
-    if (typeof eid !== "number") {
-      return undefined;
-    }
-    const entity = this.eidToObject.get(eid) as T | undefined;
-    return entity;
-  }
-
   public getPlayerColliderByNid(nid: number): RAPIER.Collider | undefined {
     const eid = this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
     if (typeof eid !== "number") {
       return undefined;
     }
     return this.playerColliderByEid.get(eid);
+  }
+
+  public getActiveProjectileEids(): number[] {
+    return Array.from(query(this.world, [this.world.components.ProjectileTag]));
+  }
+
+  public setProjectileNidByEid(eid: number, nid: number): void {
+    this.world.components.NengiNid.value[eid] = Math.max(0, Math.floor(nid));
+  }
+
+  public getReplicationSnapshotByEid(eid: number): {
+    nid: number;
+    modelId: number;
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number; w: number };
+    grounded: boolean;
+    health: number;
+    maxHealth: number;
+  } {
+    return {
+      nid: this.world.components.NengiNid.value[eid] ?? 0,
+      modelId: this.world.components.ModelId.value[eid] ?? 0,
+      position: {
+        x: this.world.components.Position.x[eid] ?? 0,
+        y: this.world.components.Position.y[eid] ?? 0,
+        z: this.world.components.Position.z[eid] ?? 0
+      },
+      rotation: {
+        x: this.world.components.Rotation.x[eid] ?? 0,
+        y: this.world.components.Rotation.y[eid] ?? 0,
+        z: this.world.components.Rotation.z[eid] ?? 0,
+        w: this.world.components.Rotation.w[eid] ?? 1
+      },
+      grounded: (this.world.components.Grounded.value[eid] ?? 0) !== 0,
+      health: this.world.components.Health.value[eid] ?? 0,
+      maxHealth: this.world.components.Health.max[eid] ?? 0
+    };
+  }
+
+  public getProjectileRuntimeStateByEid(eid: number): {
+    ownerNid: number;
+    kind: number;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    radius: number;
+    damage: number;
+    ttlSeconds: number;
+    remainingRange: number;
+    gravity: number;
+    drag: number;
+    maxSpeed: number;
+    minSpeed: number;
+    remainingPierces: number;
+    despawnOnDamageableHit: boolean;
+    despawnOnWorldHit: boolean;
+  } | null {
+    const nid = this.world.components.NengiNid.value[eid];
+    if (typeof nid !== "number") {
+      return null;
+    }
+    return {
+      ownerNid: this.world.components.ProjectileOwnerNid.value[eid] ?? 0,
+      kind: this.world.components.ProjectileKind.value[eid] ?? 0,
+      x: this.world.components.Position.x[eid] ?? 0,
+      y: this.world.components.Position.y[eid] ?? 0,
+      z: this.world.components.Position.z[eid] ?? 0,
+      vx: this.world.components.Velocity.x[eid] ?? 0,
+      vy: this.world.components.Velocity.y[eid] ?? 0,
+      vz: this.world.components.Velocity.z[eid] ?? 0,
+      radius: this.world.components.ProjectileRadius.value[eid] ?? 0,
+      damage: this.world.components.ProjectileDamage.value[eid] ?? 0,
+      ttlSeconds: this.world.components.ProjectileTtl.value[eid] ?? 0,
+      remainingRange: this.world.components.ProjectileRemainingRange.value[eid] ?? 0,
+      gravity: this.world.components.ProjectileGravity.value[eid] ?? 0,
+      drag: this.world.components.ProjectileDrag.value[eid] ?? 0,
+      maxSpeed: this.world.components.ProjectileMaxSpeed.value[eid] ?? 0,
+      minSpeed: this.world.components.ProjectileMinSpeed.value[eid] ?? 0,
+      remainingPierces: this.world.components.ProjectileRemainingPierces.value[eid] ?? 0,
+      despawnOnDamageableHit: (this.world.components.ProjectileDespawnOnDamageableHit.value[eid] ?? 0) !== 0,
+      despawnOnWorldHit: (this.world.components.ProjectileDespawnOnWorldHit.value[eid] ?? 0) !== 0
+    };
+  }
+
+  public applyProjectileRuntimeStateByEid(
+    eid: number,
+    state: {
+      x: number;
+      y: number;
+      z: number;
+      vx: number;
+      vy: number;
+      vz: number;
+      ttlSeconds: number;
+      remainingRange: number;
+      remainingPierces: number;
+    }
+  ): void {
+    this.world.components.Position.x[eid] = state.x;
+    this.world.components.Position.y[eid] = state.y;
+    this.world.components.Position.z[eid] = state.z;
+    this.world.components.Velocity.x[eid] = state.vx;
+    this.world.components.Velocity.y[eid] = state.vy;
+    this.world.components.Velocity.z[eid] = state.vz;
+    this.world.components.ProjectileTtl.value[eid] = state.ttlSeconds;
+    this.world.components.ProjectileRemainingRange.value[eid] = state.remainingRange;
+    this.world.components.ProjectileRemainingPierces.value[eid] = Math.max(
+      0,
+      Math.floor(state.remainingPierces)
+    );
+  }
+
+  public removeEntityByEid(eid: number): void {
+    const entity = this.eidToObject.get(eid);
+    if (entity) {
+      this.objectToEid.delete(entity);
+      this.eidToObject.delete(eid);
+    }
+    this.removePlayerLookupIndexesForEid(eid);
+    this.playerBodyByEid.delete(eid);
+    this.playerColliderByEid.delete(eid);
+    this.dummyBodyByEid.delete(eid);
+    this.dummyColliderByEid.delete(eid);
+    this.unlockedAbilityIdsByPlayerEid.delete(eid);
+    removeEntity(this.world, eid);
   }
 
   public getPlayerRuntimeStateByUserId(userId: number): {
@@ -704,17 +889,6 @@ export class SimulationEcs {
     return this.getPlayerPersistenceSnapshotByEid(eid);
   }
 
-  public forEachOnlinePlayer<T extends object>(
-    visitor: (userId: number, entity: T) => void
-  ): void {
-    for (const [userId, eid] of this.playerEidByUserId.entries()) {
-      const entity = this.eidToObject.get(eid) as T | undefined;
-      if (entity) {
-        visitor(userId, entity);
-      }
-    }
-  }
-
   public getOnlinePlayerCount(): number {
     return this.playerEidByUserId.size;
   }
@@ -921,23 +1095,6 @@ export class SimulationEcs {
     }
     this.bindBaseAccessors(platform, eid, true);
     this.boundEntities.add(platform);
-  }
-
-  private bindProjectileAccessors(projectile: ProjectileObject, eid: number): void {
-    if (this.boundEntities.has(projectile)) {
-      return;
-    }
-    this.bindBaseAccessors(projectile, eid, true);
-    this.defineNumberProxy(projectile, "vx", () => this.world.components.Velocity.x[eid] ?? 0, (value) => {
-      this.world.components.Velocity.x[eid] = value;
-    });
-    this.defineNumberProxy(projectile, "vy", () => this.world.components.Velocity.y[eid] ?? 0, (value) => {
-      this.world.components.Velocity.y[eid] = value;
-    });
-    this.defineNumberProxy(projectile, "vz", () => this.world.components.Velocity.z[eid] ?? 0, (value) => {
-      this.world.components.Velocity.z[eid] = value;
-    });
-    this.boundEntities.add(projectile);
   }
 
   private bindDummyAccessors(dummy: DummyObject, eid: number): void {

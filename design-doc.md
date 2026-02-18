@@ -26,6 +26,7 @@
 - a big aspect of this project's architecture is top down design, multiple top level systems that govern their systems but other systems can communicate with other systems but if possible should not directly control things that are part of another system's system, aka avoid tight coupling
 - keep systems decoupled and self contained, in their own modules
 - prefer generalized features/systems/etc rather than overly specific
+- strongly prefer data oriented design everywhere
 
 # Composition / Flexibility / Sandbox Elements
 - Because this is a sandbox game that prefers high composition (and composition over inheritance) so that it has high flexibility of gameplay, gameobjects must be highly composable from a generalized base, for example any object can potentially take damage as long as that functionality is composed onto it.

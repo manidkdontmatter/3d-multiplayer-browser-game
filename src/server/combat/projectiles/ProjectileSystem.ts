@@ -1,46 +1,11 @@
 import RAPIER from "@dimforge/rapier3d-compat";
-import {
-  IDENTITY_QUATERNION,
-  MODEL_ID_PROJECTILE_PRIMARY
-} from "../../../shared/index";
 import type { CombatTarget } from "../damage/DamageSystem";
 
-const PROJECTILE_POOL_PREWARM = 96;
-const PROJECTILE_POOL_MAX = 4096;
 const PROJECTILE_MIN_RADIUS = 0.005;
 const PROJECTILE_RADIUS_CACHE_SCALE = 1000;
 const PROJECTILE_SPEED_EPSILON = 1e-6;
 const PROJECTILE_DEFAULT_MAX_RANGE = 260;
 const PROJECTILE_CONTACT_EPSILON = 0.002;
-
-type ProjectileEntity = {
-  nid: number;
-  modelId: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  grounded: boolean;
-  health: number;
-  maxHealth: number;
-  ownerNid: number;
-  kind: number;
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  radius: number;
-  damage: number;
-  ttlSeconds: number;
-  remainingRange: number;
-  gravity: number;
-  drag: number;
-  maxSpeed: number;
-  minSpeed: number;
-  remainingPierces: number;
-  despawnOnDamageableHit: boolean;
-  despawnOnWorldHit: boolean;
-};
 
 export interface ProjectileSpawnRequest {
   readonly ownerNid: number;
@@ -64,73 +29,71 @@ export interface ProjectileSpawnRequest {
   readonly despawnOnWorldHit?: boolean;
 }
 
+type ProjectileRuntimeState = {
+  ownerNid: number;
+  kind: number;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  radius: number;
+  damage: number;
+  ttlSeconds: number;
+  remainingRange: number;
+  gravity: number;
+  drag: number;
+  maxSpeed: number;
+  minSpeed: number;
+  remainingPierces: number;
+  despawnOnDamageableHit: boolean;
+  despawnOnWorldHit: boolean;
+};
+
 export interface ProjectileSystemOptions {
   readonly world: RAPIER.World;
   readonly getOwnerCollider: (ownerNid: number) => RAPIER.Collider | undefined;
   readonly resolveTargetByColliderHandle: (colliderHandle: number) => CombatTarget | null;
   readonly applyDamage: (target: CombatTarget, damage: number) => void;
-  readonly resolveModelIdForKind: (kind: number) => number;
-  readonly onProjectileAdded?: (projectile: ProjectileEntity) => number | void;
-  readonly onProjectileUpdated?: (projectile: ProjectileEntity) => void;
-  readonly onProjectileRemoved?: (projectile: ProjectileEntity) => void;
+  readonly createProjectile: (request: ProjectileSpawnRequest) => number | null;
+  readonly getProjectileState: (eid: number) => ProjectileRuntimeState | null;
+  readonly applyProjectileState: (eid: number, state: ProjectileRuntimeState) => void;
+  readonly removeProjectile: (eid: number) => void;
 }
 
 export class ProjectileSystem {
-  private readonly projectilesByNid = new Map<number, ProjectileEntity>();
-  private readonly projectilePool: ProjectileEntity[] = [];
+  private readonly projectileEids = new Set<number>();
   private readonly projectileCastShapeCache = new Map<number, RAPIER.Ball>();
   private readonly identityRotation: RAPIER.Rotation = { x: 0, y: 0, z: 0, w: 1 };
 
-  public constructor(private readonly options: ProjectileSystemOptions) {
-    this.prewarmProjectilePool(PROJECTILE_POOL_PREWARM);
-  }
+  public constructor(private readonly options: ProjectileSystemOptions) {}
 
   public spawn(request: ProjectileSpawnRequest): void {
-    const projectile = this.acquireProjectile();
-    projectile.ownerNid = request.ownerNid;
-    projectile.kind = request.kind;
-    projectile.modelId = this.options.resolveModelIdForKind(request.kind);
-    projectile.x = request.x;
-    projectile.y = request.y;
-    projectile.z = request.z;
-    projectile.position.x = request.x;
-    projectile.position.y = request.y;
-    projectile.position.z = request.z;
-    projectile.vx = request.vx;
-    projectile.vy = request.vy;
-    projectile.vz = request.vz;
-    projectile.radius = request.radius;
-    projectile.damage = request.damage;
-    projectile.ttlSeconds = request.lifetimeSeconds;
-    projectile.remainingRange = this.resolveMaxRange(request.maxRange);
-    projectile.gravity = this.resolveOptionalNumber(request.gravity, 0);
-    projectile.drag = Math.max(0, this.resolveOptionalNumber(request.drag, 0));
-    projectile.maxSpeed = Math.max(0, this.resolveOptionalNumber(request.maxSpeed, Number.POSITIVE_INFINITY));
-    projectile.minSpeed = Math.max(0, this.resolveOptionalNumber(request.minSpeed, 0));
-    projectile.remainingPierces = Math.max(0, Math.floor(this.resolveOptionalNumber(request.pierceCount, 0)));
-    projectile.despawnOnDamageableHit =
-      typeof request.despawnOnDamageableHit === "boolean" ? request.despawnOnDamageableHit : true;
-    projectile.despawnOnWorldHit =
-      typeof request.despawnOnWorldHit === "boolean" ? request.despawnOnWorldHit : true;
-    const assignedNid = this.options.onProjectileAdded?.(projectile);
-    if (typeof assignedNid === "number" && Number.isFinite(assignedNid)) {
-      projectile.nid = Math.max(0, Math.floor(assignedNid));
+    const eid = this.options.createProjectile(request);
+    if (typeof eid !== "number") {
+      return;
     }
-    this.projectilesByNid.set(projectile.nid, projectile);
+    this.projectileEids.add(eid);
   }
 
   public step(deltaSeconds: number): void {
-    for (const [nid, projectile] of this.projectilesByNid) {
+    for (const eid of Array.from(this.projectileEids)) {
+      const projectile = this.options.getProjectileState(eid);
+      if (!projectile) {
+        this.projectileEids.delete(eid);
+        continue;
+      }
       projectile.ttlSeconds -= deltaSeconds;
       if (projectile.ttlSeconds <= 0) {
-        this.removeProjectile(nid, projectile);
+        this.removeProjectile(eid);
         continue;
       }
 
       this.integrateMotion(projectile, deltaSeconds);
       const speed = Math.hypot(projectile.vx, projectile.vy, projectile.vz);
       if (speed <= PROJECTILE_SPEED_EPSILON || speed < projectile.minSpeed) {
-        this.removeProjectile(nid, projectile);
+        this.removeProjectile(eid);
         continue;
       }
       const maxTravelTime = this.resolveProjectileMaxTravelTime(
@@ -143,16 +106,13 @@ export class ProjectileSystem {
       const traveledDistance = speed * traveledTime;
       projectile.remainingRange -= traveledDistance;
       if (projectile.remainingRange <= 0) {
-        this.removeProjectile(nid, projectile);
+        this.removeProjectile(eid);
         continue;
       }
       if (collision) {
         projectile.x += projectile.vx * traveledTime;
         projectile.y += projectile.vy * traveledTime;
         projectile.z += projectile.vz * traveledTime;
-        projectile.position.x = projectile.x;
-        projectile.position.y = projectile.y;
-        projectile.position.z = projectile.z;
         if (collision.target) {
           this.options.applyDamage(collision.target, projectile.damage);
           const canPierceTarget = projectile.remainingPierces > 0;
@@ -161,27 +121,21 @@ export class ProjectileSystem {
             projectile.x += projectile.vx * PROJECTILE_CONTACT_EPSILON;
             projectile.y += projectile.vy * PROJECTILE_CONTACT_EPSILON;
             projectile.z += projectile.vz * PROJECTILE_CONTACT_EPSILON;
-            projectile.position.x = projectile.x;
-            projectile.position.y = projectile.y;
-            projectile.position.z = projectile.z;
-            this.options.onProjectileUpdated?.(projectile);
+            this.options.applyProjectileState(eid, projectile);
             continue;
           }
           if (!projectile.despawnOnDamageableHit) {
             projectile.x += projectile.vx * PROJECTILE_CONTACT_EPSILON;
             projectile.y += projectile.vy * PROJECTILE_CONTACT_EPSILON;
             projectile.z += projectile.vz * PROJECTILE_CONTACT_EPSILON;
-            projectile.position.x = projectile.x;
-            projectile.position.y = projectile.y;
-            projectile.position.z = projectile.z;
-            this.options.onProjectileUpdated?.(projectile);
+            this.options.applyProjectileState(eid, projectile);
             continue;
           }
-          this.removeProjectile(nid, projectile);
+          this.removeProjectile(eid);
           continue;
         }
         if (projectile.despawnOnWorldHit) {
-          this.removeProjectile(nid, projectile);
+          this.removeProjectile(eid);
           continue;
         }
       }
@@ -190,38 +144,32 @@ export class ProjectileSystem {
         projectile.x += projectile.vx * traveledTime;
         projectile.y += projectile.vy * traveledTime;
         projectile.z += projectile.vz * traveledTime;
-        projectile.position.x = projectile.x;
-        projectile.position.y = projectile.y;
-        projectile.position.z = projectile.z;
       }
-      this.options.onProjectileUpdated?.(projectile);
+      this.options.applyProjectileState(eid, projectile);
     }
   }
 
   public removeByOwner(ownerNid: number): void {
-    for (const [nid, projectile] of this.projectilesByNid) {
-      if (projectile.ownerNid === ownerNid) {
-        this.removeProjectile(nid, projectile);
+    const normalizedOwnerNid = Math.max(0, Math.floor(ownerNid));
+    for (const eid of Array.from(this.projectileEids)) {
+      const projectile = this.options.getProjectileState(eid);
+      if (!projectile) {
+        this.projectileEids.delete(eid);
+        continue;
+      }
+      if (projectile.ownerNid === normalizedOwnerNid) {
+        this.removeProjectile(eid);
       }
     }
   }
 
   public getActiveCount(): number {
-    return this.projectilesByNid.size;
+    return this.projectileEids.size;
   }
 
-  private resolveMaxRange(rawMaxRange: number | undefined): number {
-    if (typeof rawMaxRange !== "number" || !Number.isFinite(rawMaxRange)) {
-      return PROJECTILE_DEFAULT_MAX_RANGE;
-    }
-    return Math.max(0, rawMaxRange);
-  }
-
-  private resolveOptionalNumber(rawValue: number | undefined, fallback: number): number {
-    if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) {
-      return fallback;
-    }
-    return rawValue;
+  private removeProjectile(eid: number): void {
+    this.projectileEids.delete(eid);
+    this.options.removeProjectile(eid);
   }
 
   private resolveProjectileMaxTravelTime(
@@ -237,7 +185,7 @@ export class ProjectileSystem {
   }
 
   private castProjectileCollision(
-    projectile: ProjectileEntity,
+    projectile: ProjectileRuntimeState,
     maxTravelTime: number
   ): { timeOfImpact: number; target: CombatTarget | null } | null {
     if (maxTravelTime <= 0) {
@@ -268,7 +216,7 @@ export class ProjectileSystem {
     };
   }
 
-  private integrateMotion(projectile: ProjectileEntity, deltaSeconds: number): void {
+  private integrateMotion(projectile: ProjectileRuntimeState, deltaSeconds: number): void {
     if (projectile.gravity !== 0) {
       projectile.vy += projectile.gravity * deltaSeconds;
     }
@@ -300,113 +248,17 @@ export class ProjectileSystem {
     return shape;
   }
 
-  private removeProjectile(nid: number, projectile: ProjectileEntity): void {
-    this.projectilesByNid.delete(nid);
-    this.options.onProjectileRemoved?.(projectile);
-    this.releaseProjectile(projectile);
-  }
-
-  private prewarmProjectilePool(count: number): void {
-    for (let i = this.projectilePool.length; i < count; i += 1) {
-      this.projectilePool.push(this.createPooledProjectile());
+  public static resolveMaxRange(rawMaxRange: number | undefined): number {
+    if (typeof rawMaxRange !== "number" || !Number.isFinite(rawMaxRange)) {
+      return PROJECTILE_DEFAULT_MAX_RANGE;
     }
+    return Math.max(0, rawMaxRange);
   }
 
-  private acquireProjectile(): ProjectileEntity {
-    const projectile = this.projectilePool.pop() ?? this.createPooledProjectile();
-    projectile.nid = 0;
-    projectile.modelId = MODEL_ID_PROJECTILE_PRIMARY;
-    projectile.position.x = 0;
-    projectile.position.y = 0;
-    projectile.position.z = 0;
-    projectile.rotation.x = IDENTITY_QUATERNION.x;
-    projectile.rotation.y = IDENTITY_QUATERNION.y;
-    projectile.rotation.z = IDENTITY_QUATERNION.z;
-    projectile.rotation.w = IDENTITY_QUATERNION.w;
-    projectile.grounded = false;
-    projectile.health = 0;
-    projectile.maxHealth = 0;
-    projectile.ownerNid = 0;
-    projectile.kind = 0;
-    projectile.x = 0;
-    projectile.y = 0;
-    projectile.z = 0;
-    projectile.vx = 0;
-    projectile.vy = 0;
-    projectile.vz = 0;
-    projectile.radius = 0;
-    projectile.damage = 0;
-    projectile.ttlSeconds = 0;
-    projectile.remainingRange = 0;
-    projectile.gravity = 0;
-    projectile.drag = 0;
-    projectile.maxSpeed = 0;
-    projectile.minSpeed = 0;
-    projectile.remainingPierces = 0;
-    projectile.despawnOnDamageableHit = true;
-    projectile.despawnOnWorldHit = true;
-    return projectile;
-  }
-
-  private releaseProjectile(projectile: ProjectileEntity): void {
-    if (this.projectilePool.length >= PROJECTILE_POOL_MAX) {
-      return;
+  public static resolveOptionalNumber(rawValue: number | undefined, fallback: number): number {
+    if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) {
+      return fallback;
     }
-    projectile.nid = 0;
-    projectile.ownerNid = 0;
-    projectile.kind = 0;
-    projectile.x = 0;
-    projectile.y = -1000;
-    projectile.z = 0;
-    projectile.position.x = 0;
-    projectile.position.y = -1000;
-    projectile.position.z = 0;
-    projectile.vx = 0;
-    projectile.vy = 0;
-    projectile.vz = 0;
-    projectile.radius = 0;
-    projectile.damage = 0;
-    projectile.ttlSeconds = 0;
-    projectile.remainingRange = 0;
-    projectile.gravity = 0;
-    projectile.drag = 0;
-    projectile.maxSpeed = 0;
-    projectile.minSpeed = 0;
-    projectile.remainingPierces = 0;
-    projectile.despawnOnDamageableHit = true;
-    projectile.despawnOnWorldHit = true;
-    this.projectilePool.push(projectile);
+    return rawValue;
   }
-
-  private createPooledProjectile(): ProjectileEntity {
-    return {
-      nid: 0,
-      modelId: MODEL_ID_PROJECTILE_PRIMARY,
-      position: { x: 0, y: -1000, z: 0 },
-      rotation: { ...IDENTITY_QUATERNION },
-      grounded: false,
-      health: 0,
-      maxHealth: 0,
-      ownerNid: 0,
-      kind: 0,
-      x: 0,
-      y: -1000,
-      z: 0,
-      vx: 0,
-      vy: 0,
-      vz: 0,
-      radius: 0,
-      damage: 0,
-      ttlSeconds: 0,
-      remainingRange: 0,
-      gravity: 0,
-      drag: 0,
-      maxSpeed: 0,
-      minSpeed: 0,
-      remainingPierces: 0,
-      despawnOnDamageableHit: true,
-      despawnOnWorldHit: true
-    };
-  }
-
 }

@@ -165,20 +165,46 @@ export class GameSimulation {
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
-      resolveModelIdForKind: (kind) => this.resolveProjectileModelId(kind),
-      onProjectileAdded: (projectile) => {
-        this.simulationEcs.registerProjectile(projectile);
-        const eid = this.requireEid(projectile);
-        const nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(projectile));
-        projectile.nid = nid;
-        return nid;
+      createProjectile: (request) => {
+        const eid = this.simulationEcs.createProjectile({
+          modelId: this.resolveProjectileModelId(request.kind),
+          ownerNid: request.ownerNid,
+          kind: request.kind,
+          x: request.x,
+          y: request.y,
+          z: request.z,
+          vx: request.vx,
+          vy: request.vy,
+          vz: request.vz,
+          radius: request.radius,
+          damage: request.damage,
+          ttlSeconds: request.lifetimeSeconds,
+          remainingRange: ProjectileSystem.resolveMaxRange(request.maxRange),
+          gravity: ProjectileSystem.resolveOptionalNumber(request.gravity, 0),
+          drag: Math.max(0, ProjectileSystem.resolveOptionalNumber(request.drag, 0)),
+          maxSpeed: Math.max(
+            0,
+            ProjectileSystem.resolveOptionalNumber(request.maxSpeed, Number.POSITIVE_INFINITY)
+          ),
+          minSpeed: Math.max(0, ProjectileSystem.resolveOptionalNumber(request.minSpeed, 0)),
+          remainingPierces: Math.max(
+            0,
+            Math.floor(ProjectileSystem.resolveOptionalNumber(request.pierceCount, 0))
+          ),
+          despawnOnDamageableHit:
+            typeof request.despawnOnDamageableHit === "boolean" ? request.despawnOnDamageableHit : true,
+          despawnOnWorldHit:
+            typeof request.despawnOnWorldHit === "boolean" ? request.despawnOnWorldHit : true
+        });
+        const nid = this.replicationBridge.spawn(eid, this.simulationEcs.getReplicationSnapshotByEid(eid));
+        this.simulationEcs.setProjectileNidByEid(eid, nid);
+        return eid;
       },
-      onProjectileRemoved: (projectile) => {
-        const eid = this.simulationEcs.getEidForObject(projectile);
-        if (typeof eid === "number") {
-          this.replicationBridge.despawn(eid);
-        }
-        this.simulationEcs.unregister(projectile);
+      getProjectileState: (eid) => this.simulationEcs.getProjectileRuntimeStateByEid(eid),
+      applyProjectileState: (eid, state) => this.simulationEcs.applyProjectileRuntimeStateByEid(eid, state),
+      removeProjectile: (eid) => {
+        this.replicationBridge.despawn(eid);
+        this.simulationEcs.removeEntityByEid(eid);
       }
     });
     this.meleeCombatSystem = new MeleeCombatSystem({
