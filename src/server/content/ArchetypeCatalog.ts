@@ -22,6 +22,7 @@ export interface ServerArchetypeCatalog {
     readonly spawns: readonly Vec3Yaw[];
   };
   readonly platforms: readonly PlatformDefinition[];
+  readonly projectiles: ReadonlyMap<number, { modelId: number }>;
 }
 
 export function loadServerArchetypeCatalog(): ServerArchetypeCatalog {
@@ -65,6 +66,10 @@ function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog 
   if (!Array.isArray(platformsRaw) || platformsRaw.length === 0) {
     throw new Error("platforms must be a non-empty array.");
   }
+  const projectileKindsRaw = root.projectileKinds;
+  if (!Array.isArray(projectileKindsRaw) || projectileKindsRaw.length === 0) {
+    throw new Error("projectileKinds must be a non-empty array.");
+  }
 
   const playerMaxHealth = asNumber(playerRaw.maxHealth, "player.maxHealth");
   if (playerMaxHealth <= 0) {
@@ -101,6 +106,16 @@ function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog 
     }
     pidSet.add(platform.pid);
   }
+  const projectileKinds = new Map<number, { modelId: number }>();
+  for (let index = 0; index < projectileKindsRaw.length; index += 1) {
+    const record = asRecord(projectileKindsRaw[index], `projectileKinds[${index}]`);
+    const kind = asInt(record.kind, `projectileKinds[${index}].kind`);
+    const modelId = asInt(record.modelId, `projectileKinds[${index}].modelId`);
+    if (projectileKinds.has(kind)) {
+      throw new Error(`projectileKinds contains duplicate kind ${kind}`);
+    }
+    projectileKinds.set(kind, { modelId });
+  }
 
   const catalog: ServerArchetypeCatalog = {
     player: {
@@ -114,7 +129,8 @@ function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog 
       capsuleRadius: asNumber(dummyRaw.capsuleRadius, "trainingDummy.capsuleRadius"),
       spawns
     },
-    platforms
+    platforms,
+    projectiles: projectileKinds
   };
 
   return catalog;

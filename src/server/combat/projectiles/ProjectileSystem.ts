@@ -69,6 +69,7 @@ export interface ProjectileSystemOptions {
   readonly getOwnerCollider: (ownerNid: number) => RAPIER.Collider | undefined;
   readonly resolveTargetByColliderHandle: (colliderHandle: number) => CombatTarget | null;
   readonly applyDamage: (target: CombatTarget, damage: number) => void;
+  readonly resolveModelIdForKind: (kind: number) => number;
   readonly onProjectileAdded?: (projectile: ProjectileEntity) => number | void;
   readonly onProjectileUpdated?: (projectile: ProjectileEntity) => void;
   readonly onProjectileRemoved?: (projectile: ProjectileEntity) => void;
@@ -88,7 +89,7 @@ export class ProjectileSystem {
     const projectile = this.acquireProjectile();
     projectile.ownerNid = request.ownerNid;
     projectile.kind = request.kind;
-    projectile.modelId = this.resolveModelId(request.kind);
+    projectile.modelId = this.options.resolveModelIdForKind(request.kind);
     projectile.x = request.x;
     projectile.y = request.y;
     projectile.z = request.z;
@@ -408,10 +409,4 @@ export class ProjectileSystem {
     };
   }
 
-  private resolveModelId(kind: number): number {
-    if (kind === 1) {
-      return MODEL_ID_PROJECTILE_PRIMARY;
-    }
-    return MODEL_ID_PROJECTILE_PRIMARY;
-  }
 }

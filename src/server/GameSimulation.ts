@@ -139,6 +139,7 @@ export class GameSimulation {
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
+      resolveModelIdForKind: (kind) => this.resolveProjectileModelId(kind),
       onProjectileAdded: (projectile) => {
         const nid = this.replicationBridge.spawn(projectile, this.toReplicationSnapshot(projectile));
         projectile.nid = nid;
@@ -641,6 +642,15 @@ export class GameSimulation {
       }
     }
     return byAccount;
+  }
+
+  private resolveProjectileModelId(kind: number): number {
+    const resolvedKind = Math.max(0, Math.floor(kind));
+    const entry = this.archetypes.projectiles.get(resolvedKind);
+    if (!entry) {
+      return this.archetypes.projectiles.get(1)?.modelId ?? 0;
+    }
+    return entry.modelId;
   }
 
   private resolveServerArchetypes(): ServerArchetypeCatalog {
