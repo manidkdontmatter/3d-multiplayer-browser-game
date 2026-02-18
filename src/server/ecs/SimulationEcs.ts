@@ -20,6 +20,7 @@ type PlayerObject = SimObject & {
   primaryHeld: boolean;
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
+  unlockedAbilityIds: Set<number>;
   vx: number;
   vy: number;
   vz: number;
@@ -101,6 +102,7 @@ export class SimulationEcs {
   private readonly playerEidByUserId = new Map<number, number>();
   private readonly playerEidByNid = new Map<number, number>();
   private readonly playerEidByAccountId = new Map<number, number>();
+  private readonly unlockedAbilityIdsByPlayerEid = new Map<number, Set<number>>();
 
   public registerPlayer(player: PlayerObject): void {
     const eid = this.getOrCreateEid(player);
@@ -116,6 +118,7 @@ export class SimulationEcs {
     addComponent(this.world, eid, this.world.components.PrimaryHeld);
     addComponent(this.world, eid, this.world.components.ActiveHotbarSlot);
     addComponent(this.world, eid, this.world.components.Hotbar);
+    this.unlockedAbilityIdsByPlayerEid.set(eid, new Set<number>(player.unlockedAbilityIds));
     this.syncPlayer(player);
     this.bindPlayerAccessors(player, eid);
   }
@@ -197,6 +200,7 @@ export class SimulationEcs {
       return;
     }
     this.removePlayerLookupIndexesForEid(eid);
+    this.unlockedAbilityIdsByPlayerEid.delete(eid);
     removeEntity(this.world, eid);
     this.objectToEid.delete(entity);
     this.eidToObject.delete(eid);
@@ -486,6 +490,17 @@ export class SimulationEcs {
       get: () => (this.world.components.PrimaryHeld.value[eid] ?? 0) !== 0,
       set: (value: boolean) => {
         this.world.components.PrimaryHeld.value[eid] = value ? 1 : 0;
+      },
+      enumerable: true,
+      configurable: true
+    });
+    Object.defineProperty(player, "unlockedAbilityIds", {
+      get: () => this.unlockedAbilityIdsByPlayerEid.get(eid) ?? new Set<number>(),
+      set: (value: Set<number>) => {
+        this.unlockedAbilityIdsByPlayerEid.set(
+          eid,
+          value instanceof Set ? new Set<number>(value) : new Set<number>()
+        );
       },
       enumerable: true,
       configurable: true
