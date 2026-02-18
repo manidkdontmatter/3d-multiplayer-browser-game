@@ -205,8 +205,11 @@ export class GameSimulation {
       findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
         this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
-        this.replicationMessaging.syncUserView(userId, player);
-        this.replicationMessaging.queueInputAck(userId, player, platformYawDelta);
+        const ackState = this.simulationEcs.getPlayerInputAckStateByUserId(userId);
+        if (ackState) {
+          this.replicationMessaging.syncUserViewPosition(userId, ackState.x, ackState.y, ackState.z);
+          this.replicationMessaging.queueInputAckFromState(userId, ackState, platformYawDelta);
+        }
         this.persistenceSyncSystem.markPlayerDirty(player, {
           dirtyCharacter: true,
           dirtyAbilityState: false

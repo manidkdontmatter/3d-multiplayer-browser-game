@@ -300,6 +300,41 @@ export class SimulationEcs {
     return entity;
   }
 
+  public getPlayerInputAckStateByUserId(userId: number): {
+    nid: number;
+    lastProcessedSequence: number;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    grounded: boolean;
+    groundedPlatformPid: number | null;
+  } | null {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return null;
+    }
+    const groundedPlatformPidRaw = this.world.components.GroundedPlatformPid.value[eid] ?? -1;
+    return {
+      nid: this.world.components.NengiNid.value[eid] ?? 0,
+      lastProcessedSequence: this.world.components.LastProcessedSequence.value[eid] ?? 0,
+      x: this.world.components.Position.x[eid] ?? 0,
+      y: this.world.components.Position.y[eid] ?? 0,
+      z: this.world.components.Position.z[eid] ?? 0,
+      yaw: this.world.components.Yaw.value[eid] ?? 0,
+      pitch: this.world.components.Pitch.value[eid] ?? 0,
+      vx: this.world.components.Velocity.x[eid] ?? 0,
+      vy: this.world.components.Velocity.y[eid] ?? 0,
+      vz: this.world.components.Velocity.z[eid] ?? 0,
+      grounded: (this.world.components.Grounded.value[eid] ?? 0) !== 0,
+      groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw
+    };
+  }
+
   public getPlayerPersistenceSnapshotByAccountId(accountId: number): {
     accountId: number;
     x: number;

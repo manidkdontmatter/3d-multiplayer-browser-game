@@ -31,6 +31,20 @@ export interface ReplicationPlayer {
   unlockedAbilityIds: Set<number>;
 }
 
+export interface InputAckStateSnapshot {
+  lastProcessedSequence: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  grounded: boolean;
+  groundedPlatformPid: number | null;
+}
+
 export interface ReplicationMessagingSystemOptions<
   TUser extends ReplicationUser,
   TPlayer extends ReplicationPlayer
@@ -51,34 +65,46 @@ export class ReplicationMessagingSystem<
   public constructor(private readonly options: ReplicationMessagingSystemOptions<TUser, TPlayer>) {}
 
   public syncUserView(userId: number, player: TPlayer): void {
+    this.syncUserViewPosition(userId, player.x, player.y, player.z);
+  }
+
+  public syncUserViewPosition(userId: number, x: number, y: number, z: number): void {
     const user = this.options.getUserById(userId);
     if (!user?.view) {
       return;
     }
-    user.view.x = player.x;
-    user.view.y = player.y;
-    user.view.z = player.z;
+    user.view.x = x;
+    user.view.y = y;
+    user.view.z = z;
   }
 
   public queueInputAck(userId: number, player: TPlayer, platformYawDelta: number): void {
+    this.queueInputAckFromState(userId, player, platformYawDelta);
+  }
+
+  public queueInputAckFromState(
+    userId: number,
+    state: InputAckStateSnapshot,
+    platformYawDelta: number
+  ): void {
     const user = this.options.getUserById(userId);
     if (!user) {
       return;
     }
     user.queueMessage({
       ntype: NType.InputAckMessage,
-      sequence: player.lastProcessedSequence,
+      sequence: state.lastProcessedSequence,
       serverTick: this.options.getTickNumber(),
-      x: player.x,
-      y: player.y,
-      z: player.z,
-      yaw: player.yaw,
-      pitch: player.pitch,
-      vx: player.vx,
-      vy: player.vy,
-      vz: player.vz,
-      grounded: player.grounded,
-      groundedPlatformPid: player.groundedPlatformPid ?? -1,
+      x: state.x,
+      y: state.y,
+      z: state.z,
+      yaw: state.yaw,
+      pitch: state.pitch,
+      vx: state.vx,
+      vy: state.vy,
+      vz: state.vz,
+      grounded: state.grounded,
+      groundedPlatformPid: state.groundedPlatformPid ?? -1,
       platformYawDelta
     });
   }
