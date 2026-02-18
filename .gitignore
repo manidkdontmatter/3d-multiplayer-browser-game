@@ -35,3 +35,7 @@ Thumbs.db
 
 # Local persistence/runtime data
 data/
+!data/
+data/*
+!data/archetypes/
+!data/archetypes/*.json

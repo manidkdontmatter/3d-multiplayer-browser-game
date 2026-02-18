@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "baseAbilities": [
+    {
+      "id": 1,
+      "key": "arc-bolt",
+      "name": "Arc Bolt",
+      "description": "Fast energy projectile used as a baseline combat ability.",
+      "category": "projectile",
+      "points": {
+        "power": 6,
+        "velocity": 6,
+        "efficiency": 4,
+        "control": 4
+      },
+      "attributes": ["quick-cast"],
+      "projectile": {
+        "kind": 1,
+        "speed": 24,
+        "damage": 25,
+        "radius": 0.2,
+        "cooldownSeconds": 0.2,
+        "lifetimeSeconds": 2.2,
+        "spawnForwardOffset": 0.75,
+        "spawnVerticalOffset": -0.1
+      }
+    },
+    {
+      "id": 2,
+      "key": "punch",
+      "name": "Punch",
+      "description": "Fast close-range melee strike.",
+      "category": "melee",
+      "points": {
+        "power": 7,
+        "velocity": 4,
+        "efficiency": 5,
+        "control": 4
+      },
+      "attributes": ["quick-cast"],
+      "melee": {
+        "damage": 18,
+        "range": 1.95,
+        "radius": 0.34,
+        "cooldownSeconds": 2,
+        "arcDegrees": 62
+      }
+    }
+  ],
+  "defaults": {
+    "hotbarAbilityIds": [1, 2, 0, 0, 0],
+    "unlockedAbilityIds": [1, 2]
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "player": {
+    "modelId": 1,
+    "maxHealth": 100
+  },
+  "trainingDummy": {
+    "modelId": 5,
+    "maxHealth": 160,
+    "capsuleHalfHeight": 0.95,
+    "capsuleRadius": 0.42,
+    "spawns": [
+      {
+        "x": 7,
+        "y": 0.95,
+        "z": -5,
+        "yaw": 0
+      }
+    ]
+  },
+  "platforms": [
+    {
+      "pid": 1,
+      "kind": 1,
+      "halfX": 2.25,
+      "halfY": 0.35,
+      "halfZ": 2.25,
+      "baseX": 8,
+      "baseY": 0.9,
+      "baseZ": 0,
+      "baseYaw": 0,
+      "amplitudeX": 4.5,
+      "amplitudeY": 1.2,
+      "frequency": 0.55,
+      "phase": 0,
+      "angularSpeed": 0
+    },
+    {
+      "pid": 2,
+      "kind": 2,
+      "halfX": 2.8,
+      "halfY": 0.35,
+      "halfZ": 2.8,
+      "baseX": -10,
+      "baseY": 1.1,
+      "baseZ": -6,
+      "baseYaw": 0,
+      "amplitudeX": 0,
+      "amplitudeY": 0,
+      "frequency": 0,
+      "phase": 0,
+      "angularSpeed": 1.413716694115407
+    }
+  ],
+  "projectileKinds": [
+    {
+      "kind": 1,
+      "modelId": 4
+    }
+  ]
+}
