@@ -125,14 +125,8 @@ export class GameSimulation {
       getSpawnPosition: () => this.getSpawnPosition(),
       markPlayerDirty: (player, options) =>
         this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options),
-      onPlayerDamaged: (player) => {
-        this.simulationEcs.syncPlayer(player as PlayerEntity);
-        this.replicationBridge.sync(player, this.toReplicationSnapshot(player));
-      },
-      onDummyDamaged: (dummy) => {
-        this.simulationEcs.syncDummy(dummy);
-        this.replicationBridge.sync(dummy, this.toReplicationSnapshot(dummy));
-      }
+      onPlayerDamaged: (player) => this.simulationEcs.syncPlayer(player as PlayerEntity),
+      onDummyDamaged: (dummy) => this.simulationEcs.syncDummy(dummy)
     });
     this.worldBootstrapSystem = new WorldBootstrapSystem({
       world: this.world,
@@ -155,7 +149,6 @@ export class GameSimulation {
       },
       onProjectileUpdated: (projectile) => {
         this.simulationEcs.syncProjectile(projectile);
-        this.replicationBridge.sync(projectile, this.toReplicationSnapshot(projectile));
       },
       onProjectileRemoved: (projectile) => {
         this.replicationBridge.despawn(projectile);
@@ -192,7 +185,6 @@ export class GameSimulation {
       },
       onPlatformUpdated: (platform) => {
         this.simulationEcs.syncPlatform(platform);
-        this.replicationBridge.sync(platform, this.toReplicationSnapshot(platform));
       }
     });
     this.replicationMessaging = new ReplicationMessagingSystem<UserLike, PlayerEntity>({
@@ -217,7 +209,6 @@ export class GameSimulation {
         this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
         this.simulationEcs.syncPlayer(player);
-        this.replicationBridge.sync(player, this.toReplicationSnapshot(player));
         this.replicationMessaging.syncUserView(userId, player);
         this.replicationMessaging.queueInputAck(userId, player, platformYawDelta);
         this.persistenceSyncSystem.markPlayerDirty(player, {
@@ -343,6 +334,9 @@ export class GameSimulation {
     this.playerMovementSystem.stepPlayers(this.playersByUserId, delta);
 
     this.projectileSystem.step(delta);
+    this.simulationEcs.forEachReplicatedSnapshot((entity, snapshot) => {
+      this.replicationBridge.sync(entity, snapshot);
+    });
     this.world.step();
   }
 

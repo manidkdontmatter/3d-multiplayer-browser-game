@@ -56,6 +56,8 @@
 - No stop-gap core systems: do not ship temporary compatibility hacks for foundational systems (animation, netcode, physics) when a production standard path exists.
 - If you notice anything in this project is just straight up retarded, tell me.
 - No hacky crap, do real industry standard solutions with best practices, most problems/features/etc have known ideal solutions
+- Some requests, when appropriate, should be considered full refactors instead of trying to keep compatibility with existing systems/features/architecture, in which case make existing systems align with the request, instead of making the new system align with existing systems.
+- Make existing systems align with the current task, do not make the current task align with existing systems.
 
 ## UI and Feature Standards
 

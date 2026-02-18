@@ -150,6 +150,42 @@ export class SimulationEcs {
     };
   }
 
+  public forEachReplicatedSnapshot(
+    visitor: (
+      entity: object,
+      snapshot: {
+        nid: number;
+        modelId: number;
+        position: { x: number; y: number; z: number };
+        rotation: { x: number; y: number; z: number; w: number };
+        grounded: boolean;
+        health: number;
+        maxHealth: number;
+      }
+    ) => void
+  ): void {
+    for (const [eid, entity] of this.eidToObject.entries()) {
+      visitor(entity, {
+        nid: this.world.components.NengiNid.value[eid] ?? 0,
+        modelId: this.world.components.ModelId.value[eid] ?? 0,
+        position: {
+          x: this.world.components.Position.x[eid] ?? 0,
+          y: this.world.components.Position.y[eid] ?? 0,
+          z: this.world.components.Position.z[eid] ?? 0
+        },
+        rotation: {
+          x: this.world.components.Rotation.x[eid] ?? 0,
+          y: this.world.components.Rotation.y[eid] ?? 0,
+          z: this.world.components.Rotation.z[eid] ?? 0,
+          w: this.world.components.Rotation.w[eid] ?? 1
+        },
+        grounded: (this.world.components.Grounded.value[eid] ?? 0) !== 0,
+        health: this.world.components.Health.value[eid] ?? 0,
+        maxHealth: this.world.components.Health.max[eid] ?? 0
+      });
+    }
+  }
+
   private ensureBaseComponents(eid: number): void {
     addComponent(this.world, eid, this.world.components.NengiNid);
     addComponent(this.world, eid, this.world.components.ModelId);
