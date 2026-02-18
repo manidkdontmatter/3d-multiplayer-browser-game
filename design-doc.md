@@ -21,7 +21,15 @@
 - Players will host their own servers on a VPS they own, because this game is open source so they have access to the server/client files. There is no sharding or clustering or horizontal scaling, an entire game server is just one VPS, including all persisted state. All assets are served from that VPS as well, not a separate CDN.
 - Player servers will register themselves into a separate server list app which has nothing to do with this app, the server list app is a website which displays all servers to potential players who can then click a specific server to join it, which sends them to the IP/URL of the VPS the player host has put the server on, because clicking to join a server literally leaves to another IP/Domain, this allows each server to potentially be running a highly modded version of the game with different code and assets without any problems, it is literally like leaving the server list website and going to the specific website/IP of that specific game server.
 - No state is shared between separate game servers, they're their own island, players have their own characters that only exist on that specific server etc, if they join a different server it's like starting from scratch.
+- Decide on a coherent UI style up front and use it for all 
+
+# Composition / Flexibility / Sandbox Elements
 - Because this is a sandbox game that prefers high composition (and composition over inheritance) so that it has high flexibility of gameplay, gameobjects must be highly composable from a generalized base, for example any object can potentially take damage as long as that functionality is composed onto it.
+- use ECS via BitECS, ECS is a foundational architecture for this game
+- use data driven design for composition of actors, abilities, items, etc, like Caves of Qud does. Data Driven Definitions via json.
+- we are modeling most of our "anything can be anything" architecture after the game Caves of Qud which has one of the most composable game systems ever made, it does not use classes or strict hierarchies but greatly favors extreme composition and flexibility so that "anything can be anything" almost. for example, a fire does not know what "wood" is, it just knows if something is flammable. that's why we try to keep things generic and flexible.
+- The replication layer and the simulation layer are two decoupled and self contained layers. One example of this is the ecs entities (which are objects that exist in our 3d world usually) are not the same as nengi entities (which are used for state replication), but an object in our world (ecs entity) does know about its nengi entity, but they are not the same object. the ecs entity uses its nengi entity to replicate its state.
+- An example is, everything can potentially be damageable, and have a health value
 
 # General Details
 - The game has proximity voice chat so players can communicate with nearby players

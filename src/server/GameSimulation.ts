@@ -124,9 +124,7 @@ export class GameSimulation {
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       getSpawnPosition: () => this.getSpawnPosition(),
       markPlayerDirty: (player, options) =>
-        this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options),
-      onPlayerDamaged: (player) => this.simulationEcs.syncPlayer(player as PlayerEntity),
-      onDummyDamaged: (dummy) => this.simulationEcs.syncDummy(dummy)
+        this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options)
     });
     this.worldBootstrapSystem = new WorldBootstrapSystem({
       world: this.world,
@@ -146,9 +144,6 @@ export class GameSimulation {
         projectile.nid = nid;
         this.simulationEcs.registerProjectile(projectile);
         return nid;
-      },
-      onProjectileUpdated: (projectile) => {
-        this.simulationEcs.syncProjectile(projectile);
       },
       onProjectileRemoved: (projectile) => {
         this.replicationBridge.despawn(projectile);
@@ -182,9 +177,6 @@ export class GameSimulation {
       onPlatformAdded: (platform) => {
         platform.nid = this.replicationBridge.spawn(platform, this.toReplicationSnapshot(platform));
         this.simulationEcs.registerPlatform(platform);
-      },
-      onPlatformUpdated: (platform) => {
-        this.simulationEcs.syncPlatform(platform);
       }
     });
     this.replicationMessaging = new ReplicationMessagingSystem<UserLike, PlayerEntity>({
@@ -208,7 +200,6 @@ export class GameSimulation {
       findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
         this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
-        this.simulationEcs.syncPlayer(player);
         this.replicationMessaging.syncUserView(userId, player);
         this.replicationMessaging.queueInputAck(userId, player, platformYawDelta);
         this.persistenceSyncSystem.markPlayerDirty(player, {
