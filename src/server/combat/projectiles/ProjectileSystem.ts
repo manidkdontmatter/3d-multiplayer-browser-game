@@ -1,9 +1,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
-import type { ChannelAABB3D } from "nengi";
 import {
   IDENTITY_QUATERNION,
-  MODEL_ID_PROJECTILE_PRIMARY,
-  NType
+  MODEL_ID_PROJECTILE_PRIMARY
 } from "../../../shared/index";
 import type { CombatTarget } from "../damage/DamageSystem";
 
@@ -17,7 +15,6 @@ const PROJECTILE_CONTACT_EPSILON = 0.002;
 
 type ProjectileEntity = {
   nid: number;
-  ntype: NType.BaseEntity;
   modelId: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
@@ -69,11 +66,10 @@ export interface ProjectileSpawnRequest {
 
 export interface ProjectileSystemOptions {
   readonly world: RAPIER.World;
-  readonly spatialChannel: ChannelAABB3D;
   readonly getOwnerCollider: (ownerNid: number) => RAPIER.Collider | undefined;
   readonly resolveTargetByColliderHandle: (colliderHandle: number) => CombatTarget | null;
   readonly applyDamage: (target: CombatTarget, damage: number) => void;
-  readonly onProjectileAdded?: (projectile: ProjectileEntity) => void;
+  readonly onProjectileAdded?: (projectile: ProjectileEntity) => number | void;
   readonly onProjectileUpdated?: (projectile: ProjectileEntity) => void;
   readonly onProjectileRemoved?: (projectile: ProjectileEntity) => void;
 }
@@ -115,9 +111,11 @@ export class ProjectileSystem {
       typeof request.despawnOnDamageableHit === "boolean" ? request.despawnOnDamageableHit : true;
     projectile.despawnOnWorldHit =
       typeof request.despawnOnWorldHit === "boolean" ? request.despawnOnWorldHit : true;
-    this.options.spatialChannel.addEntity(projectile);
+    const assignedNid = this.options.onProjectileAdded?.(projectile);
+    if (typeof assignedNid === "number" && Number.isFinite(assignedNid)) {
+      projectile.nid = Math.max(0, Math.floor(assignedNid));
+    }
     this.projectilesByNid.set(projectile.nid, projectile);
-    this.options.onProjectileAdded?.(projectile);
   }
 
   public step(deltaSeconds: number): void {
@@ -302,7 +300,6 @@ export class ProjectileSystem {
   }
 
   private removeProjectile(nid: number, projectile: ProjectileEntity): void {
-    this.options.spatialChannel.removeEntity(projectile);
     this.projectilesByNid.delete(nid);
     this.options.onProjectileRemoved?.(projectile);
     this.releaseProjectile(projectile);
@@ -317,7 +314,6 @@ export class ProjectileSystem {
   private acquireProjectile(): ProjectileEntity {
     const projectile = this.projectilePool.pop() ?? this.createPooledProjectile();
     projectile.nid = 0;
-    projectile.ntype = NType.BaseEntity;
     projectile.modelId = MODEL_ID_PROJECTILE_PRIMARY;
     projectile.position.x = 0;
     projectile.position.y = 0;
@@ -384,7 +380,6 @@ export class ProjectileSystem {
   private createPooledProjectile(): ProjectileEntity {
     return {
       nid: 0,
-      ntype: NType.BaseEntity,
       modelId: MODEL_ID_PROJECTILE_PRIMARY,
       position: { x: 0, y: -1000, z: 0 },
       rotation: { ...IDENTITY_QUATERNION },

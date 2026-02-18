@@ -1,11 +1,9 @@
 import RAPIER from "@dimforge/rapier3d-compat";
-import type { ChannelAABB3D } from "nengi";
 import {
   applyPlatformCarry,
   findGroundedPlatformPid,
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
-  NType,
   PLATFORM_DEFINITIONS,
   PlatformSpatialIndex,
   PLAYER_CAPSULE_HALF_HEIGHT,
@@ -16,7 +14,6 @@ import {
 
 type PlatformEntity = {
   nid: number;
-  ntype: NType.BaseEntity;
   modelId: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
@@ -51,7 +48,6 @@ export interface PlatformCarryActor {
 
 export interface PlatformSystemOptions {
   readonly world: RAPIER.World;
-  readonly spatialChannel: ChannelAABB3D;
   readonly onPlatformAdded?: (platform: PlatformEntity) => void;
   readonly onPlatformUpdated?: (platform: PlatformEntity) => void;
 }
@@ -76,7 +72,6 @@ export class PlatformSystem {
 
       const platform: PlatformEntity = {
         nid: 0,
-        ntype: NType.BaseEntity,
         modelId: definition.kind === 2 ? MODEL_ID_PLATFORM_ROTATING : MODEL_ID_PLATFORM_LINEAR,
         position: {
           x: pose.x,
@@ -110,7 +105,6 @@ export class PlatformSystem {
         collider
       };
       this.platformsByPid.set(platform.pid, platform);
-      this.options.spatialChannel.addEntity(platform);
       this.options.onPlatformAdded?.(platform);
     }
     this.rebuildPlatformSpatialIndex();

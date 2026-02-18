@@ -12,7 +12,6 @@ export interface LifecycleUser {
 export interface LifecyclePlayer {
   accountId: number;
   nid: number;
-  ntype: number;
   modelId: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
@@ -135,15 +134,14 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     });
 
     this.options.ensurePunchAssigned(player);
+    this.options.onPlayerAdded?.(player);
 
     this.options.globalChannel.subscribe(user);
-    this.options.spatialChannel.addEntity(player);
     this.options.playersByUserId.set(user.id, player);
     this.options.playersByAccountId.set(player.accountId, player);
     this.options.playersByNid.set(player.nid, player);
     this.options.registerPlayerForDamage(player);
     this.options.usersById.set(user.id, user);
-    this.options.onPlayerAdded?.(player);
 
     const view = new AABB3D(
       player.x,
@@ -174,14 +172,13 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       player.accountId,
       this.options.capturePlayerSnapshot(player)
     );
-    this.options.spatialChannel.removeEntity(player);
+    this.options.onPlayerRemoved?.(player);
     this.options.playersByUserId.delete(user.id);
     this.options.playersByAccountId.delete(player.accountId);
     this.options.playersByNid.delete(player.nid);
     this.options.unregisterPlayerCollider(player.collider.handle);
     this.options.usersById.delete(user.id);
     this.options.removeProjectilesByOwner(player.nid);
-    this.options.onPlayerRemoved?.(player);
     this.options.world.removeCollider(player.collider, true);
     this.options.world.removeRigidBody(player.body);
   }

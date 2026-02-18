@@ -1,16 +1,13 @@
 import RAPIER from "@dimforge/rapier3d-compat";
-import type { ChannelAABB3D } from "nengi";
 import {
   IDENTITY_QUATERNION,
   MODEL_ID_TRAINING_DUMMY,
-  NType,
   quaternionFromYaw,
   STATIC_WORLD_BLOCKS
 } from "../../shared/index";
 
 export interface WorldBootstrapDummy {
   nid: number;
-  ntype: NType.BaseEntity;
   modelId: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
@@ -27,7 +24,6 @@ export interface WorldBootstrapDummy {
 
 export interface WorldBootstrapSystemOptions {
   readonly world: RAPIER.World;
-  readonly spatialChannel: ChannelAABB3D;
   readonly onDummyAdded?: (dummy: WorldBootstrapDummy) => void;
 }
 
@@ -73,7 +69,6 @@ export class WorldBootstrapSystem {
       );
       const dummy: WorldBootstrapDummy = {
         nid: 0,
-        ntype: NType.BaseEntity,
         modelId: MODEL_ID_TRAINING_DUMMY,
         position: {
           x: spawn.x,
@@ -98,7 +93,6 @@ export class WorldBootstrapSystem {
       dummy.rotation.y = quat.y;
       dummy.rotation.z = quat.z;
       dummy.rotation.w = quat.w;
-      this.options.spatialChannel.addEntity(dummy);
       this.options.onDummyAdded?.(dummy);
       dummies.push(dummy);
     }

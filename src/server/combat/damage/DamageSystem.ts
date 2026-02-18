@@ -2,6 +2,8 @@ import RAPIER from "@dimforge/rapier3d-compat";
 
 export interface DamageablePlayerEntity {
   nid: number;
+  modelId: number;
+  rotation: { x: number; y: number; z: number; w: number };
   health: number;
   maxHealth: number;
   position: { x: number; y: number; z: number };

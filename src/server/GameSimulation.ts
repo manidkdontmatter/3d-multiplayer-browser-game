@@ -35,6 +35,7 @@ import { InputSystem } from "./input/InputSystem";
 import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { ReplicationMessagingSystem } from "./netcode/ReplicationMessagingSystem";
+import { NetReplicationBridge } from "./netcode/NetReplicationBridge";
 import { PlatformSystem } from "./platform/PlatformSystem";
 import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
 import { SimulationEcs } from "./ecs/SimulationEcs";
@@ -49,7 +50,6 @@ type UserLike = {
 type PlayerEntity = {
   accountId: number;
   nid: number;
-  ntype: NType.BaseEntity;
   modelId: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
@@ -88,6 +88,7 @@ export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
   private readonly world: RAPIER.World;
   private readonly simulationEcs = new SimulationEcs();
+  private readonly replicationBridge: NetReplicationBridge;
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly persistenceSyncSystem = new PersistenceSyncSystem<PlayerEntity>();
   private readonly worldBootstrapSystem: WorldBootstrapSystem;
@@ -108,6 +109,7 @@ export class GameSimulation {
     private readonly spatialChannel: ChannelAABB3D,
     private readonly persistence: PersistenceService
   ) {
+    this.replicationBridge = new NetReplicationBridge(this.spatialChannel);
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
     this.characterController = this.world.createCharacterController(0.01);
@@ -123,24 +125,42 @@ export class GameSimulation {
       getSpawnPosition: () => this.getSpawnPosition(),
       markPlayerDirty: (player, options) =>
         this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options),
-      onPlayerDamaged: (player) => this.simulationEcs.syncPlayer(player as PlayerEntity),
-      onDummyDamaged: (dummy) => this.simulationEcs.syncDummy(dummy)
+      onPlayerDamaged: (player) => {
+        this.simulationEcs.syncPlayer(player as PlayerEntity);
+        this.replicationBridge.sync(player, this.toReplicationSnapshot(player));
+      },
+      onDummyDamaged: (dummy) => {
+        this.simulationEcs.syncDummy(dummy);
+        this.replicationBridge.sync(dummy, this.toReplicationSnapshot(dummy));
+      }
     });
     this.worldBootstrapSystem = new WorldBootstrapSystem({
       world: this.world,
-      spatialChannel: this.spatialChannel,
-      onDummyAdded: (dummy) => this.simulationEcs.registerDummy(dummy)
+      onDummyAdded: (dummy) => {
+        dummy.nid = this.replicationBridge.spawn(dummy, this.toReplicationSnapshot(dummy));
+        this.simulationEcs.registerDummy(dummy);
+      }
     });
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
-      spatialChannel: this.spatialChannel,
       getOwnerCollider: (ownerNid) => this.playersByNid.get(ownerNid)?.collider,
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
-      onProjectileAdded: (projectile) => this.simulationEcs.registerProjectile(projectile),
-      onProjectileUpdated: (projectile) => this.simulationEcs.syncProjectile(projectile),
-      onProjectileRemoved: (projectile) => this.simulationEcs.unregister(projectile)
+      onProjectileAdded: (projectile) => {
+        const nid = this.replicationBridge.spawn(projectile, this.toReplicationSnapshot(projectile));
+        projectile.nid = nid;
+        this.simulationEcs.registerProjectile(projectile);
+        return nid;
+      },
+      onProjectileUpdated: (projectile) => {
+        this.simulationEcs.syncProjectile(projectile);
+        this.replicationBridge.sync(projectile, this.toReplicationSnapshot(projectile));
+      },
+      onProjectileRemoved: (projectile) => {
+        this.replicationBridge.despawn(projectile);
+        this.simulationEcs.unregister(projectile);
+      }
     });
     this.meleeCombatSystem = new MeleeCombatSystem({
       world: this.world,
@@ -166,9 +186,14 @@ export class GameSimulation {
     });
     this.platformSystem = new PlatformSystem({
       world: this.world,
-      spatialChannel: this.spatialChannel,
-      onPlatformAdded: (platform) => this.simulationEcs.registerPlatform(platform),
-      onPlatformUpdated: (platform) => this.simulationEcs.syncPlatform(platform)
+      onPlatformAdded: (platform) => {
+        platform.nid = this.replicationBridge.spawn(platform, this.toReplicationSnapshot(platform));
+        this.simulationEcs.registerPlatform(platform);
+      },
+      onPlatformUpdated: (platform) => {
+        this.simulationEcs.syncPlatform(platform);
+        this.replicationBridge.sync(platform, this.toReplicationSnapshot(platform));
+      }
     });
     this.replicationMessaging = new ReplicationMessagingSystem<UserLike, PlayerEntity>({
       getTickNumber: () => this.tickNumber,
@@ -192,6 +217,7 @@ export class GameSimulation {
         this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
         this.simulationEcs.syncPlayer(player);
+        this.replicationBridge.sync(player, this.toReplicationSnapshot(player));
         this.replicationMessaging.syncUserView(userId, player);
         this.replicationMessaging.queueInputAck(userId, player, platformYawDelta);
         this.persistenceSyncSystem.markPlayerDirty(player, {
@@ -225,7 +251,6 @@ export class GameSimulation {
       buildPlayerEntity: (options) => ({
         accountId: options.accountId,
         nid: 0,
-        ntype: NType.BaseEntity,
         modelId: MODEL_ID_PLAYER,
         position: {
           x: options.spawnX,
@@ -271,8 +296,14 @@ export class GameSimulation {
       viewHalfWidth: 128,
       viewHalfHeight: 64,
       viewHalfDepth: 128,
-      onPlayerAdded: (player) => this.simulationEcs.registerPlayer(player),
-      onPlayerRemoved: (player) => this.simulationEcs.unregister(player)
+      onPlayerAdded: (player) => {
+        player.nid = this.replicationBridge.spawn(player, this.toReplicationSnapshot(player));
+        this.simulationEcs.registerPlayer(player);
+      },
+      onPlayerRemoved: (player) => {
+        this.replicationBridge.despawn(player);
+        this.simulationEcs.unregister(player);
+      }
     });
 
     this.worldBootstrapSystem.createStaticWorldColliders();
@@ -501,6 +532,34 @@ export class GameSimulation {
       player
     );
     return this.getAbilityDefinitionForPlayer(player, abilityId);
+  }
+
+  private toReplicationSnapshot(entity: {
+    nid: number;
+    modelId: number;
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number; w: number };
+    grounded: boolean;
+    health: number;
+    maxHealth: number;
+  }): {
+    nid: number;
+    modelId: number;
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number; w: number };
+    grounded: boolean;
+    health: number;
+    maxHealth: number;
+  } {
+    return {
+      nid: entity.nid,
+      modelId: entity.modelId,
+      position: entity.position,
+      rotation: entity.rotation,
+      grounded: entity.grounded,
+      health: entity.health,
+      maxHealth: entity.maxHealth
+    };
   }
 
   private getSpawnPosition(): { x: number; z: number } {
