@@ -1,7 +1,6 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   IDENTITY_QUATERNION,
-  MODEL_ID_TRAINING_DUMMY,
   quaternionFromYaw,
   STATIC_WORLD_BLOCKS
 } from "../../shared/index";
@@ -56,7 +55,8 @@ export class WorldBootstrapSystem {
     spawns: ReadonlyArray<{ x: number; y: number; z: number; yaw: number }>,
     capsuleHalfHeight: number,
     capsuleRadius: number,
-    maxHealth: number
+    maxHealth: number,
+    modelId: number
   ): WorldBootstrapDummy[] {
     const dummies: WorldBootstrapDummy[] = [];
     for (const spawn of spawns) {
@@ -69,7 +69,7 @@ export class WorldBootstrapSystem {
       );
       const dummy: WorldBootstrapDummy = {
         nid: 0,
-        modelId: MODEL_ID_TRAINING_DUMMY,
+        modelId,
         position: {
           x: spawn.x,
           y: spawn.y,

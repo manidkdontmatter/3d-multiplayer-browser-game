@@ -8,13 +8,11 @@ import {
   DEFAULT_UNLOCKED_ABILITY_IDS,
   getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
-  MODEL_ID_PLAYER,
   NType,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
-  PLAYER_MAX_HEALTH,
   quaternionFromYawPitchRoll,
   SERVER_TICK_SECONDS
 } from "../shared/index";
@@ -39,6 +37,10 @@ import { NetReplicationBridge } from "./netcode/NetReplicationBridge";
 import { PlatformSystem } from "./platform/PlatformSystem";
 import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
 import { SimulationEcs } from "./ecs/SimulationEcs";
+import {
+  loadServerArchetypeCatalog,
+  type ServerArchetypeCatalog
+} from "./content/ArchetypeCatalog";
 
 type UserLike = {
   id: number;
@@ -76,10 +78,6 @@ type PlayerEntity = {
 };
 
 const ABILITY_USE_EVENT_RADIUS = PLAYER_CAPSULE_RADIUS * 2;
-const TRAINING_DUMMY_MAX_HEALTH = 160;
-const TRAINING_DUMMY_RADIUS = 0.42;
-const TRAINING_DUMMY_HALF_HEIGHT = 0.95;
-const TRAINING_DUMMY_SPAWNS = [{ x: 7, y: TRAINING_DUMMY_HALF_HEIGHT, z: -5, yaw: 0 }] as const;
 
 export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
@@ -101,6 +99,7 @@ export class GameSimulation {
   private readonly platformSystem: PlatformSystem;
   private readonly replicationMessaging: ReplicationMessagingSystem<UserLike, PlayerEntity>;
   private readonly playerMovementSystem: PlayerMovementSystem<PlayerEntity>;
+  private readonly archetypes: ServerArchetypeCatalog;
   private elapsedSeconds = 0;
   private tickNumber = 0;
 
@@ -109,6 +108,7 @@ export class GameSimulation {
     private readonly spatialChannel: ChannelAABB3D,
     private readonly persistence: PersistenceService
   ) {
+    this.archetypes = this.resolveServerArchetypes();
     this.replicationBridge = new NetReplicationBridge(this.spatialChannel);
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
@@ -119,7 +119,7 @@ export class GameSimulation {
     this.characterController.setMaxSlopeClimbAngle((60 * Math.PI) / 180);
     this.characterController.setMinSlopeSlideAngle((80 * Math.PI) / 180);
     this.damageSystem = new DamageSystem({
-      maxPlayerHealth: PLAYER_MAX_HEALTH,
+      maxPlayerHealth: this.archetypes.player.maxHealth,
       playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       getSpawnPosition: () => this.getSpawnPosition(),
@@ -154,8 +154,8 @@ export class GameSimulation {
       world: this.world,
       playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
       playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
-      dummyRadius: TRAINING_DUMMY_RADIUS,
-      dummyHalfHeight: TRAINING_DUMMY_HALF_HEIGHT,
+      dummyRadius: this.archetypes.trainingDummy.capsuleRadius,
+      dummyHalfHeight: this.archetypes.trainingDummy.capsuleHalfHeight,
       getTargets: () => this.damageSystem.getTargets(),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
     });
@@ -222,7 +222,7 @@ export class GameSimulation {
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
       playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
-      maxPlayerHealth: PLAYER_MAX_HEALTH,
+      maxPlayerHealth: this.archetypes.player.maxHealth,
       defaultUnlockedAbilityIds: DEFAULT_UNLOCKED_ABILITY_IDS,
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       createInitialHotbar: (savedHotbar) => this.createInitialHotbar(savedHotbar),
@@ -231,7 +231,7 @@ export class GameSimulation {
       buildPlayerEntity: (options) => ({
         accountId: options.accountId,
         nid: 0,
-        modelId: MODEL_ID_PLAYER,
+        modelId: this.archetypes.player.modelId,
         position: {
           x: options.spawnX,
           y: options.spawnCameraY,
@@ -249,7 +249,7 @@ export class GameSimulation {
         grounded: false,
         groundedPlatformPid: null,
         health: options.health,
-        maxHealth: PLAYER_MAX_HEALTH,
+        maxHealth: this.archetypes.player.maxHealth,
         activeHotbarSlot: options.activeHotbarSlot,
         hotbarAbilityIds: options.hotbarAbilityIds,
         lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
@@ -302,10 +302,11 @@ export class GameSimulation {
     this.worldBootstrapSystem.createStaticWorldColliders();
     this.platformSystem.initializePlatforms();
     for (const dummy of this.worldBootstrapSystem.initializeTrainingDummies(
-      TRAINING_DUMMY_SPAWNS,
-      TRAINING_DUMMY_HALF_HEIGHT,
-      TRAINING_DUMMY_RADIUS,
-      TRAINING_DUMMY_MAX_HEALTH
+      this.archetypes.trainingDummy.spawns,
+      this.archetypes.trainingDummy.capsuleHalfHeight,
+      this.archetypes.trainingDummy.capsuleRadius,
+      this.archetypes.trainingDummy.maxHealth,
+      this.archetypes.trainingDummy.modelId
     )) {
       this.damageSystem.registerDummy(dummy);
     }
@@ -498,9 +499,9 @@ export class GameSimulation {
 
   private clampHealth(value: number): number {
     if (!Number.isFinite(value)) {
-      return PLAYER_MAX_HEALTH;
+      return this.archetypes.player.maxHealth;
     }
-    return Math.max(0, Math.min(PLAYER_MAX_HEALTH, Math.floor(value)));
+    return Math.max(0, Math.min(this.archetypes.player.maxHealth, Math.floor(value)));
   }
 
   private capturePlayerSnapshot(player: PlayerEntity): PlayerSnapshot {
@@ -639,6 +640,10 @@ export class GameSimulation {
       }
     }
     return byAccount;
+  }
+
+  private resolveServerArchetypes(): ServerArchetypeCatalog {
+    return loadServerArchetypeCatalog();
   }
 
 }
