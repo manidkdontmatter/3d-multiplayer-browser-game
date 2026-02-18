@@ -41,10 +41,8 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly world: RAPIER.World;
   readonly globalChannel: Channel;
   readonly spatialChannel: ChannelAABB3D;
-  readonly playersByUserId: Map<number, TPlayer>;
-  readonly playersByAccountId: Map<number, TPlayer>;
-  readonly playersByNid: Map<number, TPlayer>;
   readonly usersById: Map<number, TUser>;
+  readonly resolvePlayerByUserId: (userId: number) => TPlayer | undefined;
   readonly takePendingSnapshotForLogin: (accountId: number) => PlayerSnapshot | null;
   readonly loadPlayerState: (accountId: number) => PlayerSnapshot | null;
   readonly getSpawnPosition: () => { x: number; z: number };
@@ -136,9 +134,6 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     this.options.ensurePunchAssigned(player);
 
     this.options.globalChannel.subscribe(user);
-    this.options.playersByUserId.set(user.id, player);
-    this.options.playersByAccountId.set(player.accountId, player);
-    this.options.playersByNid.set(player.nid, player);
     this.options.registerPlayerForDamage(player);
     this.options.usersById.set(user.id, user);
     this.options.onPlayerAdded?.(user, player);
@@ -163,7 +158,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
   }
 
   public removeUser(user: TUser): void {
-    const player = this.options.playersByUserId.get(user.id);
+    const player = this.options.resolvePlayerByUserId(user.id);
     if (!player) {
       return;
     }
@@ -173,9 +168,6 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       this.options.capturePlayerSnapshot(player)
     );
     this.options.onPlayerRemoved?.(user, player);
-    this.options.playersByUserId.delete(user.id);
-    this.options.playersByAccountId.delete(player.accountId);
-    this.options.playersByNid.delete(player.nid);
     this.options.unregisterPlayerCollider(player.collider.handle);
     this.options.usersById.delete(user.id);
     this.options.removeProjectilesByOwner(player.nid);

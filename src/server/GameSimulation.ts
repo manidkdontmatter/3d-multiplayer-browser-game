@@ -82,9 +82,6 @@ const TRAINING_DUMMY_HALF_HEIGHT = 0.95;
 const TRAINING_DUMMY_SPAWNS = [{ x: 7, y: TRAINING_DUMMY_HALF_HEIGHT, z: -5, yaw: 0 }] as const;
 
 export class GameSimulation {
-  private readonly playersByUserId = new Map<number, PlayerEntity>();
-  private readonly playersByAccountId = new Map<number, PlayerEntity>();
-  private readonly playersByNid = new Map<number, PlayerEntity>();
   private readonly usersById = new Map<number, UserLike>();
   private readonly playerEidByUserId = new Map<number, number>();
   private readonly playerEidByNid = new Map<number, number>();
@@ -215,10 +212,8 @@ export class GameSimulation {
       world: this.world,
       globalChannel: this.globalChannel,
       spatialChannel: this.spatialChannel,
-      playersByUserId: this.playersByUserId,
-      playersByAccountId: this.playersByAccountId,
-      playersByNid: this.playersByNid,
       usersById: this.usersById,
+      resolvePlayerByUserId: (userId) => this.getPlayerByUserIdViaEcs(userId),
       takePendingSnapshotForLogin: (accountId) =>
         this.persistenceSyncSystem.takePendingSnapshotForLogin(accountId),
       loadPlayerState: (accountId) => this.persistence.loadPlayerState(accountId),
@@ -284,11 +279,15 @@ export class GameSimulation {
       onPlayerAdded: (user, player) => {
         player.nid = this.replicationBridge.spawn(player, this.toReplicationSnapshot(player));
         this.simulationEcs.registerPlayer(player);
-        const playerEid = this.simulationEcs.getEidForObject(player);
-        if (typeof playerEid === "number") {
-          this.playerEidByUserId.set(user.id, playerEid);
-          this.playerEidByNid.set(player.nid, playerEid);
-          this.playerEidByAccountId.set(player.accountId, playerEid);
+        const oldEid = this.playerEidByUserId.get(user.id);
+        if (typeof oldEid === "number") {
+          this.playerEidByUserId.delete(user.id);
+        }
+        const newEid = this.simulationEcs.getEidForObject(player);
+        if (typeof newEid === "number") {
+          this.playerEidByUserId.set(user.id, newEid);
+          this.playerEidByNid.set(player.nid, newEid);
+          this.playerEidByAccountId.set(player.accountId, newEid);
         }
       },
       onPlayerRemoved: (user, player) => {
