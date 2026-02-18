@@ -80,9 +80,6 @@ const ABILITY_USE_EVENT_RADIUS = PLAYER_CAPSULE_RADIUS * 2;
 
 export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
-  private readonly playerEidByUserId = new Map<number, number>();
-  private readonly playerEidByNid = new Map<number, number>();
-  private readonly playerEidByAccountId = new Map<number, number>();
   private readonly world: RAPIER.World;
   private readonly simulationEcs = new SimulationEcs();
   private readonly replicationBridge: NetReplicationBridge;
@@ -134,7 +131,8 @@ export class GameSimulation {
     });
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
-      getOwnerCollider: (ownerNid) => this.getPlayerByNidViaEcs(ownerNid)?.collider,
+      getOwnerCollider: (ownerNid) =>
+        this.simulationEcs.getPlayerObjectByNid<PlayerEntity>(ownerNid)?.collider,
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
@@ -184,7 +182,7 @@ export class GameSimulation {
       getTickNumber: () => this.tickNumber,
       getUsers: () => this.usersById.values(),
       getUserById: (userId) => this.usersById.get(userId),
-      getPlayerByUserId: (userId) => this.getPlayerByUserIdViaEcs(userId),
+      getPlayerByUserId: (userId) => this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(userId),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       getAbilityDefinitionForPlayer: (player, abilityId) =>
         this.getAbilityDefinitionForPlayer(player, abilityId),
@@ -214,7 +212,7 @@ export class GameSimulation {
       globalChannel: this.globalChannel,
       spatialChannel: this.spatialChannel,
       usersById: this.usersById,
-      resolvePlayerByUserId: (userId) => this.getPlayerByUserIdViaEcs(userId),
+      resolvePlayerByUserId: (userId) => this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(userId),
       takePendingSnapshotForLogin: (accountId) =>
         this.persistenceSyncSystem.takePendingSnapshotForLogin(accountId),
       loadPlayerState: (accountId) => this.persistence.loadPlayerState(accountId),
@@ -274,11 +272,7 @@ export class GameSimulation {
       queueOfflineSnapshot: (accountId, snapshot) =>
         this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
       resolveOfflineSnapshotByAccountId: (accountId) => {
-        const eid = this.playerEidByAccountId.get(accountId);
-        if (typeof eid !== "number") {
-          return null;
-        }
-        return this.simulationEcs.getPlayerPersistenceSnapshotByEid(eid);
+        return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId);
       },
       viewHalfWidth: 128,
       viewHalfHeight: 64,
@@ -286,21 +280,10 @@ export class GameSimulation {
       onPlayerAdded: (user, player) => {
         player.nid = this.replicationBridge.spawn(player, this.toReplicationSnapshot(player));
         this.simulationEcs.registerPlayer(player);
-        const oldEid = this.playerEidByUserId.get(user.id);
-        if (typeof oldEid === "number") {
-          this.playerEidByUserId.delete(user.id);
-        }
-        const newEid = this.simulationEcs.getEidForObject(player);
-        if (typeof newEid === "number") {
-          this.playerEidByUserId.set(user.id, newEid);
-          this.playerEidByNid.set(player.nid, newEid);
-          this.playerEidByAccountId.set(player.accountId, newEid);
-        }
+        this.simulationEcs.bindPlayerLookupIndexes(player, user.id);
       },
       onPlayerRemoved: (user, player) => {
-        this.playerEidByUserId.delete(user.id);
-        this.playerEidByNid.delete(player.nid);
-        this.playerEidByAccountId.delete(player.accountId);
+        this.simulationEcs.unbindPlayerLookupIndexes(player, user.id);
         this.replicationBridge.despawn(player);
         this.simulationEcs.unregister(player);
       }
@@ -328,7 +311,7 @@ export class GameSimulation {
   }
 
   public applyCommands(user: UserLike, commands: unknown[]): void {
-    const player = this.getPlayerByUserIdViaEcs(user.id);
+    const player = this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(user.id);
     if (!player) {
       return;
     }
@@ -353,11 +336,7 @@ export class GameSimulation {
   public flushDirtyPlayerState(): void {
     this.persistenceSyncSystem.flushDirtyPlayerState(
       (accountId) => {
-        const eid = this.playerEidByAccountId.get(accountId);
-        if (typeof eid !== "number") {
-          return null;
-        }
-        return this.simulationEcs.getPlayerPersistenceSnapshotByEid(eid);
+        return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId);
       },
       (snapshot) => this.persistence.saveCharacterSnapshot(snapshot),
       (snapshot) => this.persistence.saveAbilityStateSnapshot(snapshot)
@@ -372,7 +351,7 @@ export class GameSimulation {
   } {
     const ecsStats = this.simulationEcs.getStats();
     return {
-      onlinePlayers: this.playerEidByUserId.size,
+      onlinePlayers: this.simulationEcs.getOnlinePlayerCount(),
       activeProjectiles: this.projectileSystem.getActiveCount(),
       pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount(),
       ecsEntities: ecsStats.total
@@ -599,31 +578,10 @@ export class GameSimulation {
 
   private getMovementPlayerEntries(): Array<readonly [number, PlayerEntity]> {
     const entries: Array<readonly [number, PlayerEntity]> = [];
-    for (const [userId, eid] of this.playerEidByUserId.entries()) {
-      const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
-      if (player) {
-        entries.push([userId, player] as const);
-      }
-    }
+    this.simulationEcs.forEachOnlinePlayer<PlayerEntity>((userId, player) => {
+      entries.push([userId, player] as const);
+    });
     return entries;
-  }
-
-  private getPlayerByUserIdViaEcs(userId: number): PlayerEntity | undefined {
-    const eid = this.playerEidByUserId.get(userId);
-    if (typeof eid !== "number") {
-      return undefined;
-    }
-    const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
-    return player ?? undefined;
-  }
-
-  private getPlayerByNidViaEcs(nid: number): PlayerEntity | undefined {
-    const eid = this.playerEidByNid.get(nid);
-    if (typeof eid !== "number") {
-      return undefined;
-    }
-    const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
-    return player ?? undefined;
   }
 
   private resolveProjectileModelId(kind: number): number {

@@ -98,6 +98,9 @@ export class SimulationEcs {
   private readonly objectToEid = new WeakMap<object, number>();
   private readonly eidToObject = new Map<number, object>();
   private readonly boundEntities = new WeakSet<object>();
+  private readonly playerEidByUserId = new Map<number, number>();
+  private readonly playerEidByNid = new Map<number, number>();
+  private readonly playerEidByAccountId = new Map<number, number>();
 
   public registerPlayer(player: PlayerObject): void {
     const eid = this.getOrCreateEid(player);
@@ -193,6 +196,7 @@ export class SimulationEcs {
     if (typeof eid !== "number") {
       return;
     }
+    this.removePlayerLookupIndexesForEid(eid);
     removeEntity(this.world, eid);
     this.objectToEid.delete(entity);
     this.eidToObject.delete(eid);
@@ -245,6 +249,81 @@ export class SimulationEcs {
         this.world.components.Hotbar.slot4[eid] ?? 0
       ]
     };
+  }
+
+  public bindPlayerLookupIndexes(entity: object, userId: number): void {
+    const eid = this.objectToEid.get(entity);
+    if (typeof eid !== "number") {
+      return;
+    }
+    this.playerEidByUserId.set(userId, eid);
+    this.playerEidByNid.set(Math.max(0, Math.floor(this.world.components.NengiNid.value[eid] ?? 0)), eid);
+    this.playerEidByAccountId.set(Math.max(1, Math.floor(this.world.components.AccountId.value[eid] ?? 1)), eid);
+  }
+
+  public unbindPlayerLookupIndexes(entity: object, userId: number): void {
+    const eid = this.objectToEid.get(entity);
+    if (typeof eid !== "number") {
+      this.playerEidByUserId.delete(userId);
+      return;
+    }
+    this.playerEidByUserId.delete(userId);
+    this.playerEidByNid.delete(Math.max(0, Math.floor(this.world.components.NengiNid.value[eid] ?? 0)));
+    this.playerEidByAccountId.delete(Math.max(1, Math.floor(this.world.components.AccountId.value[eid] ?? 1)));
+  }
+
+  public getPlayerObjectByUserId<T extends object>(userId: number): T | undefined {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return undefined;
+    }
+    const entity = this.eidToObject.get(eid) as T | undefined;
+    return entity;
+  }
+
+  public getPlayerObjectByNid<T extends object>(nid: number): T | undefined {
+    const eid = this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
+    if (typeof eid !== "number") {
+      return undefined;
+    }
+    const entity = this.eidToObject.get(eid) as T | undefined;
+    return entity;
+  }
+
+  public getPlayerPersistenceSnapshotByAccountId(accountId: number): {
+    accountId: number;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    health: number;
+    activeHotbarSlot: number;
+    hotbarAbilityIds: number[];
+  } | null {
+    const eid = this.playerEidByAccountId.get(Math.max(1, Math.floor(accountId)));
+    if (typeof eid !== "number") {
+      return null;
+    }
+    return this.getPlayerPersistenceSnapshotByEid(eid);
+  }
+
+  public forEachOnlinePlayer<T extends object>(
+    visitor: (userId: number, entity: T) => void
+  ): void {
+    for (const [userId, eid] of this.playerEidByUserId.entries()) {
+      const entity = this.eidToObject.get(eid) as T | undefined;
+      if (entity) {
+        visitor(userId, entity);
+      }
+    }
+  }
+
+  public getOnlinePlayerCount(): number {
+    return this.playerEidByUserId.size;
   }
 
   public getStats(): {
@@ -569,6 +648,27 @@ export class SimulationEcs {
       enumerable: true,
       configurable: true
     });
+  }
+
+  private removePlayerLookupIndexesForEid(eid: number): void {
+    for (const [userId, indexedEid] of this.playerEidByUserId.entries()) {
+      if (indexedEid === eid) {
+        this.playerEidByUserId.delete(userId);
+        break;
+      }
+    }
+    for (const [nid, indexedEid] of this.playerEidByNid.entries()) {
+      if (indexedEid === eid) {
+        this.playerEidByNid.delete(nid);
+        break;
+      }
+    }
+    for (const [accountId, indexedEid] of this.playerEidByAccountId.entries()) {
+      if (indexedEid === eid) {
+        this.playerEidByAccountId.delete(accountId);
+        break;
+      }
+    }
   }
 
   private createHotbarProxy(eid: number): number[] {
