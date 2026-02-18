@@ -352,7 +352,7 @@ export class SimulationEcs {
 
   public forEachReplicatedSnapshot(
     visitor: (
-      entity: object,
+      eid: number,
       snapshot: {
         nid: number;
         modelId: number;
@@ -364,8 +364,8 @@ export class SimulationEcs {
       }
     ) => void
   ): void {
-    for (const [eid, entity] of this.eidToObject.entries()) {
-      visitor(entity, {
+    for (const eid of this.eidToObject.keys()) {
+      visitor(eid, {
         nid: this.world.components.NengiNid.value[eid] ?? 0,
         modelId: this.world.components.ModelId.value[eid] ?? 0,
         position: {

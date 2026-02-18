@@ -125,8 +125,9 @@ export class GameSimulation {
     this.worldBootstrapSystem = new WorldBootstrapSystem({
       world: this.world,
       onDummyAdded: (dummy) => {
-        dummy.nid = this.replicationBridge.spawn(dummy, this.toReplicationSnapshot(dummy));
         this.simulationEcs.registerDummy(dummy);
+        const eid = this.requireEid(dummy);
+        dummy.nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(dummy));
       }
     });
     this.projectileSystem = new ProjectileSystem({
@@ -138,13 +139,17 @@ export class GameSimulation {
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
       resolveModelIdForKind: (kind) => this.resolveProjectileModelId(kind),
       onProjectileAdded: (projectile) => {
-        const nid = this.replicationBridge.spawn(projectile, this.toReplicationSnapshot(projectile));
-        projectile.nid = nid;
         this.simulationEcs.registerProjectile(projectile);
+        const eid = this.requireEid(projectile);
+        const nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(projectile));
+        projectile.nid = nid;
         return nid;
       },
       onProjectileRemoved: (projectile) => {
-        this.replicationBridge.despawn(projectile);
+        const eid = this.simulationEcs.getEidForObject(projectile);
+        if (typeof eid === "number") {
+          this.replicationBridge.despawn(eid);
+        }
         this.simulationEcs.unregister(projectile);
       }
     });
@@ -174,8 +179,9 @@ export class GameSimulation {
       world: this.world,
       definitions: this.archetypes.platforms,
       onPlatformAdded: (platform) => {
-        platform.nid = this.replicationBridge.spawn(platform, this.toReplicationSnapshot(platform));
         this.simulationEcs.registerPlatform(platform);
+        const eid = this.requireEid(platform);
+        platform.nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(platform));
       }
     });
     this.replicationMessaging = new ReplicationMessagingSystem<UserLike, PlayerEntity>({
@@ -278,13 +284,17 @@ export class GameSimulation {
       viewHalfHeight: 64,
       viewHalfDepth: 128,
       onPlayerAdded: (user, player) => {
-        player.nid = this.replicationBridge.spawn(player, this.toReplicationSnapshot(player));
         this.simulationEcs.registerPlayer(player);
+        const eid = this.requireEid(player);
+        player.nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(player));
         this.simulationEcs.bindPlayerLookupIndexes(player, user.id);
       },
       onPlayerRemoved: (user, player) => {
         this.simulationEcs.unbindPlayerLookupIndexes(player, user.id);
-        this.replicationBridge.despawn(player);
+        const eid = this.simulationEcs.getEidForObject(player);
+        if (typeof eid === "number") {
+          this.replicationBridge.despawn(eid);
+        }
         this.simulationEcs.unregister(player);
       }
     });
@@ -327,8 +337,8 @@ export class GameSimulation {
     this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta);
 
     this.projectileSystem.step(delta);
-    this.simulationEcs.forEachReplicatedSnapshot((entity, snapshot) => {
-      this.replicationBridge.sync(entity, snapshot);
+    this.simulationEcs.forEachReplicatedSnapshot((eid, snapshot) => {
+      this.replicationBridge.sync(eid, snapshot);
     });
     this.world.step();
   }
@@ -595,6 +605,14 @@ export class GameSimulation {
 
   private resolveServerArchetypes(): ServerArchetypeCatalog {
     return loadServerArchetypeCatalog();
+  }
+
+  private requireEid(entity: object): number {
+    const eid = this.simulationEcs.getEidForObject(entity);
+    if (typeof eid === "number") {
+      return eid;
+    }
+    throw new Error("Simulation ECS eid not found for registered entity");
   }
 
 }

@@ -26,11 +26,11 @@ type NetEntity = {
 };
 
 export class NetReplicationBridge {
-  private readonly netBySim = new WeakMap<object, NetEntity>();
+  private readonly netBySimEid = new Map<number, NetEntity>();
 
   public constructor(private readonly spatialChannel: ChannelAABB3D) {}
 
-  public spawn(simEntity: object, snapshot: ReplicatedSnapshot): number {
+  public spawn(simEid: number, snapshot: ReplicatedSnapshot): number {
     const netEntity: NetEntity = {
       nid: 0,
       ntype: NType.BaseEntity,
@@ -54,12 +54,12 @@ export class NetReplicationBridge {
       maxHealth: snapshot.maxHealth
     };
     this.spatialChannel.addEntity(netEntity);
-    this.netBySim.set(simEntity, netEntity);
+    this.netBySimEid.set(simEid, netEntity);
     return netEntity.nid;
   }
 
-  public sync(simEntity: object, snapshot: ReplicatedSnapshot): void {
-    const netEntity = this.netBySim.get(simEntity);
+  public sync(simEid: number, snapshot: ReplicatedSnapshot): void {
+    const netEntity = this.netBySimEid.get(simEid);
     if (!netEntity) {
       return;
     }
@@ -79,12 +79,12 @@ export class NetReplicationBridge {
     netEntity.maxHealth = snapshot.maxHealth;
   }
 
-  public despawn(simEntity: object): void {
-    const netEntity = this.netBySim.get(simEntity);
+  public despawn(simEid: number): void {
+    const netEntity = this.netBySimEid.get(simEid);
     if (!netEntity) {
       return;
     }
     this.spatialChannel.removeEntity(netEntity);
-    this.netBySim.delete(simEntity);
+    this.netBySimEid.delete(simEid);
   }
 }
