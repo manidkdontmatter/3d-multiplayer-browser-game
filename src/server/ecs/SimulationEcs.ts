@@ -207,6 +207,46 @@ export class SimulationEcs {
     return this.eidToObject.get(eid) ?? null;
   }
 
+  public getPlayerPersistenceSnapshotByEid(eid: number): {
+    accountId: number;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    health: number;
+    activeHotbarSlot: number;
+    hotbarAbilityIds: number[];
+  } | null {
+    const entity = this.eidToObject.get(eid);
+    if (!entity) {
+      return null;
+    }
+    return {
+      accountId: Math.max(1, Math.floor(this.world.components.AccountId.value[eid] ?? 1)),
+      x: this.world.components.Position.x[eid] ?? 0,
+      y: this.world.components.Position.y[eid] ?? 0,
+      z: this.world.components.Position.z[eid] ?? 0,
+      yaw: this.world.components.Yaw.value[eid] ?? 0,
+      pitch: this.world.components.Pitch.value[eid] ?? 0,
+      vx: this.world.components.Velocity.x[eid] ?? 0,
+      vy: this.world.components.Velocity.y[eid] ?? 0,
+      vz: this.world.components.Velocity.z[eid] ?? 0,
+      health: Math.max(0, Math.floor(this.world.components.Health.value[eid] ?? 0)),
+      activeHotbarSlot: Math.max(0, Math.floor(this.world.components.ActiveHotbarSlot.value[eid] ?? 0)),
+      hotbarAbilityIds: [
+        this.world.components.Hotbar.slot0[eid] ?? 0,
+        this.world.components.Hotbar.slot1[eid] ?? 0,
+        this.world.components.Hotbar.slot2[eid] ?? 0,
+        this.world.components.Hotbar.slot3[eid] ?? 0,
+        this.world.components.Hotbar.slot4[eid] ?? 0
+      ]
+    };
+  }
+
   public getStats(): {
     players: number;
     platforms: number;

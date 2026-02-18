@@ -347,8 +347,13 @@ export class GameSimulation {
 
   public flushDirtyPlayerState(): void {
     this.persistenceSyncSystem.flushDirtyPlayerState(
-      this.getOnlinePlayersByAccountIdViaEcs(),
-      (player) => this.capturePlayerSnapshot(player),
+      (accountId) => {
+        const eid = this.playerEidByAccountId.get(accountId);
+        if (typeof eid !== "number") {
+          return null;
+        }
+        return this.simulationEcs.getPlayerPersistenceSnapshotByEid(eid);
+      },
       (snapshot) => this.persistence.saveCharacterSnapshot(snapshot),
       (snapshot) => this.persistence.saveAbilityStateSnapshot(snapshot)
     );
@@ -631,17 +636,6 @@ export class GameSimulation {
     }
     const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
     return player ?? undefined;
-  }
-
-  private getOnlinePlayersByAccountIdViaEcs(): ReadonlyMap<number, PlayerEntity> {
-    const byAccount = new Map<number, PlayerEntity>();
-    for (const [accountId, eid] of this.playerEidByAccountId.entries()) {
-      const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
-      if (player) {
-        byAccount.set(accountId, player);
-      }
-    }
-    return byAccount;
   }
 
   private resolveProjectileModelId(kind: number): number {

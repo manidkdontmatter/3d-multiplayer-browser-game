@@ -51,8 +51,7 @@ export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
   }
 
   public flushDirtyPlayerState(
-    onlinePlayersByAccountId: ReadonlyMap<number, TPlayer>,
-    capturePlayerSnapshot: (player: TPlayer) => PlayerSnapshot,
+    resolveOnlineSnapshotByAccountId: (accountId: number) => PlayerSnapshot | null,
     saveCharacterSnapshot: (snapshot: PlayerSnapshot) => void,
     saveAbilityStateSnapshot: (snapshot: PlayerSnapshot) => void
   ): void {
@@ -62,11 +61,8 @@ export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
     ]);
 
     for (const accountId of dirtyAccounts) {
-      const onlinePlayer = onlinePlayersByAccountId.get(accountId);
       const pendingOfflineSnapshot = this.pendingOfflineSnapshots.get(accountId);
-      const snapshot = onlinePlayer
-        ? capturePlayerSnapshot(onlinePlayer)
-        : pendingOfflineSnapshot?.snapshot;
+      const snapshot = resolveOnlineSnapshotByAccountId(accountId) ?? pendingOfflineSnapshot?.snapshot;
       if (!snapshot) {
         continue;
       }
@@ -93,4 +89,3 @@ export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
     return this.pendingOfflineSnapshots.size;
   }
 }
-
