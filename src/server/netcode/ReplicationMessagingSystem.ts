@@ -58,7 +58,7 @@ export interface ReplicationMessagingSystemOptions<
   readonly getTickNumber: () => number;
   readonly getUsers: () => Iterable<TUser>;
   readonly getUserById: (userId: number) => TUser | undefined;
-  readonly getPlayerByUserId: (userId: number) => TPlayer | undefined;
+  readonly getPlayerNidByUserId: (userId: number) => number | null;
   readonly sanitizeHotbarSlot: (rawSlot: unknown, fallbackSlot: number) => number;
   readonly getAbilityDefinitionForPlayer: (player: TPlayer, abilityId: number) => AbilityDefinition | null;
   readonly getAbilityDefinitionById: (abilityId: number) => AbilityDefinition | null;
@@ -165,8 +165,8 @@ export class ReplicationMessagingSystem<
     const eventY = player.y;
     const eventZ = player.z;
     for (const user of this.options.getUsers()) {
-      const ownerPlayer = this.options.getPlayerByUserId(user.id);
-      const isOwner = ownerPlayer?.nid === player.nid;
+      const ownerNid = this.options.getPlayerNidByUserId(user.id);
+      const isOwner = ownerNid === player.nid;
       if (
         !isOwner &&
         !this.shouldDeliverAbilityUseToView(

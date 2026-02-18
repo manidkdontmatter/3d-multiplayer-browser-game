@@ -187,7 +187,7 @@ export class GameSimulation {
       getTickNumber: () => this.tickNumber,
       getUsers: () => this.usersById.values(),
       getUserById: (userId) => this.usersById.get(userId),
-      getPlayerByUserId: (userId) => this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(userId),
+      getPlayerNidByUserId: (userId) => this.simulationEcs.getPlayerNidByUserId(userId),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       getAbilityDefinitionForPlayer: (player, abilityId) =>
         this.getAbilityDefinitionForPlayer(player, abilityId),

@@ -296,6 +296,14 @@ export class SimulationEcs {
     return entity;
   }
 
+  public getPlayerNidByUserId(userId: number): number | null {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return null;
+    }
+    return this.world.components.NengiNid.value[eid] ?? null;
+  }
+
   public getPlayerObjectByNid<T extends object>(nid: number): T | undefined {
     const eid = this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
     if (typeof eid !== "number") {
