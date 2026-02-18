@@ -132,8 +132,7 @@ export class GameSimulation {
     });
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
-      getOwnerCollider: (ownerNid) =>
-        this.simulationEcs.getPlayerObjectByNid<PlayerEntity>(ownerNid)?.collider,
+      getOwnerCollider: (ownerNid) => this.simulationEcs.getPlayerColliderByNid(ownerNid),
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),

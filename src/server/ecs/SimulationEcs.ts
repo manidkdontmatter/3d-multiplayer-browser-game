@@ -1,4 +1,5 @@
 import { addComponent, addEntity, createWorld, query, removeEntity } from "bitecs";
+import type RAPIER from "@dimforge/rapier3d-compat";
 import { HOTBAR_SLOT_COUNT } from "../../shared/index";
 
 type SimObject = {
@@ -21,6 +22,7 @@ type PlayerObject = SimObject & {
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
   unlockedAbilityIds: Set<number>;
+  collider: RAPIER.Collider;
   vx: number;
   vy: number;
   vz: number;
@@ -104,6 +106,7 @@ export class SimulationEcs {
   private readonly playerEidByUserId = new Map<number, number>();
   private readonly playerEidByNid = new Map<number, number>();
   private readonly playerEidByAccountId = new Map<number, number>();
+  private readonly playerColliderByEid = new Map<number, RAPIER.Collider>();
   private readonly unlockedAbilityIdsByPlayerEid = new Map<number, Set<number>>();
 
   public registerPlayer(player: PlayerObject): void {
@@ -121,6 +124,7 @@ export class SimulationEcs {
     addComponent(this.world, eid, this.world.components.PrimaryHeld);
     addComponent(this.world, eid, this.world.components.ActiveHotbarSlot);
     addComponent(this.world, eid, this.world.components.Hotbar);
+    this.playerColliderByEid.set(eid, player.collider);
     this.unlockedAbilityIdsByPlayerEid.set(eid, new Set<number>(player.unlockedAbilityIds));
     this.syncPlayer(player);
     this.bindPlayerAccessors(player, eid);
@@ -206,6 +210,7 @@ export class SimulationEcs {
       return;
     }
     this.removePlayerLookupIndexesForEid(eid);
+    this.playerColliderByEid.delete(eid);
     this.unlockedAbilityIdsByPlayerEid.delete(eid);
     removeEntity(this.world, eid);
     this.objectToEid.delete(entity);
@@ -298,6 +303,14 @@ export class SimulationEcs {
     }
     const entity = this.eidToObject.get(eid) as T | undefined;
     return entity;
+  }
+
+  public getPlayerColliderByNid(nid: number): RAPIER.Collider | undefined {
+    const eid = this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
+    if (typeof eid !== "number") {
+      return undefined;
+    }
+    return this.playerColliderByEid.get(eid);
   }
 
   public getPlayerInputAckStateByUserId(userId: number): {
