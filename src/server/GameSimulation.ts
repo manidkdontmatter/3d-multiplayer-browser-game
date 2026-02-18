@@ -174,6 +174,7 @@ export class GameSimulation {
     });
     this.platformSystem = new PlatformSystem({
       world: this.world,
+      definitions: this.archetypes.platforms,
       onPlatformAdded: (platform) => {
         platform.nid = this.replicationBridge.spawn(platform, this.toReplicationSnapshot(platform));
         this.simulationEcs.registerPlatform(platform);

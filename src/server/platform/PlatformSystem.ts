@@ -4,13 +4,13 @@ import {
   findGroundedPlatformPid,
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
-  PLATFORM_DEFINITIONS,
   PlatformSpatialIndex,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   samplePlatformTransform,
   normalizeYaw
 } from "../../shared/index";
+import type { PlatformDefinition } from "../../shared/platforms";
 
 type PlatformEntity = {
   nid: number;
@@ -33,7 +33,7 @@ type PlatformEntity = {
   prevY: number;
   prevZ: number;
   prevYaw: number;
-  definition: (typeof PLATFORM_DEFINITIONS)[number];
+  definition: PlatformDefinition;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 };
@@ -48,6 +48,7 @@ export interface PlatformCarryActor {
 
 export interface PlatformSystemOptions {
   readonly world: RAPIER.World;
+  readonly definitions: readonly PlatformDefinition[];
   readonly onPlatformAdded?: (platform: PlatformEntity) => void;
   readonly onPlatformUpdated?: (platform: PlatformEntity) => void;
 }
@@ -60,7 +61,7 @@ export class PlatformSystem {
   public constructor(private readonly options: PlatformSystemOptions) {}
 
   public initializePlatforms(): void {
-    for (const definition of PLATFORM_DEFINITIONS) {
+    for (const definition of this.options.definitions) {
       const pose = samplePlatformTransform(definition, 0);
       const body = this.options.world.createRigidBody(
         RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pose.x, pose.y, pose.z)
