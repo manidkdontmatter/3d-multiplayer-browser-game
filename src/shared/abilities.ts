@@ -3,6 +3,7 @@ import {
   MAGIC_BOLT_SPAWN_FORWARD_OFFSET,
   MAGIC_BOLT_SPAWN_VERTICAL_OFFSET
 } from "./config";
+import abilityArchetypesRaw from "../../data/archetypes/ability-archetypes.json";
 
 export type AbilityCategory = "projectile" | "melee" | "passive";
 export type AbilityAttributeKey = "homing-lite" | "wide-impact" | "quick-cast" | "long-reach";
@@ -124,70 +125,29 @@ const ABILITY_ATTRIBUTE_BY_KEY = new Map(
   ABILITY_ATTRIBUTE_DEFINITIONS.map((attribute) => [attribute.key, attribute])
 );
 
-const ABILITY_DEFINITIONS: ReadonlyArray<AbilityDefinition> = [
-  {
-    id: ABILITY_ID_ARC_BOLT,
-    key: "arc-bolt",
-    name: "Arc Bolt",
-    description: "Fast energy projectile used as a baseline combat ability.",
-    category: "projectile",
-    points: {
-      power: 6,
-      velocity: 6,
-      efficiency: 4,
-      control: 4
-    },
-    attributes: ["quick-cast"],
-    projectile: {
-      kind: MAGIC_BOLT_KIND_PRIMARY,
-      speed: 24,
-      damage: 25,
-      radius: 0.2,
-      cooldownSeconds: 0.2,
-      lifetimeSeconds: 2.2,
-      spawnForwardOffset: MAGIC_BOLT_SPAWN_FORWARD_OFFSET,
-      spawnVerticalOffset: MAGIC_BOLT_SPAWN_VERTICAL_OFFSET
-    }
-  },
-  {
-    id: ABILITY_ID_PUNCH,
-    key: "punch",
-    name: "Punch",
-    description: "Fast close-range melee strike.",
-    category: "melee",
-    points: {
-      power: 7,
-      velocity: 4,
-      efficiency: 5,
-      control: 4
-    },
-    attributes: ["quick-cast"],
-    melee: {
-      damage: 18,
-      range: 1.95,
-      radius: 0.34,
-      cooldownSeconds: 2,
-      arcDegrees: 62
-    }
-  }
-];
+type AbilityArchetypeCatalogRaw = {
+  version: unknown;
+  baseAbilities: unknown;
+  defaults: {
+    hotbarAbilityIds: unknown;
+    unlockedAbilityIds: unknown;
+  };
+};
+
+const parsedAbilityArchetypes = parseAbilityArchetypes(abilityArchetypesRaw as AbilityArchetypeCatalogRaw);
+const ABILITY_DEFINITIONS: ReadonlyArray<AbilityDefinition> = Object.freeze(parsedAbilityArchetypes.baseAbilities);
 
 const ABILITY_DEFINITIONS_BY_ID = new Map<number, AbilityDefinition>(
   ABILITY_DEFINITIONS.map((ability) => [ability.id, ability])
 );
 
-export const DEFAULT_HOTBAR_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([
-  ABILITY_ID_ARC_BOLT,
-  ABILITY_ID_PUNCH,
-  ABILITY_ID_NONE,
-  ABILITY_ID_NONE,
-  ABILITY_ID_NONE
-]);
+export const DEFAULT_HOTBAR_ABILITY_IDS: ReadonlyArray<number> = Object.freeze(
+  parsedAbilityArchetypes.defaults.hotbarAbilityIds
+);
 
-export const DEFAULT_UNLOCKED_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([
-  ABILITY_ID_ARC_BOLT,
-  ABILITY_ID_PUNCH
-]);
+export const DEFAULT_UNLOCKED_ABILITY_IDS: ReadonlyArray<number> = Object.freeze(
+  parsedAbilityArchetypes.defaults.unlockedAbilityIds
+);
 
 export function getAllAbilityDefinitions(): ReadonlyArray<AbilityDefinition> {
   return ABILITY_DEFINITIONS;
@@ -531,4 +491,194 @@ function buildAbilityDescription(draft: AbilityCreationDraft): string {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function parseAbilityArchetypes(raw: AbilityArchetypeCatalogRaw): {
+  baseAbilities: AbilityDefinition[];
+  defaults: {
+    hotbarAbilityIds: number[];
+    unlockedAbilityIds: number[];
+  };
+} {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("ability-archetypes catalog must be an object.");
+  }
+  const version =
+    typeof raw.version === "number" && Number.isFinite(raw.version)
+      ? Math.floor(raw.version)
+      : -1;
+  if (version !== 1) {
+    throw new Error(`Unsupported ability-archetypes version: ${String(raw.version)}`);
+  }
+  if (!Array.isArray(raw.baseAbilities) || raw.baseAbilities.length === 0) {
+    throw new Error("ability-archetypes.baseAbilities must be a non-empty array.");
+  }
+  const baseAbilities = raw.baseAbilities.map((entry, index) =>
+    parseAbilityDefinition(entry, `ability-archetypes.baseAbilities[${index}]`)
+  );
+  const ids = new Set<number>();
+  for (const ability of baseAbilities) {
+    if (ids.has(ability.id)) {
+      throw new Error(`ability-archetypes contains duplicate ability id ${ability.id}.`);
+    }
+    ids.add(ability.id);
+  }
+  if (!raw.defaults || typeof raw.defaults !== "object") {
+    throw new Error("ability-archetypes.defaults must be an object.");
+  }
+  const hotbarAbilityIds = parseAbilityIdList(raw.defaults.hotbarAbilityIds, "ability-archetypes.defaults.hotbarAbilityIds");
+  const unlockedAbilityIds = parseAbilityIdList(raw.defaults.unlockedAbilityIds, "ability-archetypes.defaults.unlockedAbilityIds");
+  if (hotbarAbilityIds.length !== HOTBAR_SLOT_COUNT) {
+    throw new Error(`ability-archetypes.defaults.hotbarAbilityIds must contain exactly ${HOTBAR_SLOT_COUNT} ids.`);
+  }
+  for (const abilityId of [...hotbarAbilityIds, ...unlockedAbilityIds]) {
+    if (abilityId !== ABILITY_ID_NONE && !ids.has(abilityId)) {
+      throw new Error(`ability-archetypes defaults reference unknown ability id ${abilityId}.`);
+    }
+  }
+  return {
+    baseAbilities,
+    defaults: {
+      hotbarAbilityIds,
+      unlockedAbilityIds
+    }
+  };
+}
+
+function parseAbilityDefinition(value: unknown, label: string): AbilityDefinition {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const entry = value as Record<string, unknown>;
+  const id = parseFiniteInt(entry.id, `${label}.id`);
+  const key = parseString(entry.key, `${label}.key`);
+  const name = parseString(entry.name, `${label}.name`);
+  const description = parseString(entry.description, `${label}.description`);
+  const category = parseAbilityCategory(entry.category, `${label}.category`);
+  const points = parseAbilityPoints(entry.points, `${label}.points`);
+  const attributes = parseAbilityAttributes(entry.attributes, `${label}.attributes`);
+  const projectile = parseProjectileProfile(entry.projectile, category, `${label}.projectile`);
+  const melee = parseMeleeProfile(entry.melee, category, `${label}.melee`);
+  return {
+    id,
+    key,
+    name,
+    description,
+    category,
+    points,
+    attributes,
+    projectile,
+    melee
+  };
+}
+
+function parseAbilityPoints(value: unknown, label: string): AbilityStatPoints {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const entry = value as Record<string, unknown>;
+  return {
+    power: parseFiniteInt(entry.power, `${label}.power`),
+    velocity: parseFiniteInt(entry.velocity, `${label}.velocity`),
+    efficiency: parseFiniteInt(entry.efficiency, `${label}.efficiency`),
+    control: parseFiniteInt(entry.control, `${label}.control`)
+  };
+}
+
+function parseAbilityAttributes(value: unknown, label: string): AbilityAttributeKey[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  const normalized: AbilityAttributeKey[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const raw = value[index];
+    if (typeof raw !== "string") {
+      throw new Error(`${label}[${index}] must be a string.`);
+    }
+    if (!ABILITY_ATTRIBUTE_BY_KEY.has(raw as AbilityAttributeKey)) {
+      throw new Error(`${label}[${index}] is not a known ability attribute.`);
+    }
+    const attribute = raw as AbilityAttributeKey;
+    if (!normalized.includes(attribute)) {
+      normalized.push(attribute);
+    }
+  }
+  return normalized;
+}
+
+function parseProjectileProfile(
+  value: unknown,
+  category: AbilityCategory,
+  label: string
+): ProjectileAbilityProfile | undefined {
+  if (category !== "projectile") {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object for projectile abilities.`);
+  }
+  const entry = value as Record<string, unknown>;
+  return {
+    kind: parseFiniteInt(entry.kind, `${label}.kind`),
+    speed: parseFiniteNumber(entry.speed, `${label}.speed`),
+    damage: parseFiniteNumber(entry.damage, `${label}.damage`),
+    radius: parseFiniteNumber(entry.radius, `${label}.radius`),
+    cooldownSeconds: parseFiniteNumber(entry.cooldownSeconds, `${label}.cooldownSeconds`),
+    lifetimeSeconds: parseFiniteNumber(entry.lifetimeSeconds, `${label}.lifetimeSeconds`),
+    spawnForwardOffset: parseFiniteNumber(entry.spawnForwardOffset, `${label}.spawnForwardOffset`),
+    spawnVerticalOffset: parseFiniteNumber(entry.spawnVerticalOffset, `${label}.spawnVerticalOffset`)
+  };
+}
+
+function parseMeleeProfile(
+  value: unknown,
+  category: AbilityCategory,
+  label: string
+): MeleeAbilityProfile | undefined {
+  if (category !== "melee") {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object for melee abilities.`);
+  }
+  const entry = value as Record<string, unknown>;
+  return {
+    damage: parseFiniteNumber(entry.damage, `${label}.damage`),
+    range: parseFiniteNumber(entry.range, `${label}.range`),
+    radius: parseFiniteNumber(entry.radius, `${label}.radius`),
+    cooldownSeconds: parseFiniteNumber(entry.cooldownSeconds, `${label}.cooldownSeconds`),
+    arcDegrees: parseFiniteNumber(entry.arcDegrees, `${label}.arcDegrees`)
+  };
+}
+
+function parseAbilityIdList(value: unknown, label: string): number[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  return value.map((entry, index) => parseFiniteInt(entry, `${label}[${index}]`));
+}
+
+function parseAbilityCategory(value: unknown, label: string): AbilityCategory {
+  if (value === "projectile" || value === "melee" || value === "passive") {
+    return value;
+  }
+  throw new Error(`${label} must be one of projectile|melee|passive.`);
+}
+
+function parseString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return value;
+}
+
+function parseFiniteNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number.`);
+  }
+  return value;
+}
+
+function parseFiniteInt(value: unknown, label: string): number {
+  return Math.max(0, Math.floor(parseFiniteNumber(value, label)));
 }
