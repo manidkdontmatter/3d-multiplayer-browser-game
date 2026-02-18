@@ -86,6 +86,7 @@ export class GameSimulation {
   private readonly playersByAccountId = new Map<number, PlayerEntity>();
   private readonly playersByNid = new Map<number, PlayerEntity>();
   private readonly usersById = new Map<number, UserLike>();
+  private readonly userIdByPlayer = new WeakMap<PlayerEntity, number>();
   private readonly world: RAPIER.World;
   private readonly simulationEcs = new SimulationEcs();
   private readonly replicationBridge: NetReplicationBridge;
@@ -302,9 +303,17 @@ export class GameSimulation {
 
   public addUser(user: UserLike): void {
     this.playerLifecycleSystem.addUser(user);
+    const player = this.playersByUserId.get(user.id);
+    if (player) {
+      this.userIdByPlayer.set(player, user.id);
+    }
   }
 
   public removeUser(user: UserLike): void {
+    const player = this.playersByUserId.get(user.id);
+    if (player) {
+      this.userIdByPlayer.delete(player);
+    }
     this.playerLifecycleSystem.removeUser(user);
   }
 
@@ -322,7 +331,7 @@ export class GameSimulation {
     this.elapsedSeconds += delta;
     this.world.integrationParameters.dt = delta;
     this.platformSystem.updatePlatforms(previousElapsedSeconds, this.elapsedSeconds);
-    this.playerMovementSystem.stepPlayers(this.playersByUserId, delta);
+    this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta);
 
     this.projectileSystem.step(delta);
     this.simulationEcs.forEachReplicatedSnapshot((entity, snapshot) => {
@@ -548,7 +557,11 @@ export class GameSimulation {
   }
 
   private getSpawnPosition(): { x: number; z: number } {
-    const occupied = Array.from(this.playersByUserId.values(), (player) => ({ x: player.x, z: player.z }));
+    const occupied: Array<{ x: number; z: number }> = [];
+    this.simulationEcs.forEachPlayerObject((entity) => {
+      const player = entity as PlayerEntity;
+      occupied.push({ x: player.x, z: player.z });
+    });
 
     const minSeparation = PLAYER_CAPSULE_RADIUS * 4;
     const minSeparationSq = minSeparation * minSeparation;
@@ -584,6 +597,18 @@ export class GameSimulation {
     }
 
     return { x: baseRadius + (maxRings + 1) * ringStep, z: 0 };
+  }
+
+  private getMovementPlayerEntries(): Array<readonly [number, PlayerEntity]> {
+    const entries: Array<readonly [number, PlayerEntity]> = [];
+    this.simulationEcs.forEachPlayerObject((entity) => {
+      const player = entity as PlayerEntity;
+      const userId = this.userIdByPlayer.get(player);
+      if (typeof userId === "number") {
+        entries.push([userId, player] as const);
+      }
+    });
+    return entries;
   }
 
 }

@@ -191,6 +191,16 @@ export class SimulationEcs {
     }
   }
 
+  public forEachPlayerObject(visitor: (entity: object) => void): void {
+    const playerEids = query(this.world, [this.world.components.PlayerTag]);
+    for (const eid of playerEids) {
+      const entity = this.eidToObject.get(eid);
+      if (entity) {
+        visitor(entity);
+      }
+    }
+  }
+
   private ensureBaseComponents(eid: number): void {
     addComponent(this.world, eid, this.world.components.NengiNid);
     addComponent(this.world, eid, this.world.components.ModelId);

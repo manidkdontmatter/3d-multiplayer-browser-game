@@ -42,8 +42,8 @@ export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor
 export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
   public constructor(private readonly options: PlayerMovementSystemOptions<TPlayer>) {}
 
-  public stepPlayers(playersByUserId: ReadonlyMap<number, TPlayer>, deltaSeconds: number): void {
-    for (const [userId, player] of playersByUserId.entries()) {
+  public stepPlayers(players: Iterable<readonly [number, TPlayer]>, deltaSeconds: number): void {
+    for (const [userId, player] of players) {
       this.options.beforePlayerMove?.(player);
       const carry = this.options.samplePlayerPlatformCarry(player);
       player.yaw = applyPlatformCarryYaw(player.yaw, carry.yaw);
