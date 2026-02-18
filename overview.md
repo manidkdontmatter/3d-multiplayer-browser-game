@@ -37,6 +37,8 @@ Canonical ingestion intent:
 - Client sends intent/commands only.
 - Client runs local prediction and reconciles to authoritative snapshots.
 - Shared schemas/protocol/helpers live in `src/shared`.
+- Server simulation state is BitECS-backed (`src/server/ecs/SimulationEcs.ts`) with nengi replication bridged separately (`src/server/netcode/NetReplicationBridge.ts`) and keyed by ECS eid.
+- Core content definitions are data-driven via JSON archetype catalogs in `data/archetypes/` (world/platform/projectile/server defaults and base ability definitions/default unlock/loadout).
 
 Runtime entry points:
 - Client: `src/client/main.ts`
