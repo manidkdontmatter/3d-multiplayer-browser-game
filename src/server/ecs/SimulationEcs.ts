@@ -348,6 +348,28 @@ export class SimulationEcs {
     };
   }
 
+  public getPlayerLoadoutStateByUserId(userId: number): {
+    activeHotbarSlot: number;
+    hotbarAbilityIds: number[];
+    unlockedAbilityIds: number[];
+  } | null {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return null;
+    }
+    return {
+      activeHotbarSlot: Math.max(0, Math.floor(this.world.components.ActiveHotbarSlot.value[eid] ?? 0)),
+      hotbarAbilityIds: [
+        this.world.components.Hotbar.slot0[eid] ?? 0,
+        this.world.components.Hotbar.slot1[eid] ?? 0,
+        this.world.components.Hotbar.slot2[eid] ?? 0,
+        this.world.components.Hotbar.slot3[eid] ?? 0,
+        this.world.components.Hotbar.slot4[eid] ?? 0
+      ],
+      unlockedAbilityIds: Array.from(this.unlockedAbilityIdsByPlayerEid.get(eid) ?? [])
+    };
+  }
+
   public getPlayerPersistenceSnapshotByAccountId(accountId: number): {
     accountId: number;
     x: number;

@@ -191,6 +191,7 @@ export class GameSimulation {
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       getAbilityDefinitionForPlayer: (player, abilityId) =>
         this.getAbilityDefinitionForPlayer(player, abilityId),
+      getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId),
       abilityUseEventRadius: ABILITY_USE_EVENT_RADIUS
     });
     this.playerMovementSystem = new PlayerMovementSystem<PlayerEntity>({
@@ -276,7 +277,13 @@ export class GameSimulation {
           playerNid
         });
       },
-      sendInitialReplicationState: (user, player) => this.replicationMessaging.sendInitialAbilityState(user, player),
+      sendInitialReplicationState: (user, _player) => {
+        const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
+        if (!loadout) {
+          return;
+        }
+        this.replicationMessaging.sendInitialAbilityStateFromSnapshot(user, loadout);
+      },
       queueOfflineSnapshot: (accountId, snapshot) =>
         this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
       resolveOfflineSnapshotByAccountId: (accountId) => {
@@ -431,7 +438,10 @@ export class GameSimulation {
         dirtyCharacter: false,
         dirtyAbilityState: true
       });
-      this.replicationMessaging.queueLoadoutStateMessage(user, player);
+      const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
+      if (loadout) {
+        this.replicationMessaging.queueLoadoutStateMessageFromSnapshot(user, loadout);
+      }
     }
   }
 

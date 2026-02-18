@@ -45,6 +45,12 @@ export interface InputAckStateSnapshot {
   groundedPlatformPid: number | null;
 }
 
+export interface LoadoutStateSnapshot {
+  activeHotbarSlot: number;
+  hotbarAbilityIds: number[];
+  unlockedAbilityIds: number[];
+}
+
 export interface ReplicationMessagingSystemOptions<
   TUser extends ReplicationUser,
   TPlayer extends ReplicationPlayer
@@ -55,6 +61,7 @@ export interface ReplicationMessagingSystemOptions<
   readonly getPlayerByUserId: (userId: number) => TPlayer | undefined;
   readonly sanitizeHotbarSlot: (rawSlot: unknown, fallbackSlot: number) => number;
   readonly getAbilityDefinitionForPlayer: (player: TPlayer, abilityId: number) => AbilityDefinition | null;
+  readonly getAbilityDefinitionById: (abilityId: number) => AbilityDefinition | null;
   readonly abilityUseEventRadius: number;
 }
 
@@ -120,15 +127,34 @@ export class ReplicationMessagingSystem<
     this.queueLoadoutStateMessage(user, player);
   }
 
+  public sendInitialAbilityStateFromSnapshot(user: TUser, snapshot: LoadoutStateSnapshot): void {
+    for (const abilityId of snapshot.unlockedAbilityIds) {
+      const ability = this.options.getAbilityDefinitionById(abilityId);
+      if (!ability) {
+        continue;
+      }
+      this.queueAbilityDefinitionMessage(user, ability);
+    }
+    this.queueLoadoutStateMessageFromSnapshot(user, snapshot);
+  }
+
   public queueLoadoutStateMessage(user: TUser, player: TPlayer): void {
+    this.queueLoadoutStateMessageFromSnapshot(user, {
+      activeHotbarSlot: player.activeHotbarSlot,
+      hotbarAbilityIds: player.hotbarAbilityIds,
+      unlockedAbilityIds: Array.from(player.unlockedAbilityIds)
+    });
+  }
+
+  public queueLoadoutStateMessageFromSnapshot(user: TUser, snapshot: LoadoutStateSnapshot): void {
     user.queueMessage({
       ntype: NType.LoadoutStateMessage,
-      selectedHotbarSlot: this.options.sanitizeHotbarSlot(player.activeHotbarSlot, 0),
-      slot0AbilityId: player.hotbarAbilityIds[0] ?? ABILITY_ID_NONE,
-      slot1AbilityId: player.hotbarAbilityIds[1] ?? ABILITY_ID_NONE,
-      slot2AbilityId: player.hotbarAbilityIds[2] ?? ABILITY_ID_NONE,
-      slot3AbilityId: player.hotbarAbilityIds[3] ?? ABILITY_ID_NONE,
-      slot4AbilityId: player.hotbarAbilityIds[4] ?? ABILITY_ID_NONE
+      selectedHotbarSlot: this.options.sanitizeHotbarSlot(snapshot.activeHotbarSlot, 0),
+      slot0AbilityId: snapshot.hotbarAbilityIds[0] ?? ABILITY_ID_NONE,
+      slot1AbilityId: snapshot.hotbarAbilityIds[1] ?? ABILITY_ID_NONE,
+      slot2AbilityId: snapshot.hotbarAbilityIds[2] ?? ABILITY_ID_NONE,
+      slot3AbilityId: snapshot.hotbarAbilityIds[3] ?? ABILITY_ID_NONE,
+      slot4AbilityId: snapshot.hotbarAbilityIds[4] ?? ABILITY_ID_NONE
     });
   }
 
