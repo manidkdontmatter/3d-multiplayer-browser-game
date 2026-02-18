@@ -396,7 +396,7 @@ export class GameSimulation {
     let requiresLoadoutResync = false;
     let didAssignMutation = false;
     let nextActiveHotbarSlot = loadout.activeHotbarSlot;
-    const unlockedAbilityIds = player.unlockedAbilityIds;
+    const unlockedAbilityIds = new Set<number>(loadout.unlockedAbilityIds);
 
     if (applySelectedHotbarSlot) {
       const requestedSlot =
