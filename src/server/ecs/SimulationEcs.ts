@@ -11,6 +11,13 @@ type SimObject = {
 };
 
 type PlayerObject = SimObject & {
+  accountId: number;
+  yaw: number;
+  pitch: number;
+  lastProcessedSequence: number;
+  lastPrimaryFireAtSeconds: number;
+  primaryHeld: boolean;
+  activeHotbarSlot: number;
   vx: number;
   vy: number;
   vz: number;
@@ -33,6 +40,13 @@ type WorldWithComponents = {
     Health: { value: number[]; max: number[] };
     Grounded: { value: number[] };
     GroundedPlatformPid: { value: number[] };
+    AccountId: { value: number[] };
+    Yaw: { value: number[] };
+    Pitch: { value: number[] };
+    LastProcessedSequence: { value: number[] };
+    LastPrimaryFireAtSeconds: { value: number[] };
+    PrimaryHeld: { value: number[] };
+    ActiveHotbarSlot: { value: number[] };
     PlayerTag: number[];
     PlatformTag: number[];
     ProjectileTag: number[];
@@ -51,6 +65,13 @@ export class SimulationEcs {
       Health: { value: [] as number[], max: [] as number[] },
       Grounded: { value: [] as number[] },
       GroundedPlatformPid: { value: [] as number[] },
+      AccountId: { value: [] as number[] },
+      Yaw: { value: [] as number[] },
+      Pitch: { value: [] as number[] },
+      LastProcessedSequence: { value: [] as number[] },
+      LastPrimaryFireAtSeconds: { value: [] as number[] },
+      PrimaryHeld: { value: [] as number[] },
+      ActiveHotbarSlot: { value: [] as number[] },
       PlayerTag: [] as number[],
       PlatformTag: [] as number[],
       ProjectileTag: [] as number[],
@@ -68,6 +89,13 @@ export class SimulationEcs {
     addComponent(this.world, eid, this.world.components.PlayerTag);
     addComponent(this.world, eid, this.world.components.Velocity);
     addComponent(this.world, eid, this.world.components.GroundedPlatformPid);
+    addComponent(this.world, eid, this.world.components.AccountId);
+    addComponent(this.world, eid, this.world.components.Yaw);
+    addComponent(this.world, eid, this.world.components.Pitch);
+    addComponent(this.world, eid, this.world.components.LastProcessedSequence);
+    addComponent(this.world, eid, this.world.components.LastPrimaryFireAtSeconds);
+    addComponent(this.world, eid, this.world.components.PrimaryHeld);
+    addComponent(this.world, eid, this.world.components.ActiveHotbarSlot);
     this.syncPlayer(player);
     this.bindPlayerAccessors(player, eid);
   }
@@ -80,6 +108,19 @@ export class SimulationEcs {
     this.world.components.Velocity.z[eid] = player.vz;
     this.world.components.GroundedPlatformPid.value[eid] =
       player.groundedPlatformPid === null ? -1 : Math.floor(player.groundedPlatformPid);
+    this.world.components.AccountId.value[eid] = Math.max(0, Math.floor(player.accountId));
+    this.world.components.Yaw.value[eid] = player.yaw;
+    this.world.components.Pitch.value[eid] = player.pitch;
+    this.world.components.LastProcessedSequence.value[eid] = Math.max(
+      0,
+      Math.floor(player.lastProcessedSequence)
+    );
+    this.world.components.LastPrimaryFireAtSeconds.value[eid] = player.lastPrimaryFireAtSeconds;
+    this.world.components.PrimaryHeld.value[eid] = player.primaryHeld ? 1 : 0;
+    this.world.components.ActiveHotbarSlot.value[eid] = Math.max(
+      0,
+      Math.floor(player.activeHotbarSlot)
+    );
   }
 
   public registerPlatform(platform: SimObject): void {
@@ -266,6 +307,47 @@ export class SimulationEcs {
     });
     this.defineNumberProxy(player, "vz", () => this.world.components.Velocity.z[eid] ?? 0, (value) => {
       this.world.components.Velocity.z[eid] = value;
+    });
+    this.defineNumberProxy(player, "accountId", () => this.world.components.AccountId.value[eid] ?? 0, (value) => {
+      this.world.components.AccountId.value[eid] = Math.max(0, Math.floor(value));
+    });
+    this.defineNumberProxy(player, "yaw", () => this.world.components.Yaw.value[eid] ?? 0, (value) => {
+      this.world.components.Yaw.value[eid] = value;
+    });
+    this.defineNumberProxy(player, "pitch", () => this.world.components.Pitch.value[eid] ?? 0, (value) => {
+      this.world.components.Pitch.value[eid] = value;
+    });
+    this.defineNumberProxy(
+      player,
+      "lastProcessedSequence",
+      () => this.world.components.LastProcessedSequence.value[eid] ?? 0,
+      (value) => {
+        this.world.components.LastProcessedSequence.value[eid] = Math.max(0, Math.floor(value));
+      }
+    );
+    this.defineNumberProxy(
+      player,
+      "lastPrimaryFireAtSeconds",
+      () => this.world.components.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY,
+      (value) => {
+        this.world.components.LastPrimaryFireAtSeconds.value[eid] = value;
+      }
+    );
+    this.defineNumberProxy(
+      player,
+      "activeHotbarSlot",
+      () => this.world.components.ActiveHotbarSlot.value[eid] ?? 0,
+      (value) => {
+        this.world.components.ActiveHotbarSlot.value[eid] = Math.max(0, Math.floor(value));
+      }
+    );
+    Object.defineProperty(player, "primaryHeld", {
+      get: () => (this.world.components.PrimaryHeld.value[eid] ?? 0) !== 0,
+      set: (value: boolean) => {
+        this.world.components.PrimaryHeld.value[eid] = value ? 1 : 0;
+      },
+      enumerable: true,
+      configurable: true
     });
     Object.defineProperty(player, "groundedPlatformPid", {
       get: () => {
