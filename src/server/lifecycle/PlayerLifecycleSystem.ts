@@ -86,8 +86,8 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly viewHalfWidth: number;
   readonly viewHalfHeight: number;
   readonly viewHalfDepth: number;
-  readonly onPlayerAdded?: (player: TPlayer) => void;
-  readonly onPlayerRemoved?: (player: TPlayer) => void;
+  readonly onPlayerAdded?: (user: TUser, player: TPlayer) => void;
+  readonly onPlayerRemoved?: (user: TUser, player: TPlayer) => void;
 }
 
 export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends LifecyclePlayer> {
@@ -134,7 +134,6 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     });
 
     this.options.ensurePunchAssigned(player);
-    this.options.onPlayerAdded?.(player);
 
     this.options.globalChannel.subscribe(user);
     this.options.playersByUserId.set(user.id, player);
@@ -142,6 +141,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     this.options.playersByNid.set(player.nid, player);
     this.options.registerPlayerForDamage(player);
     this.options.usersById.set(user.id, user);
+    this.options.onPlayerAdded?.(user, player);
 
     const view = new AABB3D(
       player.x,
@@ -172,7 +172,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       player.accountId,
       this.options.capturePlayerSnapshot(player)
     );
-    this.options.onPlayerRemoved?.(player);
+    this.options.onPlayerRemoved?.(user, player);
     this.options.playersByUserId.delete(user.id);
     this.options.playersByAccountId.delete(player.accountId);
     this.options.playersByNid.delete(player.nid);

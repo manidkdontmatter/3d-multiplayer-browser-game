@@ -86,7 +86,7 @@ export class GameSimulation {
   private readonly playersByAccountId = new Map<number, PlayerEntity>();
   private readonly playersByNid = new Map<number, PlayerEntity>();
   private readonly usersById = new Map<number, UserLike>();
-  private readonly userIdByPlayer = new WeakMap<PlayerEntity, number>();
+  private readonly playerEidByUserId = new Map<number, number>();
   private readonly world: RAPIER.World;
   private readonly simulationEcs = new SimulationEcs();
   private readonly replicationBridge: NetReplicationBridge;
@@ -184,7 +184,7 @@ export class GameSimulation {
       getTickNumber: () => this.tickNumber,
       getUsers: () => this.usersById.values(),
       getUserById: (userId) => this.usersById.get(userId),
-      getPlayerByUserId: (userId) => this.playersByUserId.get(userId),
+      getPlayerByUserId: (userId) => this.getPlayerByUserIdViaEcs(userId),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       getAbilityDefinitionForPlayer: (player, abilityId) =>
         this.getAbilityDefinitionForPlayer(player, abilityId),
@@ -279,11 +279,16 @@ export class GameSimulation {
       viewHalfWidth: 128,
       viewHalfHeight: 64,
       viewHalfDepth: 128,
-      onPlayerAdded: (player) => {
+      onPlayerAdded: (user, player) => {
         player.nid = this.replicationBridge.spawn(player, this.toReplicationSnapshot(player));
         this.simulationEcs.registerPlayer(player);
+        const playerEid = this.simulationEcs.getEidForObject(player);
+        if (typeof playerEid === "number") {
+          this.playerEidByUserId.set(user.id, playerEid);
+        }
       },
-      onPlayerRemoved: (player) => {
+      onPlayerRemoved: (user, player) => {
+        this.playerEidByUserId.delete(user.id);
         this.replicationBridge.despawn(player);
         this.simulationEcs.unregister(player);
       }
@@ -303,22 +308,14 @@ export class GameSimulation {
 
   public addUser(user: UserLike): void {
     this.playerLifecycleSystem.addUser(user);
-    const player = this.playersByUserId.get(user.id);
-    if (player) {
-      this.userIdByPlayer.set(player, user.id);
-    }
   }
 
   public removeUser(user: UserLike): void {
-    const player = this.playersByUserId.get(user.id);
-    if (player) {
-      this.userIdByPlayer.delete(player);
-    }
     this.playerLifecycleSystem.removeUser(user);
   }
 
   public applyCommands(user: UserLike, commands: unknown[]): void {
-    const player = this.playersByUserId.get(user.id);
+    const player = this.getPlayerByUserIdViaEcs(user.id);
     if (!player) {
       return;
     }
@@ -601,14 +598,22 @@ export class GameSimulation {
 
   private getMovementPlayerEntries(): Array<readonly [number, PlayerEntity]> {
     const entries: Array<readonly [number, PlayerEntity]> = [];
-    this.simulationEcs.forEachPlayerObject((entity) => {
-      const player = entity as PlayerEntity;
-      const userId = this.userIdByPlayer.get(player);
-      if (typeof userId === "number") {
+    for (const [userId, eid] of this.playerEidByUserId.entries()) {
+      const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
+      if (player) {
         entries.push([userId, player] as const);
       }
-    });
+    }
     return entries;
+  }
+
+  private getPlayerByUserIdViaEcs(userId: number): PlayerEntity | undefined {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return undefined;
+    }
+    const player = this.simulationEcs.getObjectByEid(eid) as PlayerEntity | null;
+    return player ?? undefined;
   }
 
 }

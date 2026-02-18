@@ -135,6 +135,15 @@ export class SimulationEcs {
     this.eidToObject.delete(eid);
   }
 
+  public getEidForObject(entity: object): number | null {
+    const eid = this.objectToEid.get(entity);
+    return typeof eid === "number" ? eid : null;
+  }
+
+  public getObjectByEid(eid: number): object | null {
+    return this.eidToObject.get(eid) ?? null;
+  }
+
   public getStats(): {
     players: number;
     platforms: number;
