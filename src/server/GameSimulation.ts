@@ -544,11 +544,7 @@ export class GameSimulation {
   }
 
   private getSpawnPosition(): { x: number; z: number } {
-    const occupied: Array<{ x: number; z: number }> = [];
-    this.simulationEcs.forEachPlayerObject((entity) => {
-      const player = entity as PlayerEntity;
-      occupied.push({ x: player.x, z: player.z });
-    });
+    const occupied = this.simulationEcs.getOnlinePlayerPositionsXZ();
 
     const minSeparation = PLAYER_CAPSULE_RADIUS * 4;
     const minSeparationSq = minSeparation * minSeparation;

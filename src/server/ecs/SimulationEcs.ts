@@ -57,6 +57,7 @@ type WorldWithComponents = {
       slot3: number[];
       slot4: number[];
     };
+    ReplicatedTag: number[];
     PlayerTag: number[];
     PlatformTag: number[];
     ProjectileTag: number[];
@@ -89,6 +90,7 @@ export class SimulationEcs {
         slot3: [] as number[],
         slot4: [] as number[]
       },
+      ReplicatedTag: [] as number[],
       PlayerTag: [] as number[],
       PlatformTag: [] as number[],
       ProjectileTag: [] as number[],
@@ -107,6 +109,7 @@ export class SimulationEcs {
   public registerPlayer(player: PlayerObject): void {
     const eid = this.getOrCreateEid(player);
     this.ensureBaseComponents(eid);
+    addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.PlayerTag);
     addComponent(this.world, eid, this.world.components.Velocity);
     addComponent(this.world, eid, this.world.components.GroundedPlatformPid);
@@ -154,6 +157,7 @@ export class SimulationEcs {
   public registerPlatform(platform: SimObject): void {
     const eid = this.getOrCreateEid(platform);
     this.ensureBaseComponents(eid);
+    addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.PlatformTag);
     this.syncPlatform(platform);
     this.bindPlatformAccessors(platform, eid);
@@ -167,6 +171,7 @@ export class SimulationEcs {
   public registerProjectile(projectile: ProjectileObject): void {
     const eid = this.getOrCreateEid(projectile);
     this.ensureBaseComponents(eid);
+    addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.ProjectileTag);
     addComponent(this.world, eid, this.world.components.Velocity);
     this.syncProjectile(projectile);
@@ -184,6 +189,7 @@ export class SimulationEcs {
   public registerDummy(dummy: SimObject): void {
     const eid = this.getOrCreateEid(dummy);
     this.ensureBaseComponents(eid);
+    addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.DummyTag);
     this.syncDummy(dummy);
     this.bindDummyAccessors(dummy, eid);
@@ -364,7 +370,8 @@ export class SimulationEcs {
       }
     ) => void
   ): void {
-    for (const eid of this.eidToObject.keys()) {
+    const replicatedEids = query(this.world, [this.world.components.ReplicatedTag]);
+    for (const eid of replicatedEids) {
       visitor(eid, {
         nid: this.world.components.NengiNid.value[eid] ?? 0,
         modelId: this.world.components.ModelId.value[eid] ?? 0,
@@ -386,14 +393,15 @@ export class SimulationEcs {
     }
   }
 
-  public forEachPlayerObject(visitor: (entity: object) => void): void {
-    const playerEids = query(this.world, [this.world.components.PlayerTag]);
-    for (const eid of playerEids) {
-      const entity = this.eidToObject.get(eid);
-      if (entity) {
-        visitor(entity);
-      }
+  public getOnlinePlayerPositionsXZ(): Array<{ x: number; z: number }> {
+    const occupied: Array<{ x: number; z: number }> = [];
+    for (const eid of this.playerEidByUserId.values()) {
+      occupied.push({
+        x: this.world.components.Position.x[eid] ?? 0,
+        z: this.world.components.Position.z[eid] ?? 0
+      });
     }
+    return occupied;
   }
 
   private ensureBaseComponents(eid: number): void {
