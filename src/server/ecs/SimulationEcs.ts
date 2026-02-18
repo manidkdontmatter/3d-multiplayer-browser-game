@@ -378,6 +378,52 @@ export class SimulationEcs {
     };
   }
 
+  public setPlayerActiveHotbarSlotByUserId(userId: number, slot: number): boolean {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return false;
+    }
+    const normalized = Math.max(0, Math.floor(Number.isFinite(slot) ? slot : 0));
+    const previous = this.world.components.ActiveHotbarSlot.value[eid] ?? 0;
+    this.world.components.ActiveHotbarSlot.value[eid] = normalized;
+    return previous !== normalized;
+  }
+
+  public setPlayerHotbarAbilityByUserId(userId: number, slot: number, abilityId: number): boolean {
+    const eid = this.playerEidByUserId.get(userId);
+    if (typeof eid !== "number") {
+      return false;
+    }
+    const normalizedAbilityId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
+    const normalizedSlot = Math.max(0, Math.floor(Number.isFinite(slot) ? slot : 0));
+    if (normalizedSlot === 0) {
+      const previous = this.world.components.Hotbar.slot0[eid] ?? 0;
+      this.world.components.Hotbar.slot0[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 1) {
+      const previous = this.world.components.Hotbar.slot1[eid] ?? 0;
+      this.world.components.Hotbar.slot1[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 2) {
+      const previous = this.world.components.Hotbar.slot2[eid] ?? 0;
+      this.world.components.Hotbar.slot2[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 3) {
+      const previous = this.world.components.Hotbar.slot3[eid] ?? 0;
+      this.world.components.Hotbar.slot3[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 4) {
+      const previous = this.world.components.Hotbar.slot4[eid] ?? 0;
+      this.world.components.Hotbar.slot4[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    return false;
+  }
+
   public getPlayerPersistenceSnapshotByAccountId(accountId: number): {
     accountId: number;
     x: number;

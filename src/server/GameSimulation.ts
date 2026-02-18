@@ -386,27 +386,34 @@ export class GameSimulation {
       return;
     }
 
-    const previousActiveHotbarSlot = player.activeHotbarSlot;
-    const activeSlot = this.sanitizeHotbarSlot(player.activeHotbarSlot, 0);
-    const previousAssignedAbilityId = player.hotbarAbilityIds[activeSlot] ?? ABILITY_ID_NONE;
+    const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
+    if (!loadout) {
+      return;
+    }
+    const previousActiveHotbarSlot = loadout.activeHotbarSlot;
+    const activeSlot = this.sanitizeHotbarSlot(loadout.activeHotbarSlot, 0);
+    const previousAssignedAbilityId = loadout.hotbarAbilityIds[activeSlot] ?? ABILITY_ID_NONE;
     let requiresLoadoutResync = false;
     let didAssignMutation = false;
+    let nextActiveHotbarSlot = loadout.activeHotbarSlot;
+    const unlockedAbilityIds = player.unlockedAbilityIds;
 
     if (applySelectedHotbarSlot) {
       const requestedSlot =
         typeof command.selectedHotbarSlot === "number" && Number.isFinite(command.selectedHotbarSlot)
           ? Math.max(0, Math.floor(command.selectedHotbarSlot))
           : null;
-      const sanitizedSlot = this.sanitizeHotbarSlot(command.selectedHotbarSlot, player.activeHotbarSlot);
+      const sanitizedSlot = this.sanitizeHotbarSlot(command.selectedHotbarSlot, loadout.activeHotbarSlot);
       if (requestedSlot !== null && requestedSlot !== sanitizedSlot) {
         requiresLoadoutResync = true;
       }
-      player.activeHotbarSlot = sanitizedSlot;
+      this.simulationEcs.setPlayerActiveHotbarSlotByUserId(user.id, sanitizedSlot);
+      nextActiveHotbarSlot = sanitizedSlot;
     }
 
     if (applyAssignment) {
-      const targetSlot = this.sanitizeHotbarSlot(command.assignTargetSlot, player.activeHotbarSlot);
-      const fallbackAbilityId = player.hotbarAbilityIds[targetSlot] ?? ABILITY_ID_NONE;
+      const targetSlot = this.sanitizeHotbarSlot(command.assignTargetSlot, nextActiveHotbarSlot);
+      const fallbackAbilityId = loadout.hotbarAbilityIds[targetSlot] ?? ABILITY_ID_NONE;
       const requestedAbilityId =
         typeof command.assignAbilityId === "number" && Number.isFinite(command.assignAbilityId)
           ? Math.max(0, Math.floor(command.assignAbilityId))
@@ -414,19 +421,19 @@ export class GameSimulation {
       const sanitizedAbilityId = this.sanitizeSelectedAbilityId(
         command.assignAbilityId,
         fallbackAbilityId,
-        player
+        unlockedAbilityIds
       );
       if (requestedAbilityId !== null && requestedAbilityId !== sanitizedAbilityId) {
         requiresLoadoutResync = true;
       }
-      if (player.hotbarAbilityIds[targetSlot] !== sanitizedAbilityId) {
-        player.hotbarAbilityIds[targetSlot] = sanitizedAbilityId;
-        didAssignMutation = true;
-      }
+      didAssignMutation =
+        this.simulationEcs.setPlayerHotbarAbilityByUserId(user.id, targetSlot, sanitizedAbilityId) ||
+        didAssignMutation;
     }
 
-    const nextActiveSlot = this.sanitizeHotbarSlot(player.activeHotbarSlot, 0);
-    const nextAssignedAbilityId = player.hotbarAbilityIds[nextActiveSlot] ?? ABILITY_ID_NONE;
+    const nextLoadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id) ?? loadout;
+    const nextActiveSlot = this.sanitizeHotbarSlot(nextLoadout.activeHotbarSlot, 0);
+    const nextAssignedAbilityId = nextLoadout.hotbarAbilityIds[nextActiveSlot] ?? ABILITY_ID_NONE;
     const loadoutChanged =
       previousActiveHotbarSlot !== nextActiveSlot ||
       previousAssignedAbilityId !== nextAssignedAbilityId ||
@@ -465,7 +472,7 @@ export class GameSimulation {
   private sanitizeSelectedAbilityId(
     rawAbilityId: unknown,
     fallbackAbilityId: number,
-    player: PlayerEntity
+    unlockedAbilityIds: Set<number>
   ): number {
     if (typeof rawAbilityId !== "number" || !Number.isFinite(rawAbilityId)) {
       return fallbackAbilityId;
@@ -475,10 +482,10 @@ export class GameSimulation {
     if (normalized === ABILITY_ID_NONE) {
       return ABILITY_ID_NONE;
     }
-    if (!player.unlockedAbilityIds.has(normalized)) {
+    if (!unlockedAbilityIds.has(normalized)) {
       return fallbackAbilityId;
     }
-    return this.getAbilityDefinitionForPlayer(player, normalized) ? normalized : fallbackAbilityId;
+    return getAbilityDefinitionById(normalized) ? normalized : fallbackAbilityId;
   }
 
   private createInitialHotbar(savedHotbar?: number[]): number[] {
@@ -520,7 +527,7 @@ export class GameSimulation {
     const abilityId = this.sanitizeSelectedAbilityId(
       player.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE,
       ABILITY_ID_NONE,
-      player
+      player.unlockedAbilityIds
     );
     return this.getAbilityDefinitionForPlayer(player, abilityId);
   }
