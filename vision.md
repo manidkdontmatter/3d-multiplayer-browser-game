@@ -36,4 +36,5 @@ Long-range target:
 - Strict client/server separation.
 - Authoritative server model.
 - Design choices should remain compatible with high-player-count netcode.
+- Only syncronize data over the network that actually needs syncronized and would be syncronized in a professionally made multiplayer game, if it doesn't make sense to syncronize it, don't.
 

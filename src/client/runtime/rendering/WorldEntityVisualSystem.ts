@@ -3,26 +3,46 @@ import {
   CylinderGeometry,
   Mesh,
   MeshStandardMaterial,
+  Quaternion,
   type Scene
 } from "three";
+import {
+  MODEL_ID_PLATFORM_LINEAR,
+  MODEL_ID_PLATFORM_ROTATING
+} from "../../../shared/index";
 import type { PlatformState, TrainingDummyState } from "../types";
+
+const PLATFORM_VISUALS = {
+  [MODEL_ID_PLATFORM_LINEAR]: { halfX: 2.25, halfY: 0.35, halfZ: 2.25, color: 0xd8b691 },
+  [MODEL_ID_PLATFORM_ROTATING]: { halfX: 2.8, halfY: 0.35, halfZ: 2.8, color: 0x9ea7d8 }
+} as const;
 
 export class WorldEntityVisualSystem {
   private readonly platforms = new Map<number, Mesh>();
   private readonly trainingDummies = new Map<number, Mesh>();
+  private readonly quatScratch = new Quaternion();
 
   public constructor(private readonly scene: Scene) {}
 
   public syncPlatforms(platformStates: PlatformState[]): void {
     const activeNids = new Set<number>();
     for (const platform of platformStates) {
+      const platformVisual =
+        PLATFORM_VISUALS[platform.modelId as keyof typeof PLATFORM_VISUALS];
+      if (!platformVisual) {
+        continue;
+      }
       activeNids.add(platform.nid);
       let mesh = this.platforms.get(platform.nid);
       if (!mesh) {
         mesh = new Mesh(
-          new BoxGeometry(platform.halfX * 2, platform.halfY * 2, platform.halfZ * 2),
+          new BoxGeometry(
+            platformVisual.halfX * 2,
+            platformVisual.halfY * 2,
+            platformVisual.halfZ * 2
+          ),
           new MeshStandardMaterial({
-            color: platform.kind === 2 ? 0x9ea7d8 : 0xd8b691,
+            color: platformVisual.color,
             roughness: 0.88,
             metalness: 0.06
           })
@@ -32,7 +52,13 @@ export class WorldEntityVisualSystem {
       }
 
       mesh.position.set(platform.x, platform.y, platform.z);
-      mesh.rotation.y = platform.yaw;
+      this.quatScratch.set(
+        platform.rotation.x,
+        platform.rotation.y,
+        platform.rotation.z,
+        platform.rotation.w
+      );
+      mesh.setRotationFromQuaternion(this.quatScratch);
     }
 
     for (const [nid, mesh] of this.platforms) {
@@ -65,7 +91,13 @@ export class WorldEntityVisualSystem {
       const material = mesh.material as MeshStandardMaterial;
       material.color.setHSL(0.06 + healthRatio * 0.38, 0.42, 0.52);
       mesh.position.set(dummy.x, dummy.y, dummy.z);
-      mesh.rotation.y = dummy.yaw;
+      this.quatScratch.set(
+        dummy.rotation.x,
+        dummy.rotation.y,
+        dummy.rotation.z,
+        dummy.rotation.w
+      );
+      mesh.setRotationFromQuaternion(this.quatScratch);
     }
 
     for (const [nid, mesh] of this.trainingDummies) {

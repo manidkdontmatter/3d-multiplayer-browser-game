@@ -3,6 +3,7 @@ import {
   applyPlatformCarryYaw,
   buildDesiredCharacterTranslation,
   PLAYER_CAMERA_OFFSET_Y,
+  quaternionFromYawPitchRoll,
   resolveKinematicPostStepState,
   resolveVerticalVelocityForSolve
 } from "../../shared/index";
@@ -19,14 +20,14 @@ export interface PlayerMovementActor {
   x: number;
   y: number;
   z: number;
-  serverTick: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 }
 
 export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor> {
   readonly characterController: RAPIER.KinematicCharacterController;
-  readonly getTickNumber: () => number;
   readonly beforePlayerMove?: (player: TPlayer) => void;
   readonly samplePlayerPlatformCarry: (player: TPlayer) => PlatformCarry;
   readonly findGroundedPlatformPid: (
@@ -90,7 +91,14 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
       player.x = next.x;
       player.y = next.y;
       player.z = next.z;
-      player.serverTick = this.options.getTickNumber();
+      player.position.x = next.x;
+      player.position.y = next.y;
+      player.position.z = next.z;
+      const nextRotation = quaternionFromYawPitchRoll(player.yaw, 0);
+      player.rotation.x = nextRotation.x;
+      player.rotation.y = nextRotation.y;
+      player.rotation.z = nextRotation.z;
+      player.rotation.w = nextRotation.w;
       this.options.onPlayerStepped(userId, player, carry.yaw);
     }
   }

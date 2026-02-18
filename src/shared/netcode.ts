@@ -2,15 +2,12 @@ import { Binary, Context, defineSchema } from "nengi";
 
 export enum NType {
   InputCommand = 1,
-  PlayerEntity = 2,
+  BaseEntity = 2,
   IdentityMessage = 3,
-  PlatformEntity = 4,
   InputAckMessage = 5,
-  ProjectileEntity = 6,
   AbilityDefinitionMessage = 8,
   LoadoutStateMessage = 9,
   LoadoutCommand = 11,
-  TrainingDummyEntity = 12,
   AbilityUseMessage = 13
 }
 
@@ -35,15 +32,13 @@ export const loadoutCommandSchema = defineSchema({
   assignAbilityId: Binary.UInt16
 });
 
-export const playerEntitySchema = defineSchema({
-  x: { type: Binary.Float32, interp: true },
-  y: { type: Binary.Float32, interp: true },
-  z: { type: Binary.Float32, interp: true },
-  yaw: { type: Binary.Rotation32, interp: true },
-  pitch: { type: Binary.Rotation32, interp: true },
-  serverTick: Binary.UInt32,
+export const baseEntitySchema = defineSchema({
+  modelId: Binary.UInt16,
+  position: { type: Binary.Vector3, interp: true },
+  rotation: { type: Binary.Quaternion, interp: true },
   grounded: Binary.Boolean,
-  health: Binary.UInt8
+  health: Binary.UInt8,
+  maxHealth: Binary.UInt8
 });
 
 export const identityMessageSchema = defineSchema({
@@ -64,38 +59,6 @@ export const inputAckMessageSchema = defineSchema({
   grounded: Binary.Boolean,
   groundedPlatformPid: Binary.Int16,
   platformYawDelta: Binary.Float32
-});
-
-export const platformEntitySchema = defineSchema({
-  pid: Binary.UInt16,
-  kind: Binary.UInt8,
-  x: { type: Binary.Float32, interp: true },
-  y: { type: Binary.Float32, interp: true },
-  z: { type: Binary.Float32, interp: true },
-  yaw: { type: Binary.Rotation32, interp: true },
-  serverTick: Binary.UInt32,
-  halfX: Binary.Float32,
-  halfY: Binary.Float32,
-  halfZ: Binary.Float32
-});
-
-export const projectileEntitySchema = defineSchema({
-  ownerNid: Binary.UInt16,
-  kind: Binary.UInt8,
-  x: { type: Binary.Float32, interp: true },
-  y: { type: Binary.Float32, interp: true },
-  z: { type: Binary.Float32, interp: true },
-  serverTick: Binary.UInt32
-});
-
-export const trainingDummyEntitySchema = defineSchema({
-  x: { type: Binary.Float32, interp: true },
-  y: { type: Binary.Float32, interp: true },
-  z: { type: Binary.Float32, interp: true },
-  yaw: { type: Binary.Rotation32, interp: true },
-  serverTick: Binary.UInt32,
-  health: Binary.UInt8,
-  maxHealth: Binary.UInt8
 });
 
 export const abilityDefinitionMessageSchema = defineSchema({
@@ -138,12 +101,9 @@ export const abilityUseMessageSchema = defineSchema({
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.LoadoutCommand, loadoutCommandSchema);
-ncontext.register(NType.PlayerEntity, playerEntitySchema);
+ncontext.register(NType.BaseEntity, baseEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
-ncontext.register(NType.PlatformEntity, platformEntitySchema);
 ncontext.register(NType.InputAckMessage, inputAckMessageSchema);
-ncontext.register(NType.ProjectileEntity, projectileEntitySchema);
-ncontext.register(NType.TrainingDummyEntity, trainingDummyEntitySchema);
 ncontext.register(NType.AbilityDefinitionMessage, abilityDefinitionMessageSchema);
 ncontext.register(NType.LoadoutStateMessage, loadoutStateMessageSchema);
 ncontext.register(NType.AbilityUseMessage, abilityUseMessageSchema);
@@ -171,17 +131,15 @@ export interface LoadoutCommand {
   assignAbilityId: number;
 }
 
-export interface PlayerEntity {
+export interface BaseEntity {
   nid: number;
-  ntype: NType.PlayerEntity;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  pitch: number;
-  serverTick: number;
+  ntype: NType.BaseEntity;
+  modelId: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
   health: number;
+  maxHealth: number;
 }
 
 export interface IdentityMessage {
@@ -204,44 +162,6 @@ export interface InputAckMessage {
   grounded: boolean;
   groundedPlatformPid: number;
   platformYawDelta: number;
-}
-
-export interface PlatformEntity {
-  nid: number;
-  ntype: NType.PlatformEntity;
-  pid: number;
-  kind: number;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  serverTick: number;
-  halfX: number;
-  halfY: number;
-  halfZ: number;
-}
-
-export interface ProjectileEntity {
-  nid: number;
-  ntype: NType.ProjectileEntity;
-  ownerNid: number;
-  kind: number;
-  x: number;
-  y: number;
-  z: number;
-  serverTick: number;
-}
-
-export interface TrainingDummyEntity {
-  nid: number;
-  ntype: NType.TrainingDummyEntity;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  serverTick: number;
-  health: number;
-  maxHealth: number;
 }
 
 export interface AbilityDefinitionMessage {

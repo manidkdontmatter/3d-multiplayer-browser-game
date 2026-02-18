@@ -8,12 +8,14 @@ import {
   DEFAULT_UNLOCKED_ABILITY_IDS,
   getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
+  MODEL_ID_PLAYER,
   NType,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_MAX_HEALTH,
+  quaternionFromYawPitchRoll,
   SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
@@ -35,6 +37,7 @@ import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { ReplicationMessagingSystem } from "./netcode/ReplicationMessagingSystem";
 import { PlatformSystem } from "./platform/PlatformSystem";
 import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
+import { SimulationEcs } from "./ecs/SimulationEcs";
 
 type UserLike = {
   id: number;
@@ -46,19 +49,22 @@ type UserLike = {
 type PlayerEntity = {
   accountId: number;
   nid: number;
-  ntype: NType.PlayerEntity;
+  ntype: NType.BaseEntity;
+  modelId: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
   x: number;
   y: number;
   z: number;
   yaw: number;
   pitch: number;
-  serverTick: number;
   vy: number;
   vx: number;
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number | null;
   health: number;
+  maxHealth: number;
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
   lastPrimaryFireAtSeconds: number;
@@ -81,6 +87,7 @@ export class GameSimulation {
   private readonly playersByNid = new Map<number, PlayerEntity>();
   private readonly usersById = new Map<number, UserLike>();
   private readonly world: RAPIER.World;
+  private readonly simulationEcs = new SimulationEcs();
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly persistenceSyncSystem = new PersistenceSyncSystem<PlayerEntity>();
   private readonly worldBootstrapSystem: WorldBootstrapSystem;
@@ -113,24 +120,27 @@ export class GameSimulation {
       maxPlayerHealth: PLAYER_MAX_HEALTH,
       playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
-      getTickNumber: () => this.tickNumber,
       getSpawnPosition: () => this.getSpawnPosition(),
       markPlayerDirty: (player, options) =>
-        this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options)
+        this.persistenceSyncSystem.markPlayerDirty(player as PlayerEntity, options),
+      onPlayerDamaged: (player) => this.simulationEcs.syncPlayer(player as PlayerEntity),
+      onDummyDamaged: (dummy) => this.simulationEcs.syncDummy(dummy)
     });
     this.worldBootstrapSystem = new WorldBootstrapSystem({
       world: this.world,
       spatialChannel: this.spatialChannel,
-      getTickNumber: () => this.tickNumber
+      onDummyAdded: (dummy) => this.simulationEcs.registerDummy(dummy)
     });
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
       spatialChannel: this.spatialChannel,
-      getTickNumber: () => this.tickNumber,
       getOwnerCollider: (ownerNid) => this.playersByNid.get(ownerNid)?.collider,
       resolveTargetByColliderHandle: (colliderHandle) =>
         this.damageSystem.resolveTargetByColliderHandle(colliderHandle),
-      applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
+      applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
+      onProjectileAdded: (projectile) => this.simulationEcs.registerProjectile(projectile),
+      onProjectileUpdated: (projectile) => this.simulationEcs.syncProjectile(projectile),
+      onProjectileRemoved: (projectile) => this.simulationEcs.unregister(projectile)
     });
     this.meleeCombatSystem = new MeleeCombatSystem({
       world: this.world,
@@ -157,7 +167,8 @@ export class GameSimulation {
     this.platformSystem = new PlatformSystem({
       world: this.world,
       spatialChannel: this.spatialChannel,
-      getTickNumber: () => this.tickNumber
+      onPlatformAdded: (platform) => this.simulationEcs.registerPlatform(platform),
+      onPlatformUpdated: (platform) => this.simulationEcs.syncPlatform(platform)
     });
     this.replicationMessaging = new ReplicationMessagingSystem<UserLike, PlayerEntity>({
       getTickNumber: () => this.tickNumber,
@@ -171,7 +182,6 @@ export class GameSimulation {
     });
     this.playerMovementSystem = new PlayerMovementSystem<PlayerEntity>({
       characterController: this.characterController,
-      getTickNumber: () => this.tickNumber,
       beforePlayerMove: (player) => {
         if (player.primaryHeld) {
           this.abilityExecutionSystem.tryUsePrimaryAbility(player);
@@ -181,6 +191,7 @@ export class GameSimulation {
       findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
         this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
       onPlayerStepped: (userId, player, platformYawDelta) => {
+        this.simulationEcs.syncPlayer(player);
         this.replicationMessaging.syncUserView(userId, player);
         this.replicationMessaging.queueInputAck(userId, player, platformYawDelta);
         this.persistenceSyncSystem.markPlayerDirty(player, {
@@ -197,7 +208,6 @@ export class GameSimulation {
       playersByAccountId: this.playersByAccountId,
       playersByNid: this.playersByNid,
       usersById: this.usersById,
-      getTickNumber: () => this.tickNumber,
       takePendingSnapshotForLogin: (accountId) =>
         this.persistenceSyncSystem.takePendingSnapshotForLogin(accountId),
       loadPlayerState: (accountId) => this.persistence.loadPlayerState(accountId),
@@ -215,19 +225,26 @@ export class GameSimulation {
       buildPlayerEntity: (options) => ({
         accountId: options.accountId,
         nid: 0,
-        ntype: NType.PlayerEntity,
+        ntype: NType.BaseEntity,
+        modelId: MODEL_ID_PLAYER,
+        position: {
+          x: options.spawnX,
+          y: options.spawnCameraY,
+          z: options.spawnZ
+        },
+        rotation: quaternionFromYawPitchRoll(options.loaded?.yaw ?? 0, 0),
         x: options.spawnX,
         y: options.spawnCameraY,
         z: options.spawnZ,
         yaw: options.loaded?.yaw ?? 0,
         pitch: options.loaded?.pitch ?? 0,
-        serverTick: options.tickNumber,
         vy: options.loaded?.vy ?? 0,
         vx: options.loaded?.vx ?? 0,
         vz: options.loaded?.vz ?? 0,
         grounded: false,
         groundedPlatformPid: null,
         health: options.health,
+        maxHealth: PLAYER_MAX_HEALTH,
         activeHotbarSlot: options.activeHotbarSlot,
         hotbarAbilityIds: options.hotbarAbilityIds,
         lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
@@ -253,7 +270,9 @@ export class GameSimulation {
       capturePlayerSnapshot: (player) => this.capturePlayerSnapshot(player),
       viewHalfWidth: 128,
       viewHalfHeight: 64,
-      viewHalfDepth: 128
+      viewHalfDepth: 128,
+      onPlayerAdded: (player) => this.simulationEcs.registerPlayer(player),
+      onPlayerRemoved: (player) => this.simulationEcs.unregister(player)
     });
 
     this.worldBootstrapSystem.createStaticWorldColliders();
@@ -309,11 +328,14 @@ export class GameSimulation {
     onlinePlayers: number;
     activeProjectiles: number;
     pendingOfflineSnapshots: number;
+    ecsEntities: number;
   } {
+    const ecsStats = this.simulationEcs.getStats();
     return {
       onlinePlayers: this.playersByUserId.size,
       activeProjectiles: this.projectileSystem.getActiveCount(),
-      pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount()
+      pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount(),
+      ecsEntities: ecsStats.total
     };
   }
 

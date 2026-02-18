@@ -3,7 +3,8 @@ import RAPIER from "@dimforge/rapier3d-compat";
 export interface DamageablePlayerEntity {
   nid: number;
   health: number;
-  serverTick: number;
+  maxHealth: number;
+  position: { x: number; y: number; z: number };
   x: number;
   y: number;
   z: number;
@@ -18,9 +19,12 @@ export interface DamageablePlayerEntity {
 
 export interface DamageableDummyEntity {
   nid: number;
+  modelId: number;
+  rotation: { x: number; y: number; z: number; w: number };
+  grounded: boolean;
   health: number;
   maxHealth: number;
-  serverTick: number;
+  position: { x: number; y: number; z: number };
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 }
@@ -33,12 +37,13 @@ export interface DamageSystemOptions {
   readonly maxPlayerHealth: number;
   readonly playerBodyCenterHeight: number;
   readonly playerCameraOffsetY: number;
-  readonly getTickNumber: () => number;
   readonly getSpawnPosition: () => { x: number; z: number };
   readonly markPlayerDirty: (
     player: DamageablePlayerEntity,
     options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }
   ) => void;
+  readonly onPlayerDamaged?: (player: DamageablePlayerEntity) => void;
+  readonly onDummyDamaged?: (dummy: DamageableDummyEntity) => void;
 }
 
 export class DamageSystem {
@@ -78,6 +83,7 @@ export class DamageSystem {
         dirtyCharacter: true,
         dirtyAbilityState: false
       });
+      this.options.onPlayerDamaged?.(player);
       if (player.health <= 0) {
         this.respawnPlayer(player);
       }
@@ -85,10 +91,10 @@ export class DamageSystem {
     }
     const dummy = target.dummy;
     dummy.health = Math.max(0, dummy.health - appliedDamage);
-    dummy.serverTick = this.options.getTickNumber();
     if (dummy.health <= 0) {
       dummy.health = dummy.maxHealth;
     }
+    this.options.onDummyDamaged?.(dummy);
   }
 
   private respawnPlayer(player: DamageablePlayerEntity): void {
@@ -103,14 +109,17 @@ export class DamageSystem {
     player.grounded = true;
     player.groundedPlatformPid = null;
     player.health = this.options.maxPlayerHealth;
+    player.maxHealth = this.options.maxPlayerHealth;
     player.x = spawn.x;
     player.y = this.options.playerBodyCenterHeight + this.options.playerCameraOffsetY;
     player.z = spawn.z;
-    player.serverTick = this.options.getTickNumber();
+    player.position.x = player.x;
+    player.position.y = player.y;
+    player.position.z = player.z;
     this.options.markPlayerDirty(player, {
       dirtyCharacter: true,
       dirtyAbilityState: false
     });
+    this.options.onPlayerDamaged?.(player);
   }
 }
-

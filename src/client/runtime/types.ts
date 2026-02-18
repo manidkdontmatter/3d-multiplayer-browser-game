@@ -15,47 +15,40 @@ export interface PlayerPose {
 
 export interface RemotePlayerState {
   nid: number;
+  modelId: number;
   x: number;
   y: number;
   z: number;
-  yaw: number;
-  pitch: number;
-  serverTick: number;
+  rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
   health: number;
+  maxHealth: number;
 }
 
 export interface PlatformState {
   nid: number;
-  pid: number;
-  kind: number;
+  modelId: number;
   x: number;
   y: number;
   z: number;
-  yaw: number;
-  serverTick: number;
-  halfX: number;
-  halfY: number;
-  halfZ: number;
+  rotation: { x: number; y: number; z: number; w: number };
 }
 
 export interface ProjectileState {
   nid: number;
-  ownerNid: number;
-  kind: number;
+  modelId: number;
   x: number;
   y: number;
   z: number;
-  serverTick: number;
 }
 
 export interface TrainingDummyState {
   nid: number;
+  modelId: number;
   x: number;
   y: number;
   z: number;
-  yaw: number;
-  serverTick: number;
+  rotation: { x: number; y: number; z: number; w: number };
   health: number;
   maxHealth: number;
 }

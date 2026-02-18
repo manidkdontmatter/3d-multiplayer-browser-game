@@ -1,6 +1,10 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { ChannelAABB3D } from "nengi";
-import { NType } from "../../../shared/index";
+import {
+  IDENTITY_QUATERNION,
+  MODEL_ID_PROJECTILE_PRIMARY,
+  NType
+} from "../../../shared/index";
 import type { CombatTarget } from "../damage/DamageSystem";
 
 const PROJECTILE_POOL_PREWARM = 96;
@@ -13,13 +17,18 @@ const PROJECTILE_CONTACT_EPSILON = 0.002;
 
 type ProjectileEntity = {
   nid: number;
-  ntype: NType.ProjectileEntity;
+  ntype: NType.BaseEntity;
+  modelId: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  grounded: boolean;
+  health: number;
+  maxHealth: number;
   ownerNid: number;
   kind: number;
   x: number;
   y: number;
   z: number;
-  serverTick: number;
   vx: number;
   vy: number;
   vz: number;
@@ -61,10 +70,12 @@ export interface ProjectileSpawnRequest {
 export interface ProjectileSystemOptions {
   readonly world: RAPIER.World;
   readonly spatialChannel: ChannelAABB3D;
-  readonly getTickNumber: () => number;
   readonly getOwnerCollider: (ownerNid: number) => RAPIER.Collider | undefined;
   readonly resolveTargetByColliderHandle: (colliderHandle: number) => CombatTarget | null;
   readonly applyDamage: (target: CombatTarget, damage: number) => void;
+  readonly onProjectileAdded?: (projectile: ProjectileEntity) => void;
+  readonly onProjectileUpdated?: (projectile: ProjectileEntity) => void;
+  readonly onProjectileRemoved?: (projectile: ProjectileEntity) => void;
 }
 
 export class ProjectileSystem {
@@ -81,10 +92,13 @@ export class ProjectileSystem {
     const projectile = this.acquireProjectile();
     projectile.ownerNid = request.ownerNid;
     projectile.kind = request.kind;
+    projectile.modelId = this.resolveModelId(request.kind);
     projectile.x = request.x;
     projectile.y = request.y;
     projectile.z = request.z;
-    projectile.serverTick = this.options.getTickNumber();
+    projectile.position.x = request.x;
+    projectile.position.y = request.y;
+    projectile.position.z = request.z;
     projectile.vx = request.vx;
     projectile.vy = request.vy;
     projectile.vz = request.vz;
@@ -103,6 +117,7 @@ export class ProjectileSystem {
       typeof request.despawnOnWorldHit === "boolean" ? request.despawnOnWorldHit : true;
     this.options.spatialChannel.addEntity(projectile);
     this.projectilesByNid.set(projectile.nid, projectile);
+    this.options.onProjectileAdded?.(projectile);
   }
 
   public step(deltaSeconds: number): void {
@@ -136,7 +151,9 @@ export class ProjectileSystem {
         projectile.x += projectile.vx * traveledTime;
         projectile.y += projectile.vy * traveledTime;
         projectile.z += projectile.vz * traveledTime;
-        projectile.serverTick = this.options.getTickNumber();
+        projectile.position.x = projectile.x;
+        projectile.position.y = projectile.y;
+        projectile.position.z = projectile.z;
         if (collision.target) {
           this.options.applyDamage(collision.target, projectile.damage);
           const canPierceTarget = projectile.remainingPierces > 0;
@@ -145,12 +162,20 @@ export class ProjectileSystem {
             projectile.x += projectile.vx * PROJECTILE_CONTACT_EPSILON;
             projectile.y += projectile.vy * PROJECTILE_CONTACT_EPSILON;
             projectile.z += projectile.vz * PROJECTILE_CONTACT_EPSILON;
+            projectile.position.x = projectile.x;
+            projectile.position.y = projectile.y;
+            projectile.position.z = projectile.z;
+            this.options.onProjectileUpdated?.(projectile);
             continue;
           }
           if (!projectile.despawnOnDamageableHit) {
             projectile.x += projectile.vx * PROJECTILE_CONTACT_EPSILON;
             projectile.y += projectile.vy * PROJECTILE_CONTACT_EPSILON;
             projectile.z += projectile.vz * PROJECTILE_CONTACT_EPSILON;
+            projectile.position.x = projectile.x;
+            projectile.position.y = projectile.y;
+            projectile.position.z = projectile.z;
+            this.options.onProjectileUpdated?.(projectile);
             continue;
           }
           this.removeProjectile(nid, projectile);
@@ -166,8 +191,11 @@ export class ProjectileSystem {
         projectile.x += projectile.vx * traveledTime;
         projectile.y += projectile.vy * traveledTime;
         projectile.z += projectile.vz * traveledTime;
-        projectile.serverTick = this.options.getTickNumber();
+        projectile.position.x = projectile.x;
+        projectile.position.y = projectile.y;
+        projectile.position.z = projectile.z;
       }
+      this.options.onProjectileUpdated?.(projectile);
     }
   }
 
@@ -276,6 +304,7 @@ export class ProjectileSystem {
   private removeProjectile(nid: number, projectile: ProjectileEntity): void {
     this.options.spatialChannel.removeEntity(projectile);
     this.projectilesByNid.delete(nid);
+    this.options.onProjectileRemoved?.(projectile);
     this.releaseProjectile(projectile);
   }
 
@@ -288,13 +317,23 @@ export class ProjectileSystem {
   private acquireProjectile(): ProjectileEntity {
     const projectile = this.projectilePool.pop() ?? this.createPooledProjectile();
     projectile.nid = 0;
-    projectile.ntype = NType.ProjectileEntity;
+    projectile.ntype = NType.BaseEntity;
+    projectile.modelId = MODEL_ID_PROJECTILE_PRIMARY;
+    projectile.position.x = 0;
+    projectile.position.y = 0;
+    projectile.position.z = 0;
+    projectile.rotation.x = IDENTITY_QUATERNION.x;
+    projectile.rotation.y = IDENTITY_QUATERNION.y;
+    projectile.rotation.z = IDENTITY_QUATERNION.z;
+    projectile.rotation.w = IDENTITY_QUATERNION.w;
+    projectile.grounded = false;
+    projectile.health = 0;
+    projectile.maxHealth = 0;
     projectile.ownerNid = 0;
     projectile.kind = 0;
     projectile.x = 0;
     projectile.y = 0;
     projectile.z = 0;
-    projectile.serverTick = this.options.getTickNumber();
     projectile.vx = 0;
     projectile.vy = 0;
     projectile.vz = 0;
@@ -322,6 +361,9 @@ export class ProjectileSystem {
     projectile.x = 0;
     projectile.y = -1000;
     projectile.z = 0;
+    projectile.position.x = 0;
+    projectile.position.y = -1000;
+    projectile.position.z = 0;
     projectile.vx = 0;
     projectile.vy = 0;
     projectile.vz = 0;
@@ -342,13 +384,18 @@ export class ProjectileSystem {
   private createPooledProjectile(): ProjectileEntity {
     return {
       nid: 0,
-      ntype: NType.ProjectileEntity,
+      ntype: NType.BaseEntity,
+      modelId: MODEL_ID_PROJECTILE_PRIMARY,
+      position: { x: 0, y: -1000, z: 0 },
+      rotation: { ...IDENTITY_QUATERNION },
+      grounded: false,
+      health: 0,
+      maxHealth: 0,
       ownerNid: 0,
       kind: 0,
       x: 0,
       y: -1000,
       z: 0,
-      serverTick: 0,
       vx: 0,
       vy: 0,
       vz: 0,
@@ -364,5 +411,12 @@ export class ProjectileSystem {
       despawnOnDamageableHit: true,
       despawnOnWorldHit: true
     };
+  }
+
+  private resolveModelId(kind: number): number {
+    if (kind === 1) {
+      return MODEL_ID_PROJECTILE_PRIMARY;
+    }
+    return MODEL_ID_PROJECTILE_PRIMARY;
   }
 }

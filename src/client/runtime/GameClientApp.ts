@@ -393,41 +393,36 @@ export class GameClientApp {
         },
         platforms: this.network.getPlatforms().map((p) => ({
           nid: p.nid,
-          pid: p.pid,
-          kind: p.kind,
+          modelId: p.modelId,
           x: p.x,
           y: p.y,
           z: p.z,
-          yaw: p.yaw,
-          serverTick: p.serverTick
+          rotation: p.rotation
         })),
         projectiles: this.network.getProjectiles().map((projectile) => ({
           nid: projectile.nid,
-          ownerNid: projectile.ownerNid,
-          kind: projectile.kind,
+          modelId: projectile.modelId,
           x: projectile.x,
           y: projectile.y,
-          z: projectile.z,
-          serverTick: projectile.serverTick
+          z: projectile.z
         })),
         trainingDummies: this.network.getTrainingDummies().map((dummy) => ({
           nid: dummy.nid,
+          modelId: dummy.modelId,
           x: dummy.x,
           y: dummy.y,
           z: dummy.z,
-          yaw: dummy.yaw,
-          serverTick: dummy.serverTick,
+          rotation: dummy.rotation,
           health: dummy.health,
           maxHealth: dummy.maxHealth
         })),
         remotePlayers: this.network.getRemotePlayers().map((p) => ({
           nid: p.nid,
+          modelId: p.modelId,
           x: p.x,
           y: p.y,
           z: p.z,
-          yaw: p.yaw,
-          pitch: p.pitch,
-          serverTick: p.serverTick,
+          rotation: p.rotation,
           grounded: p.grounded,
           health: p.health
         })),
@@ -518,8 +513,8 @@ export class GameClientApp {
           x: serverPose.x,
           y: serverPose.y,
           z: serverPose.z,
-          yaw: serverPose.yaw,
-          pitch: serverPose.pitch
+          yaw: this.input.getYaw(),
+          pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, this.input.getPitch()))
         };
       }
     }

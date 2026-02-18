@@ -1,15 +1,24 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { ChannelAABB3D } from "nengi";
-import { NType, STATIC_WORLD_BLOCKS } from "../../shared/index";
+import {
+  IDENTITY_QUATERNION,
+  MODEL_ID_TRAINING_DUMMY,
+  NType,
+  quaternionFromYaw,
+  STATIC_WORLD_BLOCKS
+} from "../../shared/index";
 
 export interface WorldBootstrapDummy {
   nid: number;
-  ntype: NType.TrainingDummyEntity;
+  ntype: NType.BaseEntity;
+  modelId: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  grounded: boolean;
   x: number;
   y: number;
   z: number;
   yaw: number;
-  serverTick: number;
   health: number;
   maxHealth: number;
   body: RAPIER.RigidBody;
@@ -19,7 +28,7 @@ export interface WorldBootstrapDummy {
 export interface WorldBootstrapSystemOptions {
   readonly world: RAPIER.World;
   readonly spatialChannel: ChannelAABB3D;
-  readonly getTickNumber: () => number;
+  readonly onDummyAdded?: (dummy: WorldBootstrapDummy) => void;
 }
 
 export class WorldBootstrapSystem {
@@ -64,21 +73,35 @@ export class WorldBootstrapSystem {
       );
       const dummy: WorldBootstrapDummy = {
         nid: 0,
-        ntype: NType.TrainingDummyEntity,
+        ntype: NType.BaseEntity,
+        modelId: MODEL_ID_TRAINING_DUMMY,
+        position: {
+          x: spawn.x,
+          y: spawn.y,
+          z: spawn.z
+        },
+        rotation: {
+          ...IDENTITY_QUATERNION
+        },
+        grounded: false,
         x: spawn.x,
         y: spawn.y,
         z: spawn.z,
         yaw: spawn.yaw,
-        serverTick: this.options.getTickNumber(),
         health: maxHealth,
         maxHealth,
         body,
         collider
       };
+      const quat = quaternionFromYaw(spawn.yaw);
+      dummy.rotation.x = quat.x;
+      dummy.rotation.y = quat.y;
+      dummy.rotation.z = quat.z;
+      dummy.rotation.w = quat.w;
       this.options.spatialChannel.addEntity(dummy);
+      this.options.onDummyAdded?.(dummy);
       dummies.push(dummy);
     }
     return dummies;
   }
 }
-

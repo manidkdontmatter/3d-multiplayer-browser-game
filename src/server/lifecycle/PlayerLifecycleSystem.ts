@@ -13,18 +13,21 @@ export interface LifecyclePlayer {
   accountId: number;
   nid: number;
   ntype: number;
+  modelId: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
   x: number;
   y: number;
   z: number;
   yaw: number;
   pitch: number;
-  serverTick: number;
   vy: number;
   vx: number;
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number | null;
   health: number;
+  maxHealth: number;
   activeHotbarSlot: number;
   hotbarAbilityIds: number[];
   lastPrimaryFireAtSeconds: number;
@@ -43,7 +46,6 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly playersByAccountId: Map<number, TPlayer>;
   readonly playersByNid: Map<number, TPlayer>;
   readonly usersById: Map<number, TUser>;
-  readonly getTickNumber: () => number;
   readonly takePendingSnapshotForLogin: (accountId: number) => PlayerSnapshot | null;
   readonly loadPlayerState: (accountId: number) => PlayerSnapshot | null;
   readonly getSpawnPosition: () => { x: number; z: number };
@@ -66,7 +68,6 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
     loaded: PlayerSnapshot | null;
     body: RAPIER.RigidBody;
     collider: RAPIER.Collider;
-    tickNumber: number;
     health: number;
     activeHotbarSlot: number;
     hotbarAbilityIds: number[];
@@ -86,6 +87,8 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly viewHalfWidth: number;
   readonly viewHalfHeight: number;
   readonly viewHalfDepth: number;
+  readonly onPlayerAdded?: (player: TPlayer) => void;
+  readonly onPlayerRemoved?: (player: TPlayer) => void;
 }
 
 export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends LifecyclePlayer> {
@@ -125,7 +128,6 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       loaded,
       body,
       collider,
-      tickNumber: this.options.getTickNumber(),
       health: this.options.clampHealth(loaded?.health ?? this.options.maxPlayerHealth),
       activeHotbarSlot: this.options.sanitizeHotbarSlot(loaded?.activeHotbarSlot ?? 0, 0),
       hotbarAbilityIds: this.options.createInitialHotbar(loaded?.hotbarAbilityIds),
@@ -141,6 +143,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     this.options.playersByNid.set(player.nid, player);
     this.options.registerPlayerForDamage(player);
     this.options.usersById.set(user.id, user);
+    this.options.onPlayerAdded?.(player);
 
     const view = new AABB3D(
       player.x,
@@ -178,6 +181,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     this.options.unregisterPlayerCollider(player.collider.handle);
     this.options.usersById.delete(user.id);
     this.options.removeProjectilesByOwner(player.nid);
+    this.options.onPlayerRemoved?.(player);
     this.options.world.removeCollider(player.collider, true);
     this.options.world.removeRigidBody(player.body);
   }

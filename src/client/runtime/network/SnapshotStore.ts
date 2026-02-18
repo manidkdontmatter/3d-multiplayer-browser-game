@@ -1,4 +1,11 @@
 import { NType } from "../../../shared/netcode";
+import {
+  MODEL_ID_PLATFORM_LINEAR,
+  MODEL_ID_PLATFORM_ROTATING,
+  MODEL_ID_PLAYER,
+  MODEL_ID_PROJECTILE_PRIMARY,
+  MODEL_ID_TRAINING_DUMMY
+} from "../../../shared/index";
 import type {
   PlatformState,
   ProjectileState,
@@ -64,7 +71,7 @@ export class SnapshotStore {
   public getRemotePlayers(localPlayerNid: number | null): RemotePlayerState[] {
     const output: RemotePlayerState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.PlayerEntity) {
+      if (rawEntity.ntype !== NType.BaseEntity) {
         continue;
       }
       const player = this.toPlayerState(rawEntity);
@@ -84,7 +91,7 @@ export class SnapshotStore {
       return null;
     }
     const rawEntity = this.entities.get(localPlayerNid);
-    if (!rawEntity || rawEntity.ntype !== NType.PlayerEntity) {
+    if (!rawEntity || rawEntity.ntype !== NType.BaseEntity) {
       return null;
     }
     return this.toPlayerState(rawEntity);
@@ -93,7 +100,7 @@ export class SnapshotStore {
   public getPlatforms(): PlatformState[] {
     const output: PlatformState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.PlatformEntity) {
+      if (rawEntity.ntype !== NType.BaseEntity) {
         continue;
       }
       const platform = this.toPlatformState(rawEntity);
@@ -108,7 +115,7 @@ export class SnapshotStore {
   public getProjectiles(): ProjectileState[] {
     const output: ProjectileState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.ProjectileEntity) {
+      if (rawEntity.ntype !== NType.BaseEntity) {
         continue;
       }
       const projectile = this.toProjectileState(rawEntity);
@@ -123,7 +130,7 @@ export class SnapshotStore {
   public getTrainingDummies(): TrainingDummyState[] {
     const output: TrainingDummyState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.TrainingDummyEntity) {
+      if (rawEntity.ntype !== NType.BaseEntity) {
         continue;
       }
       const dummy = this.toTrainingDummyState(rawEntity);
@@ -136,132 +143,106 @@ export class SnapshotStore {
   }
 
   private toPlayerState(raw: Record<string, unknown>): RemotePlayerState | null {
+    const modelId = raw.modelId;
+    if (modelId !== MODEL_ID_PLAYER) {
+      return null;
+    }
     const nid = raw.nid;
-    const x = raw.x;
-    const y = raw.y;
-    const z = raw.z;
-    const yaw = raw.yaw;
-    const pitch = raw.pitch;
-    const serverTick = raw.serverTick;
+    const position = this.readPosition(raw.position);
+    const rotation = this.readRotation(raw.rotation);
     const grounded = raw.grounded;
     const health = raw.health;
+    const maxHealth = raw.maxHealth;
 
     if (
       typeof nid !== "number" ||
-      typeof x !== "number" ||
-      typeof y !== "number" ||
-      typeof z !== "number" ||
-      typeof yaw !== "number" ||
-      typeof pitch !== "number" ||
-      typeof serverTick !== "number"
+      typeof modelId !== "number" ||
+      position === null ||
+      rotation === null
     ) {
       return null;
     }
 
     return {
       nid,
-      x,
-      y,
-      z,
-      yaw,
-      pitch,
-      serverTick,
+      modelId,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      rotation,
       grounded: typeof grounded === "boolean" ? grounded : true,
-      health: typeof health === "number" ? health : 100
+      health: typeof health === "number" ? health : 100,
+      maxHealth: typeof maxHealth === "number" ? maxHealth : 100
     };
   }
 
   private toPlatformState(raw: Record<string, unknown>): PlatformState | null {
+    const modelId = raw.modelId;
+    if (modelId !== MODEL_ID_PLATFORM_LINEAR && modelId !== MODEL_ID_PLATFORM_ROTATING) {
+      return null;
+    }
     const nid = raw.nid;
-    const pid = raw.pid;
-    const kind = raw.kind;
-    const x = raw.x;
-    const y = raw.y;
-    const z = raw.z;
-    const yaw = raw.yaw;
-    const serverTick = raw.serverTick;
-    const halfX = raw.halfX;
-    const halfY = raw.halfY;
-    const halfZ = raw.halfZ;
+    const position = this.readPosition(raw.position);
+    const rotation = this.readRotation(raw.rotation);
 
     if (
       typeof nid !== "number" ||
-      typeof pid !== "number" ||
-      typeof kind !== "number" ||
-      typeof x !== "number" ||
-      typeof y !== "number" ||
-      typeof z !== "number" ||
-      typeof yaw !== "number" ||
-      typeof serverTick !== "number" ||
-      typeof halfX !== "number" ||
-      typeof halfY !== "number" ||
-      typeof halfZ !== "number"
+      typeof modelId !== "number" ||
+      position === null ||
+      rotation === null
     ) {
       return null;
     }
 
     return {
       nid,
-      pid,
-      kind,
-      x,
-      y,
-      z,
-      yaw,
-      serverTick,
-      halfX,
-      halfY,
-      halfZ
+      modelId,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      rotation
     };
   }
 
   private toProjectileState(raw: Record<string, unknown>): ProjectileState | null {
+    const modelId = raw.modelId;
+    if (modelId !== MODEL_ID_PROJECTILE_PRIMARY) {
+      return null;
+    }
     const nid = raw.nid;
-    const ownerNid = raw.ownerNid;
-    const kind = raw.kind;
-    const x = raw.x;
-    const y = raw.y;
-    const z = raw.z;
-    const serverTick = raw.serverTick;
+    const position = this.readPosition(raw.position);
     if (
       typeof nid !== "number" ||
-      typeof ownerNid !== "number" ||
-      typeof kind !== "number" ||
-      typeof x !== "number" ||
-      typeof y !== "number" ||
-      typeof z !== "number" ||
-      typeof serverTick !== "number"
+      typeof modelId !== "number" ||
+      position === null
     ) {
       return null;
     }
 
     return {
       nid,
-      ownerNid,
-      kind,
-      x,
-      y,
-      z,
-      serverTick
+      modelId,
+      x: position.x,
+      y: position.y,
+      z: position.z
     };
   }
 
   private toTrainingDummyState(raw: Record<string, unknown>): TrainingDummyState | null {
+    const modelId = raw.modelId;
+    if (modelId !== MODEL_ID_TRAINING_DUMMY) {
+      return null;
+    }
     const nid = raw.nid;
-    const x = raw.x;
-    const y = raw.y;
-    const z = raw.z;
-    const yaw = raw.yaw;
-    const serverTick = raw.serverTick;
+    const position = this.readPosition(raw.position);
+    const rotation = this.readRotation(raw.rotation);
     const health = raw.health;
     const maxHealth = raw.maxHealth;
     if (
       typeof nid !== "number" ||
-      typeof x !== "number" ||
-      typeof y !== "number" ||
-      typeof z !== "number" ||
-      typeof yaw !== "number" ||
-      typeof serverTick !== "number" ||
+      typeof modelId !== "number" ||
+      position === null ||
+      rotation === null ||
       typeof health !== "number" ||
       typeof maxHealth !== "number"
     ) {
@@ -269,13 +250,53 @@ export class SnapshotStore {
     }
     return {
       nid,
-      x,
-      y,
-      z,
-      yaw,
-      serverTick,
+      modelId,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      rotation,
       health,
       maxHealth
+    };
+  }
+
+  private readPosition(raw: unknown): { x: number; y: number; z: number } | null {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const position = raw as { x?: unknown; y?: unknown; z?: unknown };
+    if (
+      typeof position.x !== "number" ||
+      typeof position.y !== "number" ||
+      typeof position.z !== "number"
+    ) {
+      return null;
+    }
+    return {
+      x: position.x,
+      y: position.y,
+      z: position.z
+    };
+  }
+
+  private readRotation(raw: unknown): { x: number; y: number; z: number; w: number } | null {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const rotation = raw as { x?: unknown; y?: unknown; z?: unknown; w?: unknown };
+    if (
+      typeof rotation.x !== "number" ||
+      typeof rotation.y !== "number" ||
+      typeof rotation.z !== "number" ||
+      typeof rotation.w !== "number"
+    ) {
+      return null;
+    }
+    return {
+      x: rotation.x,
+      y: rotation.y,
+      z: rotation.z,
+      w: rotation.w
     };
   }
 }

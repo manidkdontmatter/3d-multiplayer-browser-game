@@ -10,6 +10,7 @@ import {
   Vector3,
   type Scene
 } from "three";
+import { MODEL_ID_PROJECTILE_PRIMARY } from "../../../shared/index";
 import type { ProjectileState } from "../types";
 
 interface ProjectilePalette {
@@ -28,7 +29,7 @@ const DEFAULT_PROJECTILE_PALETTE: Readonly<ProjectilePalette> = Object.freeze({
 
 const PROJECTILE_PALETTES = new Map<number, Readonly<ProjectilePalette>>([
   [
-    1,
+    MODEL_ID_PROJECTILE_PRIMARY,
     Object.freeze({
       coreColor: 0x78dfff,
       emissiveColor: 0x2d9cc5,
@@ -90,15 +91,15 @@ export class ProjectileVisualSystem {
       activeNids.add(projectile.nid);
       let visual = this.projectileVisuals.get(projectile.nid);
       if (!visual) {
-        visual = this.acquireProjectileVisual(projectile.kind);
+        visual = this.acquireProjectileVisual(projectile.modelId);
         this.projectileVisuals.set(projectile.nid, visual);
         visual.root.position.set(projectile.x, projectile.y, projectile.z);
         this.scene.add(visual.root);
-        this.emitProjectileSpawnBurst(projectile.kind, projectile.x, projectile.y, projectile.z);
-      } else if (visual.kind !== projectile.kind) {
+        this.emitProjectileSpawnBurst(projectile.modelId, projectile.x, projectile.y, projectile.z);
+      } else if (visual.kind !== projectile.modelId) {
         this.scene.remove(visual.root);
         this.releaseProjectileVisual(visual);
-        visual = this.acquireProjectileVisual(projectile.kind);
+        visual = this.acquireProjectileVisual(projectile.modelId);
         this.projectileVisuals.set(projectile.nid, visual);
         visual.root.position.set(projectile.x, projectile.y, projectile.z);
         this.scene.add(visual.root);

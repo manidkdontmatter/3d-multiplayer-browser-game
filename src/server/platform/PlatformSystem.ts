@@ -3,6 +3,8 @@ import type { ChannelAABB3D } from "nengi";
 import {
   applyPlatformCarry,
   findGroundedPlatformPid,
+  MODEL_ID_PLATFORM_LINEAR,
+  MODEL_ID_PLATFORM_ROTATING,
   NType,
   PLATFORM_DEFINITIONS,
   PlatformSpatialIndex,
@@ -14,14 +16,19 @@ import {
 
 type PlatformEntity = {
   nid: number;
-  ntype: NType.PlatformEntity;
+  ntype: NType.BaseEntity;
+  modelId: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  grounded: boolean;
+  health: number;
+  maxHealth: number;
   pid: number;
   kind: 1 | 2;
   x: number;
   y: number;
   z: number;
   yaw: number;
-  serverTick: number;
   halfX: number;
   halfY: number;
   halfZ: number;
@@ -45,7 +52,8 @@ export interface PlatformCarryActor {
 export interface PlatformSystemOptions {
   readonly world: RAPIER.World;
   readonly spatialChannel: ChannelAABB3D;
-  readonly getTickNumber: () => number;
+  readonly onPlatformAdded?: (platform: PlatformEntity) => void;
+  readonly onPlatformUpdated?: (platform: PlatformEntity) => void;
 }
 
 export class PlatformSystem {
@@ -68,14 +76,28 @@ export class PlatformSystem {
 
       const platform: PlatformEntity = {
         nid: 0,
-        ntype: NType.PlatformEntity,
+        ntype: NType.BaseEntity,
+        modelId: definition.kind === 2 ? MODEL_ID_PLATFORM_ROTATING : MODEL_ID_PLATFORM_LINEAR,
+        position: {
+          x: pose.x,
+          y: pose.y,
+          z: pose.z
+        },
+        rotation: {
+          x: 0,
+          y: Math.sin(pose.yaw * 0.5),
+          z: 0,
+          w: Math.cos(pose.yaw * 0.5)
+        },
+        grounded: false,
+        health: 0,
+        maxHealth: 0,
         pid: definition.pid,
         kind: definition.kind,
         x: pose.x,
         y: pose.y,
         z: pose.z,
         yaw: pose.yaw,
-        serverTick: this.options.getTickNumber(),
         halfX: definition.halfX,
         halfY: definition.halfY,
         halfZ: definition.halfZ,
@@ -89,6 +111,7 @@ export class PlatformSystem {
       };
       this.platformsByPid.set(platform.pid, platform);
       this.options.spatialChannel.addEntity(platform);
+      this.options.onPlatformAdded?.(platform);
     }
     this.rebuildPlatformSpatialIndex();
   }
@@ -105,13 +128,20 @@ export class PlatformSystem {
       platform.y = currentPose.y;
       platform.z = currentPose.z;
       platform.yaw = currentPose.yaw;
-      platform.serverTick = this.options.getTickNumber();
+      platform.position.x = currentPose.x;
+      platform.position.y = currentPose.y;
+      platform.position.z = currentPose.z;
+      platform.rotation.x = 0;
+      platform.rotation.y = Math.sin(platform.yaw * 0.5);
+      platform.rotation.z = 0;
+      platform.rotation.w = Math.cos(platform.yaw * 0.5);
 
       platform.body.setTranslation({ x: platform.x, y: platform.y, z: platform.z }, true);
       platform.body.setRotation(
         { x: 0, y: Math.sin(platform.yaw * 0.5), z: 0, w: Math.cos(platform.yaw * 0.5) },
         true
       );
+      this.options.onPlatformUpdated?.(platform);
     }
     this.rebuildPlatformSpatialIndex();
   }

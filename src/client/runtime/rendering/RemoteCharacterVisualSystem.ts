@@ -89,7 +89,12 @@ export class RemoteCharacterVisualSystem {
       visual.grounded = remotePlayer.grounded;
       visual.sprinting = visual.horizontalSpeed >= PLAYER_SPRINT_SPEED * 0.92;
       visual.root.position.set(remotePlayer.x, renderY, remotePlayer.z);
-      visual.root.rotation.y = remotePlayer.yaw;
+      visual.root.quaternion.set(
+        remotePlayer.rotation.x,
+        remotePlayer.rotation.y,
+        remotePlayer.rotation.z,
+        remotePlayer.rotation.w
+      );
       visual.lastX = remotePlayer.x;
       visual.lastY = renderY;
       visual.lastZ = remotePlayer.z;
