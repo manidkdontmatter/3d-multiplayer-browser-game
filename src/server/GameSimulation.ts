@@ -19,7 +19,6 @@ import {
 import type { AbilityDefinition } from "../shared/index";
 import type { LoadoutCommand as LoadoutWireCommand } from "../shared/netcode";
 import {
-  type PlayerSnapshot,
   PersistenceService
 } from "./persistence/PersistenceService";
 import { PersistenceSyncSystem } from "./persistence/PersistenceSyncSystem";
@@ -274,7 +273,13 @@ export class GameSimulation {
       sendInitialReplicationState: (user, player) => this.replicationMessaging.sendInitialAbilityState(user, player),
       queueOfflineSnapshot: (accountId, snapshot) =>
         this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
-      capturePlayerSnapshot: (player) => this.capturePlayerSnapshot(player),
+      resolveOfflineSnapshotByAccountId: (accountId) => {
+        const eid = this.playerEidByAccountId.get(accountId);
+        if (typeof eid !== "number") {
+          return null;
+        }
+        return this.simulationEcs.getPlayerPersistenceSnapshotByEid(eid);
+      },
       viewHalfWidth: 128,
       viewHalfHeight: 64,
       viewHalfDepth: 128,
@@ -509,23 +514,6 @@ export class GameSimulation {
       return this.archetypes.player.maxHealth;
     }
     return Math.max(0, Math.min(this.archetypes.player.maxHealth, Math.floor(value)));
-  }
-
-  private capturePlayerSnapshot(player: PlayerEntity): PlayerSnapshot {
-    return {
-      accountId: player.accountId,
-      x: player.x,
-      y: player.y,
-      z: player.z,
-      yaw: player.yaw,
-      pitch: player.pitch,
-      vx: player.vx,
-      vy: player.vy,
-      vz: player.vz,
-      health: player.health,
-      activeHotbarSlot: this.sanitizeHotbarSlot(player.activeHotbarSlot, 0),
-      hotbarAbilityIds: [...player.hotbarAbilityIds]
-    };
   }
 
   private resolveSelectedAbility(player: PlayerEntity): AbilityDefinition | null {

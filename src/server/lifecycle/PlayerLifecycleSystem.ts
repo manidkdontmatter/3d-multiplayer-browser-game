@@ -80,7 +80,7 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly queueIdentityMessage: (user: TUser, playerNid: number) => void;
   readonly sendInitialReplicationState: (user: TUser, player: TPlayer) => void;
   readonly queueOfflineSnapshot: (accountId: number, snapshot: PlayerSnapshot) => void;
-  readonly capturePlayerSnapshot: (player: TPlayer) => PlayerSnapshot;
+  readonly resolveOfflineSnapshotByAccountId: (accountId: number) => PlayerSnapshot | null;
   readonly viewHalfWidth: number;
   readonly viewHalfHeight: number;
   readonly viewHalfDepth: number;
@@ -163,10 +163,10 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       return;
     }
 
-    this.options.queueOfflineSnapshot(
-      player.accountId,
-      this.options.capturePlayerSnapshot(player)
-    );
+    const offlineSnapshot = this.options.resolveOfflineSnapshotByAccountId(player.accountId);
+    if (offlineSnapshot) {
+      this.options.queueOfflineSnapshot(player.accountId, offlineSnapshot);
+    }
     this.options.onPlayerRemoved?.(user, player);
     this.options.unregisterPlayerCollider(player.collider.handle);
     this.options.usersById.delete(user.id);
