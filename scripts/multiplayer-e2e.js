@@ -24,7 +24,8 @@ const MIN_SPAWN_SEPARATION = readEnvNumber("E2E_MIN_SPAWN_SEPARATION", 0.7); // 
 const MOVEMENT_POLL_MS = 120;
 const LOCAL_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_LOCAL_MOVEMENT_TIMEOUT_MS", 15000);
 const REMOTE_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_REMOTE_MOVEMENT_TIMEOUT_MS", 15000);
-const MIN_CLIENT_FPS = readEnvNumber("E2E_MIN_CLIENT_FPS", 20);
+const DEFAULT_MIN_CLIENT_FPS = E2E_HEADLESS ? 0 : 20;
+const MIN_CLIENT_FPS = readEnvNumber("E2E_MIN_CLIENT_FPS", DEFAULT_MIN_CLIENT_FPS);
 const FPS_STABILIZATION_TIMEOUT_MS = readEnvNumber("E2E_FPS_STABILIZATION_TIMEOUT_MS", 20000);
 const FPS_STABLE_SAMPLE_COUNT = Math.max(1, Math.floor(readEnvNumber("E2E_FPS_STABLE_SAMPLE_COUNT", 3)));
 const SERVER_START_TIMEOUT_MS = readEnvNumber("E2E_SERVER_START_TIMEOUT_MS", 20000);
@@ -186,9 +187,21 @@ async function readState(page) {
   });
 }
 
+async function advanceTestTime(page, ms = MOVEMENT_POLL_MS) {
+  if (!page || page.isClosed()) {
+    return;
+  }
+  await page.evaluate((stepMs) => {
+    if (typeof window.advanceTime === "function") {
+      window.advanceTime(stepMs);
+    }
+  }, ms);
+}
+
 async function waitForConnectedState(page, timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    await advanceTestTime(page, MOVEMENT_POLL_MS);
     const state = await readState(page);
     if (state?.mode === "connected") {
       return state;
@@ -203,6 +216,7 @@ async function waitForMinClientFps(page, label, minFps, timeoutMs, stableSamples
   let consecutive = 0;
   let lastFps = 0;
   while (Date.now() - start < timeoutMs) {
+    await advanceTestTime(page, MOVEMENT_POLL_MS);
     const state = await readState(page);
     const fps = Number(state?.perf?.fps);
     if (Number.isFinite(fps)) {
@@ -249,6 +263,7 @@ async function waitForLocalMovement(page, baseline, minDistance, timeoutMs) {
   let latestDistance = 0;
 
   while (Date.now() - start < timeoutMs) {
+    await advanceTestTime(page, MOVEMENT_POLL_MS);
     latestState = await readState(page);
     if (latestState?.player) {
       latestDistance = distance2D(
@@ -267,12 +282,16 @@ async function waitForLocalMovement(page, baseline, minDistance, timeoutMs) {
   return { state: latestState, distance: latestDistance };
 }
 
-async function waitForRemoteMovement(page, baselineRemote, targetNid, minDistance, timeoutMs) {
+async function waitForRemoteMovement(page, baselineRemote, targetNid, minDistance, timeoutMs, driverPage = null) {
   const start = Date.now();
   let latestState = null;
   let latestDistance = 0;
 
   while (Date.now() - start < timeoutMs) {
+    if (driverPage) {
+      await advanceTestTime(driverPage, MOVEMENT_POLL_MS);
+    }
+    await advanceTestTime(page, MOVEMENT_POLL_MS);
     latestState = await readState(page);
     const remote = findRemotePlayer(latestState, targetNid);
     if (remote) {
@@ -295,6 +314,7 @@ async function waitForRemoteMovement(page, baselineRemote, targetNid, minDistanc
 async function waitForRemotePresence(page, targetNid, timeoutMs = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    await advanceTestTime(page, MOVEMENT_POLL_MS);
     const state = await readState(page);
     const remote = findRemotePlayer(state, targetNid);
     if (remote) {
@@ -305,12 +325,22 @@ async function waitForRemotePresence(page, targetNid, timeoutMs = 10000) {
   return null;
 }
 
-async function waitForRemotePrimaryActionNonceIncrement(page, targetNid, baselineNonce, timeoutMs) {
+async function waitForRemotePrimaryActionNonceIncrement(
+  page,
+  targetNid,
+  baselineNonce,
+  timeoutMs,
+  driverPage = null
+) {
   const start = Date.now();
   let latestState = null;
   let latestNonce = baselineNonce;
 
   while (Date.now() - start < timeoutMs) {
+    if (driverPage) {
+      await advanceTestTime(driverPage, MOVEMENT_POLL_MS);
+    }
+    await advanceTestTime(page, MOVEMENT_POLL_MS);
     latestState = await readState(page);
     const remote = findRemotePlayer(latestState, targetNid);
     const nonce =
@@ -340,6 +370,7 @@ async function waitForJumpHeight(page, baselineY, minDelta, timeoutMs) {
   const floor = typeof baselineY === "number" ? baselineY : 0;
 
   while (Date.now() - start < timeoutMs) {
+    await advanceTestTime(page, MOVEMENT_POLL_MS);
     latestState = await readState(page);
     if (latestState?.player) {
       const delta = (latestState.player.y ?? 0) - floor;
@@ -432,7 +463,8 @@ async function main() {
     await delay(150);
   }
 
-  let browser;
+  let browserA;
+  let browserB;
   let pageA = null;
   let pageB = null;
   let exitCode = 0;
@@ -454,12 +486,16 @@ async function main() {
   const logsB = [];
 
   try {
-    browser = await chromium.launch({
+    browserA = await chromium.launch({
       headless: E2E_HEADLESS,
       args: CHROMIUM_ANTI_THROTTLE_ARGS
     });
-    pageA = await browser.newPage({ viewport: { width: E2E_VIEWPORT_WIDTH, height: E2E_VIEWPORT_HEIGHT } });
-    pageB = await browser.newPage({ viewport: { width: E2E_VIEWPORT_WIDTH, height: E2E_VIEWPORT_HEIGHT } });
+    browserB = await chromium.launch({
+      headless: E2E_HEADLESS,
+      args: CHROMIUM_ANTI_THROTTLE_ARGS
+    });
+    pageA = await browserA.newPage({ viewport: { width: E2E_VIEWPORT_WIDTH, height: E2E_VIEWPORT_HEIGHT } });
+    pageB = await browserB.newPage({ viewport: { width: E2E_VIEWPORT_WIDTH, height: E2E_VIEWPORT_HEIGHT } });
     pageA.on("console", (msg) => {
       logsA.push({ type: msg.type(), text: msg.text() });
     });
@@ -522,13 +558,15 @@ async function main() {
     // Keep A foregrounded during movement input to avoid background-tab throttling.
     await pageA.bringToFront();
     await pageA.mouse.click(640, 360);
-    await waitForMinClientFps(
-      pageA,
-      "client A",
-      MIN_CLIENT_FPS,
-      FPS_STABILIZATION_TIMEOUT_MS,
-      FPS_STABLE_SAMPLE_COUNT
-    );
+    if (MIN_CLIENT_FPS > 0) {
+      await waitForMinClientFps(
+        pageA,
+        "client A",
+        MIN_CLIENT_FPS,
+        FPS_STABILIZATION_TIMEOUT_MS,
+        FPS_STABLE_SAMPLE_COUNT
+      );
+    }
     await pageA.waitForTimeout(120);
     beforeA = (await readState(pageA)) ?? beforeA;
 
@@ -547,13 +585,15 @@ async function main() {
     // Then foreground B to observe replicated movement updates.
     await pageB.bringToFront();
     await pageB.mouse.click(640, 360);
-    await waitForMinClientFps(
-      pageB,
-      "client B",
-      MIN_CLIENT_FPS,
-      FPS_STABILIZATION_TIMEOUT_MS,
-      FPS_STABLE_SAMPLE_COUNT
-    );
+    if (MIN_CLIENT_FPS > 0) {
+      await waitForMinClientFps(
+        pageB,
+        "client B",
+        MIN_CLIENT_FPS,
+        FPS_STABILIZATION_TIMEOUT_MS,
+        FPS_STABLE_SAMPLE_COUNT
+      );
+    }
     await pageB.waitForTimeout(120);
     beforeB = (await readState(pageB)) ?? beforeB;
 
@@ -569,7 +609,8 @@ async function main() {
         remoteBeforeOnB,
         aNid,
         MIN_REQUIRED_REMOTE_MOVEMENT,
-        REMOTE_MOVEMENT_TIMEOUT_MS
+        REMOTE_MOVEMENT_TIMEOUT_MS,
+        pageA
       );
     } finally {
       await pageA.evaluate(() => {
@@ -607,7 +648,8 @@ async function main() {
         pageB,
         aNid,
         baselineNonce,
-        PRIMARY_ACTION_TIMEOUT_MS
+        PRIMARY_ACTION_TIMEOUT_MS,
+        pageA
       );
       primaryActionTriggered = actionResult.triggered;
       primaryActionNonce = actionResult.nonce;
@@ -679,7 +721,7 @@ async function main() {
       }
       await delay(PAGE_RECONNECT_COOLDOWN_MS);
 
-      pageB = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+      pageB = await browserB.newPage({ viewport: { width: 1280, height: 720 } });
       pageB.on("console", (msg) => {
         logsB.push({ type: msg.type(), text: msg.text() });
       });
@@ -751,7 +793,7 @@ async function main() {
     console.error("[multi] FAIL", error);
   } finally {
     const shouldWriteArtifacts = exitCode === 0 ? ARTIFACTS_ON_PASS : ARTIFACTS_ON_FAIL;
-    if (browser) {
+    if (browserA || browserB) {
       if (shouldWriteArtifacts) {
         try {
           if (pageA && !pageA.isClosed()) {
@@ -770,7 +812,12 @@ async function main() {
           console.warn("[multi] warning: failed to capture debug artifacts", artifactError);
         }
       }
-      await browser.close();
+      if (browserA) {
+        await browserA.close();
+      }
+      if (browserB) {
+        await browserB.close();
+      }
     }
 
     if (shouldWriteArtifacts) {

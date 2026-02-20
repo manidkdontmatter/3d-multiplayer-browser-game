@@ -46,6 +46,8 @@ export class GameClientApp {
   private predictedPlatformYawCarrySinceAck = 0;
   private testMovementOverride: MovementInput | null = null;
   private reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
+  private reconciliationRenderOffsetPlatformPid: number | null = null;
+  private reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
   private lastReconcilePositionError = 0;
   private lastReconcileYawError = 0;
   private lastReconcilePitchError = 0;
@@ -291,6 +293,7 @@ export class GameClientApp {
     }
 
     if (cspActive) {
+      this.syncReconciliationOffsetPlatformFrame();
       this.decayReconciliationSmoothing(delta);
     }
 
@@ -510,10 +513,11 @@ export class GameClientApp {
       return { ...this.frozenCameraPose };
     }
     const pose = this.physics.getPose();
+    const renderOffset = this.getReconciliationRenderOffsetWorld();
     return {
-      x: pose.x + this.reconciliationRenderOffset.x,
-      y: pose.y + this.reconciliationRenderOffset.y,
-      z: pose.z + this.reconciliationRenderOffset.z,
+      x: pose.x + renderOffset.x,
+      y: pose.y + renderOffset.y,
+      z: pose.z + renderOffset.z,
       yaw: pose.yaw,
       pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, pose.pitch))
     };
@@ -524,10 +528,11 @@ export class GameClientApp {
     postReconciliationPose: PlayerPose,
     replayCount: number
   ): void {
+    const currentRenderOffset = this.getReconciliationRenderOffsetWorld();
     const preRenderedPose = {
-      x: preReconciliationPose.x + this.reconciliationRenderOffset.x,
-      y: preReconciliationPose.y + this.reconciliationRenderOffset.y,
-      z: preReconciliationPose.z + this.reconciliationRenderOffset.z
+      x: preReconciliationPose.x + currentRenderOffset.x,
+      y: preReconciliationPose.y + currentRenderOffset.y,
+      z: preReconciliationPose.z + currentRenderOffset.z
     };
 
     const positionError = Math.hypot(
@@ -552,44 +557,121 @@ export class GameClientApp {
       return;
     }
 
-    this.reconciliationRenderOffset = {
-      x: preRenderedPose.x - postReconciliationPose.x,
-      y: preRenderedPose.y - postReconciliationPose.y,
-      z: preRenderedPose.z - postReconciliationPose.z
-    };
+    this.setReconciliationRenderOffsetFromWorld(
+      {
+        x: preRenderedPose.x - postReconciliationPose.x,
+        y: preRenderedPose.y - postReconciliationPose.y,
+        z: preRenderedPose.z - postReconciliationPose.z
+      },
+      this.physics.getKinematicState().groundedPlatformPid
+    );
   }
 
   private decayReconciliationSmoothing(delta: number): void {
     const clampedDelta = Math.max(0, delta);
     const positionDecay = Math.exp(-RECONCILE_POSITION_SMOOTH_RATE * clampedDelta);
-    this.reconciliationRenderOffset = {
-      x: this.reconciliationRenderOffset.x * positionDecay,
-      y: this.reconciliationRenderOffset.y * positionDecay,
-      z: this.reconciliationRenderOffset.z * positionDecay
-    };
-
-    if (Math.abs(this.reconciliationRenderOffset.x) < RECONCILE_OFFSET_EPSILON) {
-      this.reconciliationRenderOffset.x = 0;
+    if (this.reconciliationRenderOffsetPlatformPid === null) {
+      this.reconciliationRenderOffset.x *= positionDecay;
+      this.reconciliationRenderOffset.z *= positionDecay;
+      if (Math.abs(this.reconciliationRenderOffset.x) < RECONCILE_OFFSET_EPSILON) {
+        this.reconciliationRenderOffset.x = 0;
+      }
+      if (Math.abs(this.reconciliationRenderOffset.z) < RECONCILE_OFFSET_EPSILON) {
+        this.reconciliationRenderOffset.z = 0;
+      }
+    } else {
+      this.reconciliationRenderOffsetPlatformLocal.x *= positionDecay;
+      this.reconciliationRenderOffsetPlatformLocal.z *= positionDecay;
+      if (Math.abs(this.reconciliationRenderOffsetPlatformLocal.x) < RECONCILE_OFFSET_EPSILON) {
+        this.reconciliationRenderOffsetPlatformLocal.x = 0;
+      }
+      if (Math.abs(this.reconciliationRenderOffsetPlatformLocal.z) < RECONCILE_OFFSET_EPSILON) {
+        this.reconciliationRenderOffsetPlatformLocal.z = 0;
+      }
     }
+    this.reconciliationRenderOffset.y *= positionDecay;
+
     if (Math.abs(this.reconciliationRenderOffset.y) < RECONCILE_OFFSET_EPSILON) {
       this.reconciliationRenderOffset.y = 0;
-    }
-    if (Math.abs(this.reconciliationRenderOffset.z) < RECONCILE_OFFSET_EPSILON) {
-      this.reconciliationRenderOffset.z = 0;
     }
   }
 
   private resetReconciliationSmoothing(): void {
     this.reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
+    this.reconciliationRenderOffsetPlatformPid = null;
+    this.reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
     this.predictedPlatformYawCarrySinceAck = 0;
   }
 
   private getReconciliationOffsetMagnitude(): number {
-    return Math.hypot(
-      this.reconciliationRenderOffset.x,
-      this.reconciliationRenderOffset.y,
-      this.reconciliationRenderOffset.z
-    );
+    const renderOffset = this.getReconciliationRenderOffsetWorld();
+    return Math.hypot(renderOffset.x, renderOffset.y, renderOffset.z);
+  }
+
+  private getReconciliationRenderOffsetWorld(): { x: number; y: number; z: number } {
+    if (this.reconciliationRenderOffsetPlatformPid === null) {
+      return { ...this.reconciliationRenderOffset };
+    }
+
+    const platform = this.physics.getPlatformTransform(this.reconciliationRenderOffsetPlatformPid);
+    if (!platform) {
+      return { ...this.reconciliationRenderOffset };
+    }
+
+    const cos = Math.cos(platform.yaw);
+    const sin = Math.sin(platform.yaw);
+    return {
+      x: this.reconciliationRenderOffsetPlatformLocal.x * cos + this.reconciliationRenderOffsetPlatformLocal.z * sin,
+      y: this.reconciliationRenderOffset.y,
+      z:
+        -this.reconciliationRenderOffsetPlatformLocal.x * sin +
+        this.reconciliationRenderOffsetPlatformLocal.z * cos
+    };
+  }
+
+  private setReconciliationRenderOffsetFromWorld(
+    worldOffset: { x: number; y: number; z: number },
+    groundedPlatformPid: number | null
+  ): void {
+    this.reconciliationRenderOffset.y = worldOffset.y;
+    if (groundedPlatformPid === null) {
+      this.reconciliationRenderOffset.x = worldOffset.x;
+      this.reconciliationRenderOffset.z = worldOffset.z;
+      this.reconciliationRenderOffsetPlatformPid = null;
+      this.reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
+      return;
+    }
+
+    const platform = this.physics.getPlatformTransform(groundedPlatformPid);
+    if (!platform) {
+      this.reconciliationRenderOffset.x = worldOffset.x;
+      this.reconciliationRenderOffset.z = worldOffset.z;
+      this.reconciliationRenderOffsetPlatformPid = null;
+      this.reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
+      return;
+    }
+
+    const cos = Math.cos(platform.yaw);
+    const sin = Math.sin(platform.yaw);
+    this.reconciliationRenderOffsetPlatformPid = groundedPlatformPid;
+    this.reconciliationRenderOffsetPlatformLocal.x = worldOffset.x * cos - worldOffset.z * sin;
+    this.reconciliationRenderOffsetPlatformLocal.z = worldOffset.x * sin + worldOffset.z * cos;
+    this.reconciliationRenderOffset.x = 0;
+    this.reconciliationRenderOffset.z = 0;
+  }
+
+  private syncReconciliationOffsetPlatformFrame(): void {
+    if (this.reconciliationRenderOffsetPlatformPid === null) {
+      return;
+    }
+
+    const currentGroundedPlatformPid = this.physics.getKinematicState().groundedPlatformPid;
+    if (currentGroundedPlatformPid === this.reconciliationRenderOffsetPlatformPid) {
+      return;
+    }
+
+    const worldOffset = this.getReconciliationRenderOffsetWorld();
+    this.setReconciliationRenderOffsetFromWorld(worldOffset, currentGroundedPlatformPid);
   }
 
   private readonly onResize = (): void => {

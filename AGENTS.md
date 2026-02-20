@@ -84,6 +84,8 @@
     - If a system is fundamentally non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.
     - When starting local terminals/processes for testing (especially game server/client dev terminals), always stop/close them when the task/check is complete.
     - Treat older/legacy tests as potentially stale: when a test fails, validate whether the test assumptions still match current game architecture/behavior before concluding the underlying game system is broken.
+    - For multiplayer browser automation tests, run each client in a separate browser window/process (not separate tabs in one window) to avoid inactive-tab throttling artifacts.
+    - In headless browser automation, do not rely on RAF cadence for gameplay/test progress; drive simulation deterministically through test hooks (for example `window.advanceTime`) whenever possible.
 
 ### Humanoid Conversion Playbook (Offline, Production Path)
 

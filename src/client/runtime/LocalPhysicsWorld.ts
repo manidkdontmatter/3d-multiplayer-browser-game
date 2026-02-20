@@ -250,6 +250,19 @@ export class LocalPhysicsWorld {
     return { ...this.pose };
   }
 
+  public getPlatformTransform(pid: number): { x: number; y: number; z: number; yaw: number } | null {
+    const platform = this.platformBodies.get(pid);
+    if (!platform) {
+      return null;
+    }
+    return {
+      x: platform.x,
+      y: platform.y,
+      z: platform.z,
+      yaw: platform.yaw
+    };
+  }
+
   public getKinematicState(): {
     vx: number;
     vy: number;

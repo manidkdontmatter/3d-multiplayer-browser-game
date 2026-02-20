@@ -9,3 +9,10 @@ Original prompt: should FIXED_STEP definitely be 1/60? because our server tick r
 - Verification: `npm run test:multiplayer:csp` FAIL at primary action nonce assertion (likely stale/orthogonal to movement/CSP platform follow).
 - Verification: focused CSP multiplayer run with primary/sprint/jump/reconnect disabled PASS (`movedA=16.41`, `movedRemote=0.96`).
 - TODO(next): add/refresh dedicated rotating-platform visual smoothness e2e/assertion so this path is directly covered.
+- In progress: implementing platform-local reconciliation offset smoothing so correction offsets co-rotate with attached platforms instead of being stored in world-space.
+- Added `LocalPhysicsWorld.getPlatformTransform(pid)` accessor for current predicted platform pose.
+- Memory update: persisted user preference in `AGENTS.md` to always run multiplayer browser automation clients in separate browser windows/processes (not tabs) to avoid throttling artifacts.
+- Harness update: `scripts/multiplayer-e2e.js` now launches client A and B in separate Chromium instances and disables FPS gating by default in headless unless `E2E_MIN_CLIENT_FPS` is explicitly set.
+- Memory update: persisted that headless browser automation must not rely on RAF cadence; tests should drive simulation deterministically via `window.advanceTime` hooks.
+- Contradiction check: no conflicting guidance found in `docs-map.md`, `overview.md`, or `vision.md` for this memory addition.
+- Verification: focused CSP multiplayer scenario now PASS after deterministic stepping + separate browser instances.
