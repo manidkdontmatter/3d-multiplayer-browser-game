@@ -219,8 +219,7 @@ export class GameClientApp {
       }
     );
 
-    const serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform();
-    const cspActive = this.isCspActive(serverGroundedOnPlatform);
+    const cspActive = this.isCspActive();
     let preReconciliationPose: PlayerPose | null = null;
     if (cspActive) {
       const predictedPlatformYawDelta = this.physics.predictAttachedPlatformYawDelta(delta);
@@ -326,7 +325,7 @@ export class GameClientApp {
     const pose = this.getRenderPose();
     const netState = this.network.getConnectionState();
     const cspActive = this.isCspActive();
-    const cspLabel = this.cspEnabled ? (cspActive ? "on" : "auto-off") : "off";
+    const cspLabel = cspActive ? "on" : "off";
     const smoothingMagnitude = this.getReconciliationOffsetMagnitude();
     const yawErrorDegrees = (this.lastReconcileYawError * 180) / Math.PI;
     const interpDelayMs = this.network.getInterpolationDelayMs();
@@ -510,18 +509,6 @@ export class GameClientApp {
     if (this.freezeCamera && this.frozenCameraPose) {
       return { ...this.frozenCameraPose };
     }
-    if (!this.isCspActive()) {
-      const serverPose = this.network.getLocalPlayerPose();
-      if (serverPose) {
-        return {
-          x: serverPose.x,
-          y: serverPose.y,
-          z: serverPose.z,
-          yaw: this.input.getYaw(),
-          pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, this.input.getPitch()))
-        };
-      }
-    }
     const pose = this.physics.getPose();
     return {
       x: pose.x + this.reconciliationRenderOffset.x,
@@ -666,7 +653,7 @@ export class GameClientApp {
     return false;
   }
 
-  private isCspActive(serverGroundedOnPlatform = this.network.isServerGroundedOnPlatform()): boolean {
-    return this.cspEnabled && !serverGroundedOnPlatform;
+  private isCspActive(): boolean {
+    return this.cspEnabled;
   }
 }
