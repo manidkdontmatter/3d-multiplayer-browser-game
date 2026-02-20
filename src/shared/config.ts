@@ -17,7 +17,8 @@ export const PLAYER_CAMERA_OFFSET_Y = PLAYER_EYE_HEIGHT - PLAYER_BODY_CENTER_HEI
 export const PLAYER_GROUND_Y = PLAYER_EYE_HEIGHT;
 export const PLAYER_JUMP_VELOCITY = 12;
 export const GRAVITY = -18;
-export const PLAYER_GROUND_STICK_VELOCITY = -2;
+// Keep only a tiny downward bias while grounded to maintain contact without visible sink/pop jitter.
+export const PLAYER_GROUND_STICK_VELOCITY = -0.05;
 export const PLAYER_MAX_HEALTH = 100;
 export const PRIMARY_FIRE_COOLDOWN_SECONDS = 0.2;
 export const MAGIC_BOLT_KIND_PRIMARY = 1;
