@@ -563,8 +563,7 @@ export class GameClientApp {
 
     this.reconciliationRenderOffset = {
       x: preRenderedPose.x - postReconciliationPose.x,
-      // Vertical camera smoothing reads as a walk hitch; keep correction horizontal-only.
-      y: 0,
+      y: preRenderedPose.y - postReconciliationPose.y,
       z: preRenderedPose.z - postReconciliationPose.z
     };
   }
