@@ -56,12 +56,10 @@ export interface ReplicationMessagingSystemOptions<
   TPlayer extends ReplicationPlayer
 > {
   readonly getTickNumber: () => number;
-  readonly getUsers: () => Iterable<TUser>;
   readonly getUserById: (userId: number) => TUser | undefined;
-  readonly getPlayerNidByUserId: (userId: number) => number | null;
+  readonly queueSpatialMessage: (message: unknown) => void;
   readonly sanitizeHotbarSlot: (rawSlot: unknown, fallbackSlot: number) => number;
   readonly getAbilityDefinitionById: (abilityId: number) => AbilityDefinition | null;
-  readonly abilityUseEventRadius: number;
 }
 
 export class ReplicationMessagingSystem<
@@ -141,32 +139,16 @@ export class ReplicationMessagingSystem<
   public broadcastAbilityUseMessage(player: TPlayer, ability: AbilityDefinition): void {
     const abilityId = Math.max(0, Math.min(0xffff, Math.floor(ability.id)));
     const category = abilityCategoryToWireValue(ability.category);
-    const eventX = player.x;
-    const eventY = player.y;
-    const eventZ = player.z;
-    for (const user of this.options.getUsers()) {
-      const ownerNid = this.options.getPlayerNidByUserId(user.id);
-      const isOwner = ownerNid === player.nid;
-      if (
-        !isOwner &&
-        !this.shouldDeliverAbilityUseToView(
-          user.view,
-          eventX,
-          eventY,
-          eventZ,
-          this.options.abilityUseEventRadius
-        )
-      ) {
-        continue;
-      }
-      user.queueMessage({
-        ntype: NType.AbilityUseMessage,
-        ownerNid: player.nid,
-        abilityId,
-        category,
-        serverTick: this.options.getTickNumber()
-      });
-    }
+    this.options.queueSpatialMessage({
+      ntype: NType.AbilityUseMessage,
+      ownerNid: player.nid,
+      abilityId,
+      category,
+      serverTick: this.options.getTickNumber(),
+      x: player.x,
+      y: player.y,
+      z: player.z
+    });
   }
 
   private queueAbilityDefinitionMessage(user: TUser, ability: AbilityDefinition): void {
@@ -196,23 +178,6 @@ export class ReplicationMessagingSystem<
       meleeRange: melee?.range ?? 0,
       meleeArcDegrees: melee?.arcDegrees ?? 0
     });
-  }
-
-  private shouldDeliverAbilityUseToView(
-    view: AABB3D | undefined,
-    x: number,
-    y: number,
-    z: number,
-    radius: number
-  ): boolean {
-    if (!view) {
-      return false;
-    }
-    const clampedRadius = Math.max(0, radius);
-    const dx = Math.max(Math.abs(x - view.x) - view.halfWidth, 0);
-    const dy = Math.max(Math.abs(y - view.y) - view.halfHeight, 0);
-    const dz = Math.max(Math.abs(z - view.z) - view.halfDepth, 0);
-    return dx * dx + dy * dy + dz * dz <= clampedRadius * clampedRadius;
   }
 
 }

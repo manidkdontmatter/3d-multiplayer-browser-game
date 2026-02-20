@@ -149,29 +149,21 @@ export class GameServer {
     close?: () => void;
   }> {
     const nodeMajor = Number(process.versions.node.split(".")[0] ?? 0);
-    const nodeSupportsUws = nodeMajor === 16 || nodeMajor === 18 || nodeMajor === 20;
-    const allowUws = process.env.NENGI_TRANSPORT !== "ws" && nodeSupportsUws;
-
-    if (allowUws) {
-      try {
-        const { uWebSocketsInstanceAdapter } = await import("nengi-uws-instance-adapter");
-        console.log("[server] transport=uws");
-        return new uWebSocketsInstanceAdapter(this.instance.network, {});
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[server] uWS adapter unavailable (${message}). Falling back to ws.`);
-      }
-    }
-
-    if (!nodeSupportsUws && process.env.NENGI_TRANSPORT !== "ws") {
-      console.warn(
-        `[server] Node ${process.versions.node} does not support uWebSockets.js in this setup. Using ws fallback.`
+    const nodeSupportsUws = nodeMajor === 20;
+    if (!nodeSupportsUws) {
+      throw new Error(
+        `uWS transport requires Node 20.x in this project. Current Node: ${process.versions.node}`
       );
     }
 
-    const { WsInstanceAdapter } = await import("./transport/WsInstanceAdapter");
-    console.log("[server] transport=ws");
-    return new WsInstanceAdapter(this.instance.network);
+    try {
+      const { uWebSocketsInstanceAdapter } = await import("nengi-uws-instance-adapter");
+      console.log("[server] transport=uws");
+      return new uWebSocketsInstanceAdapter(this.instance.network, {});
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`uWS adapter failed to initialize: ${message}`);
+    }
   }
 
   private tick(): void {

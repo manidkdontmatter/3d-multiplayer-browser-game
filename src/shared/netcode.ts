@@ -95,7 +95,10 @@ export const abilityUseMessageSchema = defineSchema({
   ownerNid: Binary.UInt16,
   abilityId: Binary.UInt16,
   category: Binary.UInt8,
-  serverTick: Binary.UInt32
+  serverTick: Binary.UInt32,
+  x: Binary.Float32,
+  y: Binary.Float32,
+  z: Binary.Float32
 });
 
 export const ncontext = new Context();
@@ -202,4 +205,7 @@ export interface AbilityUseMessage {
   abilityId: number;
   category: number;
   serverTick: number;
+  x: number;
+  y: number;
+  z: number;
 }

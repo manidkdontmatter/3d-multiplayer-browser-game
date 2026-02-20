@@ -27,7 +27,8 @@
     "test:multiplayer:chaos": "node --input-type=module -e \"process.env.E2E_CSP='1'; process.env.E2E_NETSIM='1'; process.env.E2E_MIN_REMOTE_MOVEMENT='0.4'; process.env.E2E_REMOTE_MOVEMENT_TIMEOUT_MS='22000'; process.env.E2E_MIN_SPRINT_MOVEMENT='1.0'; process.env.E2E_MIN_JUMP_HEIGHT='0.35'; await import('./scripts/multiplayer-e2e.js');\"",
     "test:movement-parity": "tsx scripts/movement-parity.ts",
     "test:network-client:regression": "tsx scripts/network-client-regression.ts",
-    "test:tick": "tsx scripts/tick-consistency.ts"
+    "test:tick": "tsx scripts/tick-consistency.ts",
+    "test:architecture": "tsx scripts/architecture-guards.ts"
   },
   "engines": {
     "node": ">=20.19.0",
@@ -48,20 +49,18 @@
     "@pixiv/three-vrm-animation": "3.4.5",
     "better-sqlite3": "11.9.1",
     "bitecs": "0.4.0",
-    "fbx2vrma-converter": "1.0.2",
     "nengi": "2.0.0-alpha.173",
     "nengi-buffers": "0.5.0",
     "nengi-dataviews": "0.4.0",
     "nengi-uws-instance-adapter": "0.6.0",
     "nengi-websocket-client-adapter": "0.7.0",
-    "three": "0.182.0",
-    "ws": "8.19.0"
+    "three": "0.182.0"
   },
   "devDependencies": {
     "@types/node": "25.2.3",
     "@types/three": "0.182.0",
-    "@types/ws": "8.18.1",
     "concurrently": "9.2.1",
+    "fbx2vrma-converter": "1.0.2",
     "playwright": "1.58.2",
     "tsup": "8.5.1",
     "tsx": "4.21.0",

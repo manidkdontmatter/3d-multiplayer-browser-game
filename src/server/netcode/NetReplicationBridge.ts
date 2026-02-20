@@ -59,24 +59,85 @@ export class NetReplicationBridge {
   }
 
   public sync(simEid: number, snapshot: ReplicatedSnapshot): void {
+    this.syncFromState(simEid, {
+      modelId: snapshot.modelId,
+      x: snapshot.position.x,
+      y: snapshot.position.y,
+      z: snapshot.position.z,
+      rx: snapshot.rotation.x,
+      ry: snapshot.rotation.y,
+      rz: snapshot.rotation.z,
+      rw: snapshot.rotation.w,
+      grounded: snapshot.grounded,
+      health: snapshot.health,
+      maxHealth: snapshot.maxHealth
+    });
+  }
+
+  public syncFromState(
+    simEid: number,
+    state: {
+      modelId: number;
+      x: number;
+      y: number;
+      z: number;
+      rx: number;
+      ry: number;
+      rz: number;
+      rw: number;
+      grounded: boolean;
+      health: number;
+      maxHealth: number;
+    }
+  ): void {
+    this.syncFromValues(
+      simEid,
+      state.modelId,
+      state.x,
+      state.y,
+      state.z,
+      state.rx,
+      state.ry,
+      state.rz,
+      state.rw,
+      state.grounded,
+      state.health,
+      state.maxHealth
+    );
+  }
+
+  public syncFromValues(
+    simEid: number,
+    modelId: number,
+    x: number,
+    y: number,
+    z: number,
+    rx: number,
+    ry: number,
+    rz: number,
+    rw: number,
+    grounded: boolean,
+    health: number,
+    maxHealth: number
+  ): void {
     const netEntity = this.netBySimEid.get(simEid);
     if (!netEntity) {
       return;
     }
-    netEntity.modelId = snapshot.modelId;
-    netEntity.position.x = snapshot.position.x;
-    netEntity.position.y = snapshot.position.y;
-    netEntity.position.z = snapshot.position.z;
-    netEntity.x = snapshot.position.x;
-    netEntity.y = snapshot.position.y;
-    netEntity.z = snapshot.position.z;
-    netEntity.rotation.x = snapshot.rotation.x;
-    netEntity.rotation.y = snapshot.rotation.y;
-    netEntity.rotation.z = snapshot.rotation.z;
-    netEntity.rotation.w = snapshot.rotation.w;
-    netEntity.grounded = snapshot.grounded;
-    netEntity.health = snapshot.health;
-    netEntity.maxHealth = snapshot.maxHealth;
+    netEntity.modelId = modelId;
+    netEntity.position.x = x;
+    netEntity.position.y = y;
+    netEntity.position.z = z;
+    netEntity.x = x;
+    netEntity.y = y;
+    netEntity.z = z;
+    netEntity.rotation.x = rx;
+    netEntity.rotation.y = ry;
+    netEntity.rotation.z = rz;
+    netEntity.rotation.w = rw;
+    netEntity.grounded = grounded;
+    netEntity.health = health;
+    netEntity.maxHealth = maxHealth;
   }
 
   public despawn(simEid: number): void {

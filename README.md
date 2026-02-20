@@ -43,10 +43,7 @@ Authoritative server/browser-client scaffold using:
 - Shared protocol/schemas live in `src/shared`.
 - Client defaults to connecting to `ws://localhost:9001`.
 - Override server URL in browser with `?server=ws://HOST:PORT`.
-- Transport behavior:
-  - Preferred: `uWebSockets` (`nengi-uws-instance-adapter`) for high-performance hosting.
-  - Automatic fallback: `ws` adapter on unsupported Node versions.
-  - Force fallback manually: set `NENGI_TRANSPORT=ws`.
+- Server transport uses `uWebSockets` via `nengi-uws-instance-adapter` (Node 20.x in this project).
 
 ## Project Docs
 
@@ -54,5 +51,4 @@ Authoritative server/browser-client scaffold using:
 - `vision.md`: product/gameplay/aesthetic direction and long-range goals.
 - `AGENTS.md`: persistent agent operating instructions/memory.
 - `docs-map.md`: role/read-order map for project Markdown files.
-- `.codex/config.toml`: project Codex defaults/profiles (`default`: no approval prompts with workspace-write sandbox, `--profile yolo`: danger-full-access).
 - `public/assets/README.md`: runtime asset folder conventions (`public/assets/**` is browser-served content).

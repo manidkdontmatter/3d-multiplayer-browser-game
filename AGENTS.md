@@ -18,7 +18,7 @@
   5. Curated indexes: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` (when present)
 - Then load only task-relevant files in `docs/`; avoid bulk-reading vendored trees.
 - The aforementioned .md files are considered your memory, you are free to alter your memory however you see fit to increase your productivity and intelligence.
-- Read `design-doc.md`. It is not a memory file do not alter it.
+- Read `design-doc.md`. It is not a memory file do not alter it. It is also a very important document.
 
 ## Workflow and Tooling
 
@@ -30,6 +30,7 @@
 - Keep Node `>=20.19.x` (Vite requirement).
 - Validation defaults: `test:smoke` and `test:multiplayer`; never run them in parallel (ports `5173`/`9001`).
 - During active iteration, prefer fast checks first (`typecheck:*`, `test:smoke:fast`, `verify:quick`) and reserve full multiplayer suites for gates.
+- Do not run TypeScript typecheck commands by default after routine edits (`npm run typecheck`, `npm run typecheck:client`, `npm run typecheck:server`). Only run them when explicitly requested by the user.
 - Humanoid asset ingestion tooling:
   - `@pixiv/three-vrm`: runtime VRM support in Three.js.
   - `@pixiv/three-vrm-animation`: runtime VRMA support in Three.js.
