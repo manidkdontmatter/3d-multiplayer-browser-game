@@ -83,6 +83,7 @@
     - Commit after every task completion, and if asked to commit, include all current workspace changes in that commit (no partial staging); if a task is finished, push to GitHub when the last push was over 30 minutes ago.
     - If a system is fundamentally non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.
     - When starting local terminals/processes for testing (especially game server/client dev terminals), always stop/close them when the task/check is complete.
+    - Treat older/legacy tests as potentially stale: when a test fails, validate whether the test assumptions still match current game architecture/behavior before concluding the underlying game system is broken.
 
 ### Humanoid Conversion Playbook (Offline, Production Path)
 

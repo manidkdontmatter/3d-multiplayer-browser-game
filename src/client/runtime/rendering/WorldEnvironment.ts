@@ -22,14 +22,17 @@ export class WorldEnvironment {
   public readonly scene: Scene;
   public readonly camera: PerspectiveCamera;
   private readonly cameraForward = new Vector3(0, 0, -1);
+  private readonly e2eMode: boolean;
 
   public constructor(canvas: HTMLCanvasElement) {
+    const params = new URLSearchParams(window.location.search);
+    this.e2eMode = params.get("e2e") === "1";
     this.renderer = new WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: !this.e2eMode,
       powerPreference: "high-performance"
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.e2eMode ? 1 : Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
 
     this.scene = new Scene();

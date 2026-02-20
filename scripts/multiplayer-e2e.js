@@ -11,6 +11,7 @@ const CLIENT_ORIGIN = "http://127.0.0.1:5173";
 const USE_EXISTING_SERVER = process.env.E2E_USE_EXISTING_SERVER === "1";
 const EXISTING_SERVER_URL = process.env.E2E_SERVER_URL;
 const E2E_NETSIM_ENABLED = process.env.E2E_NETSIM === "1";
+const E2E_HEADLESS = process.env.E2E_HEADLESS !== "0";
 const E2E_ENABLE_SPRINT_TEST = process.env.E2E_ENABLE_SPRINT_TEST !== "0";
 const E2E_ENABLE_JUMP_TEST = process.env.E2E_ENABLE_JUMP_TEST !== "0";
 const E2E_ENABLE_RECONNECT_TEST = process.env.E2E_ENABLE_RECONNECT_TEST !== "0";
@@ -23,7 +24,9 @@ const MIN_SPAWN_SEPARATION = readEnvNumber("E2E_MIN_SPAWN_SEPARATION", 0.7); // 
 const MOVEMENT_POLL_MS = 120;
 const LOCAL_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_LOCAL_MOVEMENT_TIMEOUT_MS", 15000);
 const REMOTE_MOVEMENT_TIMEOUT_MS = readEnvNumber("E2E_REMOTE_MOVEMENT_TIMEOUT_MS", 15000);
-const STARTUP_STABILIZATION_MS = readEnvNumber("E2E_STARTUP_STABILIZATION_MS", 5000);
+const MIN_CLIENT_FPS = readEnvNumber("E2E_MIN_CLIENT_FPS", 20);
+const FPS_STABILIZATION_TIMEOUT_MS = readEnvNumber("E2E_FPS_STABILIZATION_TIMEOUT_MS", 20000);
+const FPS_STABLE_SAMPLE_COUNT = Math.max(1, Math.floor(readEnvNumber("E2E_FPS_STABLE_SAMPLE_COUNT", 3)));
 const SERVER_START_TIMEOUT_MS = readEnvNumber("E2E_SERVER_START_TIMEOUT_MS", 20000);
 const CLIENT_START_TIMEOUT_MS = readEnvNumber("E2E_CLIENT_START_TIMEOUT_MS", 24000);
 const E2E_CSP_ENABLED = process.env.E2E_CSP === "1";
@@ -39,8 +42,17 @@ const PRIMARY_ACTION_TIMEOUT_MS = readEnvNumber("E2E_PRIMARY_ACTION_TIMEOUT_MS",
 const NETSIM_ACK_DROP = readEnvNumber("E2E_NETSIM_ACK_DROP", 0.15);
 const NETSIM_ACK_DELAY_MS = readEnvNumber("E2E_NETSIM_ACK_DELAY_MS", 60);
 const NETSIM_ACK_JITTER_MS = readEnvNumber("E2E_NETSIM_ACK_JITTER_MS", 90);
+const E2E_VIEWPORT_WIDTH = Math.max(640, Math.floor(readEnvNumber("E2E_VIEWPORT_WIDTH", 960)));
+const E2E_VIEWPORT_HEIGHT = Math.max(360, Math.floor(readEnvNumber("E2E_VIEWPORT_HEIGHT", 540)));
 const WRAP16_MODULO = 0x10000;
 const WRAP16_HALF_RANGE = WRAP16_MODULO >>> 1;
+const CHROMIUM_ANTI_THROTTLE_ARGS = [
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
+  "--disable-features=CalculateNativeWinOcclusion,BackForwardCache",
+  "--disable-frame-rate-limit"
+];
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -184,6 +196,31 @@ async function waitForConnectedState(page, timeoutMs = 20000) {
     await delay(300);
   }
   throw new Error("Timed out waiting for connected state.");
+}
+
+async function waitForMinClientFps(page, label, minFps, timeoutMs, stableSamples) {
+  const start = Date.now();
+  let consecutive = 0;
+  let lastFps = 0;
+  while (Date.now() - start < timeoutMs) {
+    const state = await readState(page);
+    const fps = Number(state?.perf?.fps);
+    if (Number.isFinite(fps)) {
+      lastFps = fps;
+      if (fps >= minFps) {
+        consecutive += 1;
+        if (consecutive >= stableSamples) {
+          return state;
+        }
+      } else {
+        consecutive = 0;
+      }
+    }
+    await delay(MOVEMENT_POLL_MS);
+  }
+  throw new Error(
+    `Timed out waiting for ${label} FPS >= ${minFps} (${stableSamples} samples). Last FPS=${lastFps.toFixed(2)}`
+  );
 }
 
 function distance2D(ax, az, bx, bz) {
@@ -355,7 +392,8 @@ async function main() {
   }
   const clientParams = new URLSearchParams({
     csp: CLIENT_CSP_QUERY,
-    server: serverUrl
+    server: serverUrl,
+    e2e: "1"
   });
   if (E2E_NETSIM_ENABLED) {
     clientParams.set("netsim", "1");
@@ -416,9 +454,12 @@ async function main() {
   const logsB = [];
 
   try {
-    browser = await chromium.launch({ headless: true });
-    pageA = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-    pageB = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    browser = await chromium.launch({
+      headless: E2E_HEADLESS,
+      args: CHROMIUM_ANTI_THROTTLE_ARGS
+    });
+    pageA = await browser.newPage({ viewport: { width: E2E_VIEWPORT_WIDTH, height: E2E_VIEWPORT_HEIGHT } });
+    pageB = await browser.newPage({ viewport: { width: E2E_VIEWPORT_WIDTH, height: E2E_VIEWPORT_HEIGHT } });
     pageA.on("console", (msg) => {
       logsA.push({ type: msg.type(), text: msg.text() });
     });
@@ -478,16 +519,18 @@ async function main() {
       );
     }
 
-    if (STARTUP_STABILIZATION_MS > 0) {
-      await delay(STARTUP_STABILIZATION_MS);
-    }
-    beforeA = (await readState(pageA)) ?? beforeA;
-    beforeB = (await readState(pageB)) ?? beforeB;
-
     // Keep A foregrounded during movement input to avoid background-tab throttling.
     await pageA.bringToFront();
     await pageA.mouse.click(640, 360);
+    await waitForMinClientFps(
+      pageA,
+      "client A",
+      MIN_CLIENT_FPS,
+      FPS_STABILIZATION_TIMEOUT_MS,
+      FPS_STABLE_SAMPLE_COUNT
+    );
     await pageA.waitForTimeout(120);
+    beforeA = (await readState(pageA)) ?? beforeA;
 
     await pageA.evaluate(() => {
       window.set_test_movement({ forward: 1, strafe: 0, jump: false, sprint: false });
@@ -504,7 +547,15 @@ async function main() {
     // Then foreground B to observe replicated movement updates.
     await pageB.bringToFront();
     await pageB.mouse.click(640, 360);
+    await waitForMinClientFps(
+      pageB,
+      "client B",
+      MIN_CLIENT_FPS,
+      FPS_STABILIZATION_TIMEOUT_MS,
+      FPS_STABLE_SAMPLE_COUNT
+    );
     await pageB.waitForTimeout(120);
+    beforeB = (await readState(pageB)) ?? beforeB;
 
     const remoteBeforeOnB = findRemotePlayer(beforeB, aNid);
     if (!remoteBeforeOnB) {

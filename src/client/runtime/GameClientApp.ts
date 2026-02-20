@@ -450,6 +450,10 @@ export class GameClientApp {
           interpolationDelayMs: this.network.getInterpolationDelayMs(),
           ackJitterMs: this.network.getAckJitterMs()
         },
+        perf: {
+          fps: this.fps,
+          lowFpsFrameCount: this.lowFpsFrameCount
+        },
         reconciliation: {
           lastError: {
             position: this.lastReconcilePositionError,

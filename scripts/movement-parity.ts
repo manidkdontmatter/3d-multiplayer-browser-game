@@ -6,6 +6,7 @@ import { PlayerMovementSystem } from "../src/server/movement/PlayerMovementSyste
 import { PlatformSystem } from "../src/server/platform/PlatformSystem";
 import { WorldBootstrapSystem } from "../src/server/world/WorldBootstrapSystem";
 import {
+  GROUND_CONTACT_MIN_NORMAL_Y,
   PLATFORM_DEFINITIONS,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
@@ -162,6 +163,38 @@ async function runParityTest(): Promise<void> {
   const movementSystem = new PlayerMovementSystem<ServerParityPlayer>({
     characterController,
     samplePlayerPlatformCarry: (player) => platformSystem.samplePlayerPlatformCarry(player),
+    resolveGroundSupportColliderHandle: (player, groundedByQuery) => {
+      if (!groundedByQuery) {
+        return { hit: false, colliderHandle: null };
+      }
+      const snapDistance = characterController.snapToGroundDistance() ?? 0;
+      const origin = player.body.translation();
+      const maxToi = PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS + snapDistance + 0.1;
+      const hit = world.castRayAndGetNormal(
+        new RAPIER.Ray(
+          {
+            x: origin.x,
+            y: origin.y + PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS,
+            z: origin.z
+          },
+          { x: 0, y: -1, z: 0 }
+        ),
+        maxToi,
+        true,
+        undefined,
+        undefined,
+        player.collider,
+        player.body,
+        (collider) => collider.handle !== player.collider.handle
+      );
+      if (!hit) {
+        return { hit: false, colliderHandle: null };
+      }
+      if (!Number.isFinite(hit.normal.y) || hit.normal.y < GROUND_CONTACT_MIN_NORMAL_Y) {
+        return { hit: false, colliderHandle: null };
+      }
+      return { hit: true, colliderHandle: hit.collider.handle };
+    },
     resolvePlatformPidByColliderHandle: (colliderHandle) =>
       platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
     onPlayerStepped: () => undefined

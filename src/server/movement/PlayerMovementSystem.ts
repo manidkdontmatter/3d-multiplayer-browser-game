@@ -11,6 +11,7 @@ import {
 } from "../../shared/index";
 
 type PlatformCarry = { x: number; y: number; z: number; yaw: number };
+type GroundSupportHit = { hit: boolean; colliderHandle: number | null };
 
 export interface PlayerMovementActor {
   yaw: number;
@@ -32,6 +33,7 @@ export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor
   readonly characterController: RAPIER.KinematicCharacterController;
   readonly beforePlayerMove?: (player: TPlayer) => void;
   readonly samplePlayerPlatformCarry: (player: TPlayer) => PlatformCarry;
+  readonly resolveGroundSupportColliderHandle: (player: TPlayer, groundedByQuery: boolean) => GroundSupportHit;
   readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
   readonly onPlayerStepped: (userId: number, player: TPlayer, platformYawDelta: number) => void;
 }
@@ -73,9 +75,11 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
 
       const moved = player.body.translation();
       const groundedByQuery = this.options.characterController.computedGrounded();
+      const supportHit = this.options.resolveGroundSupportColliderHandle(player, groundedByQuery);
       const groundedPlatformPid = this.resolveGroundedPlatformPidFromComputedCollisions(
         groundedByQuery,
-        player.groundedPlatformPid
+        player.groundedPlatformPid,
+        supportHit
       );
       const next = resolveKinematicPostStepState({
         previous: player,
@@ -105,8 +109,17 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
 
   private resolveGroundedPlatformPidFromComputedCollisions(
     groundedByQuery: boolean,
-    previousGroundedPlatformPid: number | null
+    previousGroundedPlatformPid: number | null,
+    supportHit: GroundSupportHit
   ): number | null {
+    if (groundedByQuery && supportHit.hit) {
+      const supportPid =
+        supportHit.colliderHandle !== null
+          ? this.options.resolvePlatformPidByColliderHandle(supportHit.colliderHandle)
+          : null;
+      return typeof supportPid === "number" ? supportPid : null;
+    }
+
     const collisionPlatformPids: number[] = [];
     const collisionCount = this.options.characterController.numComputedCollisions();
     for (let i = 0; i < collisionCount; i += 1) {

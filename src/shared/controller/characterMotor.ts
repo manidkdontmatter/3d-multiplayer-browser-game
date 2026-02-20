@@ -30,6 +30,7 @@ export interface KinematicPostStepResult {
 }
 
 export const GROUND_CONTACT_MIN_NORMAL_Y = Math.cos((60 * Math.PI) / 180);
+export const GROUND_ADHESION_VELOCITY = -1;
 
 export function applyPlatformCarryYaw(yaw: number, carryYaw: number): number {
   return normalizeYaw(yaw + carryYaw);
@@ -39,8 +40,12 @@ export function resolveVerticalVelocityForSolve(state: KinematicSolveState): num
   if (state.groundedPlatformPid !== null) {
     return 0;
   }
-  if (state.grounded && state.vy < 0) {
-    return 0;
+  if (state.grounded) {
+    if (state.vy > 0) {
+      return state.vy;
+    }
+    // Rapier snap-to-ground requires a slight downward desired movement.
+    return GROUND_ADHESION_VELOCITY;
   }
   return state.vy;
 }

@@ -7,6 +7,7 @@ import {
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
   getAbilityDefinitionById,
+  GROUND_CONTACT_MIN_NORMAL_Y,
   HOTBAR_SLOT_COUNT,
   NType,
   PLAYER_BODY_CENTER_HEIGHT,
@@ -259,6 +260,8 @@ export class GameSimulation {
         }
       },
       samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
+      resolveGroundSupportColliderHandle: (player, groundedByQuery) =>
+        this.resolveGroundSupportColliderHandle(player, groundedByQuery),
       resolvePlatformPidByColliderHandle: (colliderHandle) =>
         this.platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
       onPlayerStepped: (userId, player, platformYawDelta) => {
@@ -693,6 +696,44 @@ export class GameSimulation {
       entries.push([userId, runtimePlayer] as const);
     }
     return entries;
+  }
+
+  private resolveGroundSupportColliderHandle(
+    player: RuntimePlayerState,
+    groundedByQuery: boolean
+  ): { hit: boolean; colliderHandle: number | null } {
+    if (!groundedByQuery) {
+      return { hit: false, colliderHandle: null };
+    }
+
+    const snapDistance = this.characterController.snapToGroundDistance() ?? 0;
+    const origin = player.body.translation();
+    const maxToi = PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS + snapDistance + 0.1;
+    const ray = new RAPIER.Ray(
+      {
+        x: origin.x,
+        y: origin.y + PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS,
+        z: origin.z
+      },
+      { x: 0, y: -1, z: 0 }
+    );
+    const hit = this.world.castRayAndGetNormal(
+      ray,
+      maxToi,
+      true,
+      undefined,
+      undefined,
+      player.collider,
+      player.body,
+      (collider) => collider.handle !== player.collider.handle
+    );
+    if (!hit) {
+      return { hit: false, colliderHandle: null };
+    }
+    if (!Number.isFinite(hit.normal.y) || hit.normal.y < GROUND_CONTACT_MIN_NORMAL_Y) {
+      return { hit: false, colliderHandle: null };
+    }
+    return { hit: true, colliderHandle: hit.collider.handle };
   }
 
   private resolveProjectileModelId(kind: number): number {
