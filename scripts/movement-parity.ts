@@ -174,7 +174,7 @@ async function runParityTest(): Promise<void> {
         new RAPIER.Ray(
           {
             x: origin.x,
-            y: origin.y + PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS,
+            y: origin.y + 0.05,
             z: origin.z
           },
           { x: 0, y: -1, z: 0 }

@@ -375,7 +375,7 @@ export class LocalPhysicsWorld {
     const origin = this.playerBody.translation();
     const maxToi = PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS + snapDistance + 0.1;
     const ray = new RAPIER.Ray(
-      { x: origin.x, y: origin.y + PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS, z: origin.z },
+      { x: origin.x, y: origin.y + 0.05, z: origin.z },
       { x: 0, y: -1, z: 0 }
     );
     const hit = this.world.castRayAndGetNormal(
