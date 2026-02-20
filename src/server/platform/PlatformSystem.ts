@@ -1,12 +1,8 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
-  findGroundedPlatformPid,
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
-  PlatformSpatialIndex,
-  PLAYER_CAPSULE_HALF_HEIGHT,
-  PLAYER_CAPSULE_RADIUS,
   samplePlatformTransform,
   normalizeYaw
 } from "../../shared/index";
@@ -55,8 +51,7 @@ export interface PlatformSystemOptions {
 
 export class PlatformSystem {
   private readonly platformsByPid = new Map<number, PlatformEntity>();
-  private readonly platformSpatialIndex = new PlatformSpatialIndex();
-  private readonly platformQueryScratch: number[] = [];
+  private readonly platformPidByColliderHandle = new Map<number, number>();
 
   public constructor(private readonly options: PlatformSystemOptions) {}
 
@@ -106,9 +101,9 @@ export class PlatformSystem {
         collider
       };
       this.platformsByPid.set(platform.pid, platform);
+      this.platformPidByColliderHandle.set(collider.handle, platform.pid);
       this.options.onPlatformAdded?.(platform);
     }
-    this.rebuildPlatformSpatialIndex();
   }
 
   public updatePlatforms(previousElapsedSeconds: number, elapsedSeconds: number): void {
@@ -138,7 +133,6 @@ export class PlatformSystem {
       );
       this.options.onPlatformUpdated?.(platform);
     }
-    this.rebuildPlatformSpatialIndex();
   }
 
   public samplePlayerPlatformCarry(player: PlatformCarryActor): PlatformCarry {
@@ -167,36 +161,8 @@ export class PlatformSystem {
     };
   }
 
-  public findGroundedPlatformPid(
-    bodyX: number,
-    bodyY: number,
-    bodyZ: number,
-    preferredPid: number | null
-  ): number | null {
-    return findGroundedPlatformPid({
-      bodyX,
-      bodyY,
-      bodyZ,
-      preferredPid,
-      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
-      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
-      queryNearbyPlatformPids: (centerX, centerZ, halfX, halfZ, output) =>
-        this.platformSpatialIndex.queryAabb(centerX, centerZ, halfX, halfZ, output),
-      resolvePlatformByPid: (pid) => this.platformsByPid.get(pid),
-      queryScratch: this.platformQueryScratch
-    });
-  }
-
-  private rebuildPlatformSpatialIndex(): void {
-    this.platformSpatialIndex.clear();
-    for (const platform of this.platformsByPid.values()) {
-      this.platformSpatialIndex.insert({
-        pid: platform.pid,
-        x: platform.x,
-        z: platform.z,
-        halfX: platform.halfX,
-        halfZ: platform.halfZ
-      });
-    }
+  public resolvePlatformPidByColliderHandle(colliderHandle: number): number | null {
+    const pid = this.platformPidByColliderHandle.get(colliderHandle);
+    return typeof pid === "number" ? pid : null;
   }
 }

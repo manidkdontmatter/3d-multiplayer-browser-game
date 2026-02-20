@@ -1,6 +1,5 @@
 import process from "node:process";
 import RAPIER from "@dimforge/rapier3d-compat";
-import type { ChannelAABB3D } from "nengi";
 import { LocalPhysicsWorld } from "../src/client/runtime/LocalPhysicsWorld";
 import type { MovementInput } from "../src/client/runtime/types";
 import { PlayerMovementSystem } from "../src/server/movement/PlayerMovementSystem";
@@ -8,13 +7,13 @@ import { PlatformSystem } from "../src/server/platform/PlatformSystem";
 import { WorldBootstrapSystem } from "../src/server/world/WorldBootstrapSystem";
 import {
   PLATFORM_DEFINITIONS,
-  PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
   SERVER_TICK_SECONDS,
   normalizeYaw,
+  quaternionFromYawPitchRoll,
   samplePlatformTransform,
   stepHorizontalMovement
 } from "../src/shared/index";
@@ -37,6 +36,8 @@ type ServerParityPlayer = {
   x: number;
   y: number;
   z: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
   serverTick: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
@@ -45,14 +46,6 @@ type ServerParityPlayer = {
 const EPS_POSITION = 1e-3;
 const EPS_VELOCITY = 1e-3;
 const EPS_ANGLE = 1e-4;
-
-function createNoopSpatialChannel(): ChannelAABB3D {
-  const channel = {
-    addEntity: (_entity: unknown) => undefined,
-    removeEntity: (_entity: unknown) => undefined
-  };
-  return channel as unknown as ChannelAABB3D;
-}
 
 function createTrace(): MovementFrame[] {
   const frames: MovementFrame[] = [];
@@ -119,18 +112,14 @@ async function runParityTest(): Promise<void> {
   let tick = 0;
   let elapsedSeconds = 0;
 
-  const spatial = createNoopSpatialChannel();
   const worldBootstrap = new WorldBootstrapSystem({
-    world,
-    spatialChannel: spatial,
-    getTickNumber: () => tick
+    world
   });
   worldBootstrap.createStaticWorldColliders();
 
   const platformSystem = new PlatformSystem({
     world,
-    spatialChannel: spatial,
-    getTickNumber: () => tick
+    definitions: PLATFORM_DEFINITIONS
   });
   platformSystem.initializePlatforms();
 
@@ -161,6 +150,8 @@ async function runParityTest(): Promise<void> {
     x: platformOnePose.x,
     y: cameraY,
     z: platformOnePose.z,
+    position: { x: platformOnePose.x, y: cameraY, z: platformOnePose.z },
+    rotation: quaternionFromYawPitchRoll(0, 0),
     serverTick: tick,
     body,
     collider
@@ -170,10 +161,9 @@ async function runParityTest(): Promise<void> {
 
   const movementSystem = new PlayerMovementSystem<ServerParityPlayer>({
     characterController,
-    getTickNumber: () => tick,
     samplePlayerPlatformCarry: (player) => platformSystem.samplePlayerPlatformCarry(player),
-    findGroundedPlatformPid: (x, y, z, preferredPid) =>
-      platformSystem.findGroundedPlatformPid(x, y, z, preferredPid),
+    resolvePlatformPidByColliderHandle: (colliderHandle) =>
+      platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
     onPlayerStepped: () => undefined
   });
 

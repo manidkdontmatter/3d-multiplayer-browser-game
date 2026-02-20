@@ -2,8 +2,10 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarryYaw,
   buildDesiredCharacterTranslation,
+  GROUND_CONTACT_MIN_NORMAL_Y,
   PLAYER_CAMERA_OFFSET_Y,
   quaternionFromYawPitchRoll,
+  resolveGroundedPlatformPid,
   resolveKinematicPostStepState,
   resolveVerticalVelocityForSolve
 } from "../../shared/index";
@@ -30,12 +32,7 @@ export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor
   readonly characterController: RAPIER.KinematicCharacterController;
   readonly beforePlayerMove?: (player: TPlayer) => void;
   readonly samplePlayerPlatformCarry: (player: TPlayer) => PlatformCarry;
-  readonly findGroundedPlatformPid: (
-    bodyX: number,
-    bodyY: number,
-    bodyZ: number,
-    preferredPid: number | null
-  ) => number | null;
+  readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
   readonly onPlayerStepped: (userId: number, player: TPlayer, platformYawDelta: number) => void;
 }
 
@@ -76,14 +73,17 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
 
       const moved = player.body.translation();
       const groundedByQuery = this.options.characterController.computedGrounded();
+      const groundedPlatformPid = this.resolveGroundedPlatformPidFromComputedCollisions(
+        groundedByQuery,
+        player.groundedPlatformPid
+      );
       const next = resolveKinematicPostStepState({
         previous: player,
         movedBody: moved,
         groundedByQuery,
+        groundedPlatformPid,
         deltaSeconds,
-        playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
-        findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
-          this.options.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid)
+        playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y
       });
       player.grounded = next.grounded;
       player.groundedPlatformPid = next.groundedPlatformPid;
@@ -101,5 +101,35 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
       player.rotation.w = nextRotation.w;
       this.options.onPlayerStepped(userId, player, carry.yaw);
     }
+  }
+
+  private resolveGroundedPlatformPidFromComputedCollisions(
+    groundedByQuery: boolean,
+    previousGroundedPlatformPid: number | null
+  ): number | null {
+    const collisionPlatformPids: number[] = [];
+    const collisionCount = this.options.characterController.numComputedCollisions();
+    for (let i = 0; i < collisionCount; i += 1) {
+      const collision = this.options.characterController.computedCollision(i);
+      const collider = collision?.collider;
+      if (!collision || !collider) {
+        continue;
+      }
+      if (!Number.isFinite(collision.normal1.y) || collision.normal1.y < GROUND_CONTACT_MIN_NORMAL_Y) {
+        continue;
+      }
+      const pid = this.options.resolvePlatformPidByColliderHandle(collider.handle);
+      if (typeof pid !== "number") {
+        continue;
+      }
+      if (!collisionPlatformPids.includes(pid)) {
+        collisionPlatformPids.push(pid);
+      }
+    }
+    return resolveGroundedPlatformPid({
+      groundedByQuery,
+      previousGroundedPlatformPid,
+      collisionPlatformPids
+    });
   }
 }

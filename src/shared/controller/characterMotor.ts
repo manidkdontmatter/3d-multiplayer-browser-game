@@ -1,4 +1,4 @@
-import { GRAVITY, PLAYER_GROUND_STICK_VELOCITY } from "../config";
+import { GRAVITY } from "../config";
 import { normalizeYaw } from "../platforms";
 
 export interface PlatformCarryDelta {
@@ -29,17 +29,18 @@ export interface KinematicPostStepResult {
   z: number;
 }
 
+export const GROUND_CONTACT_MIN_NORMAL_Y = Math.cos((60 * Math.PI) / 180);
+
 export function applyPlatformCarryYaw(yaw: number, carryYaw: number): number {
   return normalizeYaw(yaw + carryYaw);
 }
 
 export function resolveVerticalVelocityForSolve(state: KinematicSolveState): number {
-  const attachedToPlatformForSolve = state.groundedPlatformPid !== null;
-  if (attachedToPlatformForSolve) {
+  if (state.groundedPlatformPid !== null) {
     return 0;
   }
-  if (state.grounded && state.vy <= 0) {
-    return PLAYER_GROUND_STICK_VELOCITY;
+  if (state.grounded && state.vy < 0) {
+    return 0;
   }
   return state.vy;
 }
@@ -58,41 +59,39 @@ export function buildDesiredCharacterTranslation(
   };
 }
 
+export function resolveGroundedPlatformPid(options: {
+  groundedByQuery: boolean;
+  previousGroundedPlatformPid: number | null;
+  collisionPlatformPids: readonly number[];
+}): number | null {
+  if (!options.groundedByQuery) {
+    return null;
+  }
+
+  if (
+    options.previousGroundedPlatformPid !== null &&
+    options.collisionPlatformPids.includes(options.previousGroundedPlatformPid)
+  ) {
+    return options.previousGroundedPlatformPid;
+  }
+
+  return options.collisionPlatformPids[0] ?? null;
+}
+
 export function resolveKinematicPostStepState(options: {
   previous: KinematicSolveState;
   movedBody: KinematicBodyPosition;
   groundedByQuery: boolean;
+  groundedPlatformPid: number | null;
   deltaSeconds: number;
   playerCameraOffsetY: number;
-  findGroundedPlatformPid: (
-    bodyX: number,
-    bodyY: number,
-    bodyZ: number,
-    preferredPid: number | null
-  ) => number | null;
 }): KinematicPostStepResult {
-  const canAttachToPlatform =
-    options.groundedByQuery ||
-    options.previous.groundedPlatformPid !== null ||
-    options.previous.vy <= 0;
-
-  const groundedPlatformPid = canAttachToPlatform
-    ? options.findGroundedPlatformPid(
-        options.movedBody.x,
-        options.movedBody.y,
-        options.movedBody.z,
-        options.previous.groundedPlatformPid
-      )
-    : null;
-
-  const grounded = options.groundedByQuery || groundedPlatformPid !== null;
+  const grounded = options.groundedByQuery;
+  const attachedPlatformPid = grounded ? options.groundedPlatformPid : null;
 
   let vy = options.previous.vy;
-  const attachedToPlatform = grounded && groundedPlatformPid !== null;
-  if (attachedToPlatform) {
-    vy = 0;
-  } else if (grounded) {
-    if (vy < 0) {
+  if (grounded) {
+    if (attachedPlatformPid !== null || vy < 0) {
       vy = 0;
     }
   } else {
@@ -101,7 +100,7 @@ export function resolveKinematicPostStepState(options: {
 
   return {
     grounded,
-    groundedPlatformPid: grounded ? groundedPlatformPid : null,
+    groundedPlatformPid: attachedPlatformPid,
     vy,
     x: options.movedBody.x,
     y: options.movedBody.y + options.playerCameraOffsetY,

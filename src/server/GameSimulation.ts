@@ -259,8 +259,8 @@ export class GameSimulation {
         }
       },
       samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
-      findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
-        this.platformSystem.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid),
+      resolvePlatformPidByColliderHandle: (colliderHandle) =>
+        this.platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
       onPlayerStepped: (userId, player, platformYawDelta) => {
         this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, player);
         const ackState = this.simulationEcs.getPlayerInputAckStateByUserId(userId);

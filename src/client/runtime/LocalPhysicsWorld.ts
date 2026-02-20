@@ -2,15 +2,15 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
   buildDesiredCharacterTranslation,
-  findGroundedPlatformPid,
+  GROUND_CONTACT_MIN_NORMAL_Y,
   normalizeYaw,
-  PlatformSpatialIndex,
   PLATFORM_DEFINITIONS,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
+  resolveGroundedPlatformPid,
   resolveKinematicPostStepState,
   resolveVerticalVelocityForSolve,
   STATIC_WORLD_BLOCKS,
@@ -36,9 +36,6 @@ export interface ReconciliationState {
 interface LocalPlatformBody {
   pid: number;
   body: RAPIER.RigidBody;
-  halfX: number;
-  halfY: number;
-  halfZ: number;
   x: number;
   y: number;
   z: number;
@@ -51,8 +48,7 @@ export class LocalPhysicsWorld {
   private readonly playerCollider: RAPIER.Collider;
   private readonly world: RAPIER.World;
   private readonly platformBodies = new Map<number, LocalPlatformBody>();
-  private readonly platformSpatialIndex = new PlatformSpatialIndex();
-  private readonly platformQueryScratch: number[] = [];
+  private readonly platformPidByColliderHandle = new Map<number, number>();
   private grounded = false;
   private groundedPlatformPid: number | null = null;
   private verticalVelocity = 0;
@@ -121,7 +117,7 @@ export class LocalPhysicsWorld {
           platformPose.z
         )
       );
-      world.createCollider(
+      const platformCollider = world.createCollider(
         RAPIER.ColliderDesc.cuboid(platformDef.halfX, platformDef.halfY, platformDef.halfZ),
         platformBody
       );
@@ -132,14 +128,12 @@ export class LocalPhysicsWorld {
       local.platformBodies.set(platformDef.pid, {
         pid: platformDef.pid,
         body: platformBody,
-        halfX: platformDef.halfX,
-        halfY: platformDef.halfY,
-        halfZ: platformDef.halfZ,
         x: platformPose.x,
         y: platformPose.y,
         z: platformPose.z,
         yaw: platformPose.yaw
       });
+      local.platformPidByColliderHandle.set(platformCollider.handle, platformDef.pid);
     }
     local.syncPlatformBodies(0);
 
@@ -204,6 +198,10 @@ export class LocalPhysicsWorld {
     this.world.step();
     const position = this.playerBody.translation();
     const groundedByQuery = this.characterController.computedGrounded();
+    const groundedPlatformPid = this.resolveGroundedPlatformPidFromComputedCollisions(
+      groundedByQuery,
+      this.groundedPlatformPid
+    );
     const next = resolveKinematicPostStepState({
       previous: {
         grounded: this.grounded,
@@ -212,10 +210,9 @@ export class LocalPhysicsWorld {
       },
       movedBody: position,
       groundedByQuery,
+      groundedPlatformPid,
       deltaSeconds: dt,
-      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
-      findGroundedPlatformPid: (bodyX, bodyY, bodyZ, preferredPid) =>
-        this.findGroundedPlatformPid(bodyX, bodyY, bodyZ, preferredPid)
+      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y
     });
     this.grounded = next.grounded;
     this.groundedPlatformPid = next.groundedPlatformPid;
@@ -286,7 +283,6 @@ export class LocalPhysicsWorld {
   }
 
   private syncPlatformBodies(seconds: number): void {
-    this.platformSpatialIndex.clear();
     for (const platformDef of PLATFORM_DEFINITIONS) {
       const platform = this.platformBodies.get(platformDef.pid);
       if (!platform) {
@@ -302,13 +298,6 @@ export class LocalPhysicsWorld {
         { x: 0, y: Math.sin(pose.yaw * 0.5), z: 0, w: Math.cos(pose.yaw * 0.5) },
         true
       );
-      this.platformSpatialIndex.insert({
-        pid: platform.pid,
-        x: platform.x,
-        z: platform.z,
-        halfX: platform.halfX,
-        halfZ: platform.halfZ
-      });
     }
   }
 
@@ -339,23 +328,33 @@ export class LocalPhysicsWorld {
     };
   }
 
-  private findGroundedPlatformPid(
-    bodyX: number,
-    bodyY: number,
-    bodyZ: number,
-    preferredPid: number | null
+  private resolveGroundedPlatformPidFromComputedCollisions(
+    groundedByQuery: boolean,
+    previousGroundedPlatformPid: number | null
   ): number | null {
-    return findGroundedPlatformPid({
-      bodyX,
-      bodyY,
-      bodyZ,
-      preferredPid,
-      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
-      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
-      queryNearbyPlatformPids: (centerX, centerZ, halfX, halfZ, output) =>
-        this.platformSpatialIndex.queryAabb(centerX, centerZ, halfX, halfZ, output),
-      resolvePlatformByPid: (pid) => this.platformBodies.get(pid),
-      queryScratch: this.platformQueryScratch
+    const collisionPlatformPids: number[] = [];
+    const collisionCount = this.characterController.numComputedCollisions();
+    for (let i = 0; i < collisionCount; i += 1) {
+      const collision = this.characterController.computedCollision(i);
+      const collider = collision?.collider;
+      if (!collision || !collider) {
+        continue;
+      }
+      if (!Number.isFinite(collision.normal1.y) || collision.normal1.y < GROUND_CONTACT_MIN_NORMAL_Y) {
+        continue;
+      }
+      const pid = this.platformPidByColliderHandle.get(collider.handle);
+      if (typeof pid !== "number") {
+        continue;
+      }
+      if (!collisionPlatformPids.includes(pid)) {
+        collisionPlatformPids.push(pid);
+      }
+    }
+    return resolveGroundedPlatformPid({
+      groundedByQuery,
+      previousGroundedPlatformPid,
+      collisionPlatformPids
     });
   }
 
