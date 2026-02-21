@@ -35,7 +35,7 @@ export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor
   readonly samplePlayerPlatformCarry: (player: TPlayer) => PlatformCarry;
   readonly resolveGroundSupportColliderHandle: (player: TPlayer, groundedByQuery: boolean) => GroundSupportHit;
   readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
-  readonly onPlayerStepped: (userId: number, player: TPlayer, platformYawDelta: number) => void;
+  readonly onPlayerStepped: (userId: number, player: TPlayer) => void;
 }
 
 export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
@@ -103,7 +103,7 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
       player.rotation.y = nextRotation.y;
       player.rotation.z = nextRotation.z;
       player.rotation.w = nextRotation.w;
-      this.options.onPlayerStepped(userId, player, carry.yaw);
+      this.options.onPlayerStepped(userId, player);
     }
   }
 

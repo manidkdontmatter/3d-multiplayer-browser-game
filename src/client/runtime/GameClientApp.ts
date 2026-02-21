@@ -4,11 +4,14 @@ import {
   DEFAULT_HOTBAR_ABILITY_IDS,
   getAbilityDefinitionById,
   normalizeYaw,
+  PLATFORM_DEFINITIONS,
   SERVER_TICK_SECONDS
 } from "../../shared/index";
+import { samplePlatformTransform } from "../../shared/platforms";
 import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
 import { LocalPhysicsWorld } from "./LocalPhysicsWorld";
+import { DeterministicPlatformTimeline } from "./DeterministicPlatformTimeline";
 import { WorldRenderer } from "./WorldRenderer";
 import type { MovementInput, PlayerPose } from "./types";
 import { AbilityHud } from "../ui/AbilityHud";
@@ -30,6 +33,7 @@ export class GameClientApp {
   private readonly abilityHud: AbilityHud;
   private readonly authPanel: AuthPanel;
   private readonly network = new NetworkClient();
+  private readonly platformTimeline = new DeterministicPlatformTimeline();
   private readonly clock = new Clock();
   private readonly physics: LocalPhysicsWorld;
   private accumulator = 0;
@@ -45,6 +49,7 @@ export class GameClientApp {
   private cspEnabled: boolean;
   private predictedPlatformYawCarrySinceAck = 0;
   private testMovementOverride: MovementInput | null = null;
+  private lastNonCspYawCarryServerTimeSeconds: number | null = null;
   private reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
   private reconciliationRenderOffsetPlatformPid: number | null = null;
   private reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
@@ -158,7 +163,7 @@ export class GameClientApp {
     this.trackFps(seconds);
     if (this.input.consumeCameraFreezeToggle()) {
       this.freezeCamera = !this.freezeCamera;
-      this.frozenCameraPose = this.freezeCamera ? this.physics.getPose() : null;
+      this.frozenCameraPose = this.freezeCamera ? this.getRenderPose() : null;
     }
     if (this.input.consumeCspToggle()) {
       this.cspEnabled = !this.cspEnabled;
@@ -194,7 +199,7 @@ export class GameClientApp {
     this.renderer.setLocalPlayerNid(this.network.getLocalPlayerNid());
     this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
     this.renderer.applyAbilityUseEvents(this.network.consumeAbilityUseEvents());
-    this.renderer.syncPlatforms(this.network.getPlatforms());
+    this.renderer.syncPlatforms(this.getRenderPlatformStates());
     this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
     this.renderer.syncProjectiles(this.network.getProjectiles(), seconds);
     this.renderer.render(pose);
@@ -224,6 +229,7 @@ export class GameClientApp {
     const cspActive = this.isCspActive();
     let preReconciliationPose: PlayerPose | null = null;
     if (cspActive) {
+      this.lastNonCspYawCarryServerTimeSeconds = null;
       const predictedPlatformYawDelta = this.physics.predictAttachedPlatformYawDelta(delta);
       if (Math.abs(predictedPlatformYawDelta) > 1e-6) {
         this.input.applyYawDelta(predictedPlatformYawDelta);
@@ -237,25 +243,13 @@ export class GameClientApp {
       preReconciliationPose = this.physics.getPose();
     } else {
       this.predictedPlatformYawCarrySinceAck = 0;
+      this.applyDeterministicPlatformYawCarryForCspOff();
       this.resetReconciliationSmoothing();
     }
 
     const recon = this.network.consumeReconciliationFrame();
     if (recon) {
-      if (recon.ack.groundedPlatformPid >= 0) {
-        const residualPlatformYawDelta = normalizeYaw(
-          recon.ack.platformYawDelta - this.predictedPlatformYawCarrySinceAck
-        );
-        if (Math.abs(residualPlatformYawDelta) > 1e-6) {
-          this.input.applyYawDelta(residualPlatformYawDelta);
-          this.network.shiftPendingInputYaw(residualPlatformYawDelta);
-        }
-        this.predictedPlatformYawCarrySinceAck = 0;
-        // Keep delta baseline aligned after external yaw adjustment to avoid double-applying carry.
-        this.network.syncSentYaw(this.input.getYaw());
-      } else {
-        this.predictedPlatformYawCarrySinceAck = 0;
-      }
+      this.predictedPlatformYawCarrySinceAck = 0;
 
       this.physics.setReconciliationState({
         x: recon.ack.x,
@@ -374,7 +368,7 @@ export class GameClientApp {
       this.renderer.setLocalPlayerNid(this.network.getLocalPlayerNid());
       this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
       this.renderer.applyAbilityUseEvents(this.network.consumeAbilityUseEvents());
-      this.renderer.syncPlatforms(this.network.getPlatforms());
+      this.renderer.syncPlatforms(this.getRenderPlatformStates());
       this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
       this.renderer.syncProjectiles(this.network.getProjectiles(), FIXED_STEP);
       this.renderer.render(this.getRenderPose());
@@ -393,7 +387,7 @@ export class GameClientApp {
           ...pose,
           nid: this.network.getLocalPlayerNid()
         },
-        platforms: this.network.getPlatforms().map((p) => ({
+        platforms: this.getRenderPlatformStates().map((p) => ({
           nid: p.nid,
           modelId: p.modelId,
           x: p.x,
@@ -512,15 +506,73 @@ export class GameClientApp {
     if (this.freezeCamera && this.frozenCameraPose) {
       return { ...this.frozenCameraPose };
     }
-    const pose = this.physics.getPose();
+    const renderPosition = this.getRenderPosition();
     const renderOffset = this.getReconciliationRenderOffsetWorld();
     return {
-      x: pose.x + renderOffset.x,
-      y: pose.y + renderOffset.y,
-      z: pose.z + renderOffset.z,
-      yaw: pose.yaw,
-      pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, pose.pitch))
+      x: renderPosition.x + renderOffset.x,
+      y: renderPosition.y + renderOffset.y,
+      z: renderPosition.z + renderOffset.z,
+      yaw: this.input.getYaw(),
+      pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, this.input.getPitch()))
     };
+  }
+
+  private getRenderPosition(): { x: number; y: number; z: number } {
+    if (this.isCspActive()) {
+      const pose = this.physics.getPose();
+      return { x: pose.x, y: pose.y, z: pose.z };
+    }
+
+    const authoritative = this.network.getLocalPlayerPose();
+    if (authoritative) {
+      return { x: authoritative.x, y: authoritative.y, z: authoritative.z };
+    }
+
+    const fallback = this.physics.getPose();
+    return { x: fallback.x, y: fallback.y, z: fallback.z };
+  }
+
+  private getRenderPlatformStates() {
+    return this.platformTimeline.sampleStates(this.resolveRenderServerTimeSeconds());
+  }
+
+  private resolveRenderServerTimeSeconds(): number {
+    if (this.isCspActive()) {
+      return this.physics.getSimulationSeconds();
+    }
+    const estimatedServerSeconds = this.network.getEstimatedServerTimeSeconds();
+    if (estimatedServerSeconds !== null) {
+      const interpolationDelaySeconds = this.network.getInterpolationDelayMs() / 1000;
+      return Math.max(0, estimatedServerSeconds - interpolationDelaySeconds);
+    }
+    return this.physics.getSimulationSeconds();
+  }
+
+  private applyDeterministicPlatformYawCarryForCspOff(): void {
+    const currentServerTimeSeconds = this.resolveRenderServerTimeSeconds();
+    const previousServerTimeSeconds = this.lastNonCspYawCarryServerTimeSeconds;
+    this.lastNonCspYawCarryServerTimeSeconds = currentServerTimeSeconds;
+    if (previousServerTimeSeconds === null) {
+      return;
+    }
+
+    const groundedPlatformPid = this.network.getServerGroundedPlatformPid();
+    if (groundedPlatformPid < 0) {
+      return;
+    }
+    const definition = PLATFORM_DEFINITIONS.find((platform) => platform.pid === groundedPlatformPid);
+    if (!definition) {
+      return;
+    }
+
+    const previousPose = samplePlatformTransform(definition, previousServerTimeSeconds);
+    const currentPose = samplePlatformTransform(definition, currentServerTimeSeconds);
+    const yawDelta = normalizeYaw(currentPose.yaw - previousPose.yaw);
+    if (Math.abs(yawDelta) <= 1e-6) {
+      return;
+    }
+    this.input.applyYawDelta(yawDelta);
+    this.network.syncSentYaw(this.input.getYaw());
   }
 
   private updateReconciliationSmoothing(

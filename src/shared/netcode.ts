@@ -51,14 +51,11 @@ export const inputAckMessageSchema = defineSchema({
   x: Binary.Float32,
   y: Binary.Float32,
   z: Binary.Float32,
-  yaw: Binary.Rotation32,
-  pitch: Binary.Rotation32,
   vx: Binary.Float32,
   vy: Binary.Float32,
   vz: Binary.Float32,
   grounded: Binary.Boolean,
-  groundedPlatformPid: Binary.Int16,
-  platformYawDelta: Binary.Float32
+  groundedPlatformPid: Binary.Int16
 });
 
 export const abilityDefinitionMessageSchema = defineSchema({
@@ -157,14 +154,11 @@ export interface InputAckMessage {
   x: number;
   y: number;
   z: number;
-  yaw: number;
-  pitch: number;
   vx: number;
   vy: number;
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
-  platformYawDelta: number;
 }
 
 export interface AbilityDefinitionMessage {

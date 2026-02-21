@@ -16,14 +16,11 @@ export interface ReconciliationAck {
   x: number;
   y: number;
   z: number;
-  yaw: number;
-  pitch: number;
   vx: number;
   vy: number;
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
-  platformYawDelta: number;
 }
 
 export interface ReconciliationFrame {

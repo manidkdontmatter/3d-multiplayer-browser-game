@@ -250,6 +250,10 @@ export class LocalPhysicsWorld {
     return { ...this.pose };
   }
 
+  public getSimulationSeconds(): number {
+    return this.simulationSeconds;
+  }
+
   public getPlatformTransform(pid: number): { x: number; y: number; z: number; yaw: number } | null {
     const platform = this.platformBodies.get(pid);
     if (!platform) {

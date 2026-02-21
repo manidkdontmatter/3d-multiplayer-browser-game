@@ -236,10 +236,6 @@ export class GameSimulation {
       definitions: this.archetypes.platforms,
       onPlatformAdded: (platform) => {
         this.simulationEcs.registerPlatform(platform);
-        const eid = this.requireEid(platform);
-        const nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(platform));
-        platform.nid = nid;
-        this.simulationEcs.setEntityNidByEid(eid, nid);
       },
       onPlatformUpdated: (platform) => {
         this.simulationEcs.syncPlatform(platform);
@@ -264,12 +260,12 @@ export class GameSimulation {
         this.resolveGroundSupportColliderHandle(player, groundedByQuery),
       resolvePlatformPidByColliderHandle: (colliderHandle) =>
         this.platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
-      onPlayerStepped: (userId, player, platformYawDelta) => {
+      onPlayerStepped: (userId, player) => {
         this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, player);
         const ackState = this.simulationEcs.getPlayerInputAckStateByUserId(userId);
         if (ackState) {
           this.replicationMessaging.syncUserViewPosition(userId, ackState.x, ackState.y, ackState.z);
-          this.replicationMessaging.queueInputAckFromState(userId, ackState, platformYawDelta);
+          this.replicationMessaging.queueInputAckFromState(userId, ackState);
         }
         this.persistenceSyncSystem.markAccountDirty(player.accountId, {
           dirtyCharacter: true,

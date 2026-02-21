@@ -23,7 +23,7 @@ export class AckReconciliationBuffer {
   private hasSentYaw = false;
 
   public constructor(
-    private readonly onAckAccepted: (acceptedAtMs: number) => void,
+    private readonly onAckAccepted: (acceptedAtMs: number, serverTick: number) => void,
     private readonly nowMs: () => number = () => performance.now()
   ) {}
 
@@ -146,17 +146,7 @@ export class AckReconciliationBuffer {
       return;
     }
     this.lastAckSequence = message.sequence;
-    this.onAckAccepted(this.nowMs());
-
-    const platformYawDelta = Number.isFinite(message.platformYawDelta) ? message.platformYawDelta : 0;
-    let accumulatedPlatformYawDelta = platformYawDelta;
-    if (
-      this.latestAck &&
-      this.latestAck.groundedPlatformPid >= 0 &&
-      this.latestAck.groundedPlatformPid === message.groundedPlatformPid
-    ) {
-      accumulatedPlatformYawDelta = normalizeYaw(this.latestAck.platformYawDelta + platformYawDelta);
-    }
+    this.onAckAccepted(this.nowMs(), message.serverTick);
 
     this.latestAck = {
       sequence: message.sequence,
@@ -164,14 +154,11 @@ export class AckReconciliationBuffer {
       x: message.x,
       y: message.y,
       z: message.z,
-      yaw: message.yaw,
-      pitch: message.pitch,
       vx: message.vx,
       vy: message.vy,
       vz: message.vz,
       grounded: message.grounded,
-      groundedPlatformPid: message.groundedPlatformPid,
-      platformYawDelta: accumulatedPlatformYawDelta
+      groundedPlatformPid: message.groundedPlatformPid
     };
 
     this.serverGroundedPlatformPid = message.groundedPlatformPid;

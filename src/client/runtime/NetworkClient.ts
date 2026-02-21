@@ -22,6 +22,7 @@ import { AbilityStateStore } from "./network/AbilityStateStore";
 import { AckReconciliationBuffer } from "./network/AckReconciliationBuffer";
 import { InterpolationController } from "./network/InterpolationController";
 import { NetTransportClient } from "./network/NetTransportClient";
+import { ServerTimeSync } from "./network/ServerTimeSync";
 import { SnapshotStore } from "./network/SnapshotStore";
 import type {
   AbilityEventBatch,
@@ -39,14 +40,16 @@ export class NetworkClient {
   private readonly snapshots = new SnapshotStore();
   private readonly abilities = new AbilityStateStore();
   private readonly interpolation = new InterpolationController();
+  private readonly serverTimeSync = new ServerTimeSync();
   private readonly ackBuffer: AckReconciliationBuffer;
   private readonly netSimulation = this.resolveNetSimulationConfig();
   private queuedLoadoutCommand: QueuedLoadoutCommand | null = null;
   private localPlayerNid: number | null = null;
 
   public constructor() {
-    this.ackBuffer = new AckReconciliationBuffer((acceptedAtMs) => {
+    this.ackBuffer = new AckReconciliationBuffer((acceptedAtMs, serverTick) => {
       this.interpolation.observeAckArrival(acceptedAtMs);
+      this.serverTimeSync.observeAck(serverTick, acceptedAtMs);
     });
 
     this.transport = new NetTransportClient(
@@ -56,6 +59,7 @@ export class NetworkClient {
         this.snapshots.reset();
         this.abilities.reset();
         this.interpolation.reset();
+        this.serverTimeSync.reset();
         this.ackBuffer.reset();
         this.queuedLoadoutCommand = null;
       },
@@ -192,12 +196,20 @@ export class NetworkClient {
     return this.ackBuffer.getServerGroundedPlatformPid() >= 0;
   }
 
+  public getServerGroundedPlatformPid(): number {
+    return this.ackBuffer.getServerGroundedPlatformPid();
+  }
+
   public getInterpolationDelayMs(): number {
     return this.interpolation.getInterpolationDelayMs();
   }
 
   public getAckJitterMs(): number {
     return this.interpolation.getAckJitterMs();
+  }
+
+  public getEstimatedServerTimeSeconds(nowMs: number = performance.now()): number | null {
+    return this.serverTimeSync.getEstimatedServerTimeSeconds(nowMs);
   }
 
   public syncSentYaw(yaw: number): void {

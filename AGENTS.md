@@ -12,13 +12,52 @@
 
 - At session start, read in this order:
   1. `AGENTS.md`
-  2. `docs-map.md` (if present)
-  3. `overview.md` (if present)
-  4. `vision.md` (if present)
-  5. Curated indexes: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` (when present)
+  2. `overview.md` (if present)
+  3. `design-doc.md`
+  4. Curated indexes: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` (when present)
+  5. Task-targeted files in `docs/` only as needed (avoid bulk-loading vendored trees)
+- `AGENTS.md` and `overview.md` are memory docs and may be reorganized to improve execution quality.
+- `design-doc.md` is the canonical game-design source and is only edited when explicitly requested.
 - Then load only task-relevant files in `docs/`; avoid bulk-reading vendored trees.
-- The aforementioned .md files are considered your memory, you are free to alter your memory however you see fit to increase your productivity and intelligence.
-- Read `design-doc.md`. It is not a memory file do not alter it. It is also a very important document.
+
+## Markdown Roles
+
+- `AGENTS.md`
+  - What it is: persistent instructions for how the agent should operate in this repo.
+  - Include: workflow rules, tooling/runtime constraints, memory behavior, decision heuristics.
+  - Exclude: long-form project narrative/history and temporary task status.
+- `overview.md`
+  - What it is: canonical high-level description of what the project is and how it works.
+  - Include: architecture, stack, core modules, netcode model, key workflows.
+  - Exclude: step-by-step session logs, agent-behavior policy, and transient one-session status notes.
+- `design-doc.md`
+  - What it is: canonical product direction and gameplay/technical design intent.
+  - Include: game direction, gameplay systems intent, architectural constraints that define the product.
+  - Exclude: routine implementation logs and temporary task status.
+- `README.md`
+  - What it is: human-facing quickstart/onboarding for running and testing the project.
+  - Include: setup commands, local run/test commands, quick operational notes.
+  - Exclude: detailed architecture rationale and agent-only policies.
+
+## Markdown Maintenance
+
+- If architecture/tooling/workflows materially change, update `overview.md`.
+- If product direction/gameplay rules materially change, update `design-doc.md`.
+- If operating behavior or memory policy changes, update `AGENTS.md`.
+- If run/test onboarding materially changes, update `README.md`.
+- If a file starts accumulating content that belongs elsewhere, move it.
+
+## Markdown Conflict Resolution
+
+If docs disagree, resolve in this order:
+1. Safety and production-grade engineering constraints.
+2. Explicit user instruction in the active thread.
+3. `design-doc.md` for product direction and canonical game rules.
+4. `AGENTS.md` for agent operating behavior/memory policy.
+5. `overview.md` for architecture and system behavior.
+6. `README.md` for human-facing run/test onboarding details.
+
+After deciding, update conflicting docs in the same pass so contradictions are removed, not carried forward.
 
 ## Workflow and Tooling
 
@@ -59,6 +98,8 @@
 - No hacky crap, do real industry standard solutions with best practices, most problems/features/etc have known ideal solutions
 - Some requests, when appropriate, should be considered full refactors instead of trying to keep compatibility with existing systems/features/architecture, in which case make existing systems align with the request, instead of making the new system align with existing systems.
 - Make existing systems align with the current task, do not make the current task align with existing systems.
+- If you do not know enough about a topic, use the internet to get accurate information, never just guess if your knowledge in a certain area is not extensive enough to do the task properly, because what happens if you often mess up the task instead of doing it correctly.
+- do not be sycophantic ever. just be intelligent, a genius at software architecture and systems design.
 
 ## UI and Feature Standards
 
@@ -71,18 +112,19 @@
 ## Memory and Documentation Rules
 
 - Memory write rule: when user says "remember" (or equivalent), or when adding memory proactively, persist it in whichever existing .md file makes the most sense.
-- Memory consistency rule: every memory write/update must include immediate contradiction checks across `AGENTS.md`, `docs-map.md`, `overview.md`, and `vision.md`; resolve in the same pass and ask user only if ambiguity is real.
+- Memory consistency rule: every memory write/update must include immediate contradiction checks across `AGENTS.md`, `overview.md`, and `design-doc.md` (and `README.md` when onboarding/commands are affected); resolve in the same pass and ask user only if ambiguity is real.
 - Treat Rapier init-params deprecation warning (`using deprecated parameters for the initialization function; pass a single object instead`) as non-actionable because it originates from Rapier internal self-usage rather than project code.
 - Project authorship rule: treat this repository as agent-authored for decision-making; default to full authority to refactor/replace code and structure when it improves production outcomes.
-- Ownership rule: treat `AGENTS.md`, `docs-map.md`, `overview.md`, and `vision.md` as agent-managed working memory docs and improve/restructure freely when it increases execution quality.
+- Ownership rule: treat `AGENTS.md` and `overview.md` as agent-managed working memory docs and improve/restructure freely when it increases execution quality.
 - Scope boundaries:
   - `overview.md`: canonical high-level architecture/workflows.
-  - `vision.md`: product direction and experience/style pillars.
-  - `docs-map.md`: markdown responsibilities and read order.
+  - `design-doc.md`: canonical product direction, gameplay rules, and experience/style pillars.
+  - `README.md`: quickstart and test/run onboarding.
   - User preference:
     - Commit after every task completion, and if asked to commit, include all current workspace changes in that commit (no partial staging); if a task is finished, push to GitHub when the last push was over 30 minutes ago.
     - If a system is fundamentally non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.
     - When starting local terminals/processes for testing (especially game server/client dev terminals), always stop/close them when the task/check is complete.
+    - Prefer starting dev/test processes in the same terminal session or as background processes that do not open new terminal windows; if any terminal windows are opened, close the windows themselves after completion.
     - Treat older/legacy tests as potentially stale: when a test fails, validate whether the test assumptions still match current game architecture/behavior before concluding the underlying game system is broken.
     - For multiplayer browser automation tests, run each client in a separate browser window/process (not separate tabs in one window) to avoid inactive-tab throttling artifacts.
     - In headless browser automation, do not rely on RAF cadence for gameplay/test progress; drive simulation deterministically through test hooks (for example `window.advanceTime`) whenever possible.

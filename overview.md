@@ -49,6 +49,9 @@ Runtime entry points:
 - Fixed server tick cadence with deterministic ordering.
 - AOI/visibility via nengi spatial channels.
 - Client prediction mirrors server movement/collision as closely as possible.
+- Local first-person camera look (`yaw`/`pitch`) is client-owned presentation state and updates immediately from local input regardless of CSP mode; reconciliation/acks correct authoritative movement state, not free-look camera orientation.
+- Moving/rotating platforms are sampled deterministically from shared platform definitions on both server and client using synchronized server-time estimation; platform visuals no longer depend on per-tick replicated platform transform snapshots.
+- Input acks carry authoritative player reconciliation state (`sequence`, `serverTick`, transform/velocity/grounded) only; platform yaw carry is derived from deterministic local platform deltas rather than ack payloads.
 
 ## Key Gameplay Systems (Current)
 
@@ -78,5 +81,4 @@ Runtime entry points:
 - `scripts`: test/automation scripts
 - `docs`: local reference docs for nengi/Three.js/Rapier
 - `AGENTS.md`: persistent operating instructions/memory rules
-- `vision.md`: product/game direction
-- `docs-map.md`: markdown file responsibilities/read order
+- `design-doc.md`: canonical game vision/product direction/gameplay and technical intent

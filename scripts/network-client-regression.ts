@@ -13,9 +13,11 @@ function assert(condition: boolean, message: string): void {
 function runAckBufferRegression(): void {
   let now = 0;
   const ackArrivalSamples: number[] = [];
+  const ackServerTicks: number[] = [];
   const buffer = new AckReconciliationBuffer(
-    (acceptedAtMs) => {
+    (acceptedAtMs, serverTick) => {
       ackArrivalSamples.push(acceptedAtMs);
+      ackServerTicks.push(serverTick);
     },
     () => now
   );
@@ -30,14 +32,11 @@ function runAckBufferRegression(): void {
     x: 1,
     y: 2,
     z: 3,
-    yaw: 0.1,
-    pitch: 0,
     vx: 1,
     vy: 0,
     vz: 0,
     grounded: true,
-    groundedPlatformPid: -1,
-    platformYawDelta: 0
+    groundedPlatformPid: -1
   };
   buffer.enqueueAckMessage(ack1, { enabled: false, ackDropRate: 0, ackDelayMs: 0, ackJitterMs: 0 });
 
@@ -55,8 +54,7 @@ function runAckBufferRegression(): void {
     ...ack1,
     sequence: 2,
     serverTick: 12,
-    groundedPlatformPid: 2,
-    platformYawDelta: 0.02
+    groundedPlatformPid: 2
   };
   buffer.enqueueAckMessage(delayedAck, { enabled: true, ackDropRate: 0, ackDelayMs: 100, ackJitterMs: 0 });
   now = 50;
@@ -69,6 +67,7 @@ function runAckBufferRegression(): void {
   assert(frame2 !== null, "Ack should be processed at ready time");
   assert(frame2?.ack.sequence === 2, "Expected ack sequence 2");
   assert(ackArrivalSamples.length >= 2, "Expected ack arrival callback to be invoked");
+  assert(ackServerTicks.includes(10) && ackServerTicks.includes(12), "Expected ack server ticks to be observed");
   assert(buffer.getServerGroundedPlatformPid() === 2, "Expected grounded platform pid to update");
 }
 

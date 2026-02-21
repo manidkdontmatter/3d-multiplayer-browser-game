@@ -11,17 +11,26 @@
 - Characters can change their hair and clothes and skin color. There will also be multiple races to play as including human and more, but races other than human many require unlocking.
 - You can customize your character's stats and add attributes to them to further augment them beyond just stats. Attributes can be extra upsides or downsides that you add to your character that can't be accomplished merely by adding or removing points from stats. Although some races may be able to have a certain amount of good attributes added to them without adding bad attributes, generally to add more good attributes beyond that you must also choose a bad attribute, thus sacrificing something to gain something. This customization of stats then choosing attributes often applies to more than just characters, abilities and items feature similar systems.
 
+# Player Flow
+- On join, players spawn immediately as a default human character.
+- Character customization and starter stat allocation happen in-game after spawn, not as a blocking front-loaded character creator.
+
 # Setting
 - TBD
 
 # Aesthetic
-- TBD
+- Low-poly/retro presentation with realistic proportions.
+- Light/optimistic overall tone (not dark, yet not cartoony).
+- Practical asset-delivery awareness (lighter texture/asset footprint where possible).
+- UI style direction keywords: astral, spiritual, etherical.
 
 # Technical / Architectural
 - Players will host their own servers on a VPS they own, because this game is open source so they have access to the server/client files. There is no sharding or clustering or horizontal scaling, an entire game server is just one VPS, including all persisted state. All assets are served from that VPS as well, not a separate CDN.
 - Player servers will register themselves into a separate server list app which has nothing to do with this app, the server list app is a website which displays all servers to potential players who can then click a specific server to join it, which sends them to the IP/URL of the VPS the player host has put the server on, because clicking to join a server literally leaves to another IP/Domain, this allows each server to potentially be running a highly modded version of the game with different code and assets without any problems, it is literally like leaving the server list website and going to the specific website/IP of that specific game server.
 - No state is shared between separate game servers, they're their own island, players have their own characters that only exist on that specific server etc, if they join a different server it's like starting from scratch.
-- Decide on a coherent UI style up front and use it for all game UI. The style must be of great quality for a game. I would describe the UI using these keywords, because this game types place in the astral realm: astral, spiritual, etherical
+- Strict client/server separation and authoritative server simulation are mandatory.
+- Design changes must stay compatible with high-player-count authoritative netcode.
+- Only synchronize data that materially needs network sync in a professional multiplayer game; avoid syncing local-only/cosmetic state.
 - Use game design patterns where appropriate: pooling, flyweight, ecs, state pattern, command pattern, observer pattern, factory pattern, component pattern, singletons, strategy pattern, goap, fluent builder pattern, blackboard, service locator, spatial partitioning
 - a big aspect of this project's architecture is top down design, multiple top level systems that govern their systems but other systems can communicate with other systems but if possible should not directly control things that are part of another system's system, aka avoid tight coupling
 - keep systems decoupled and self contained, in their own modules
@@ -41,6 +50,7 @@
 
 # Characters
 - First person only, walking, running (same as sprinting), jumping, flying, and more.
+- Baseline movement feel should stay snappy and streamlined (boomer-shooter/immersive-sim inspired), not heavy/cinematic.
 - Support for multiple playable races. Everyone starts off human and can unlock the other races. The other races are then extra playable characters you can switch to during gameplay, thus you have multiple saved characters each separate from each other, but only one per each race.
 
 # Combat

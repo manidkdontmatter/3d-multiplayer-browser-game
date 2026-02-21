@@ -48,7 +48,6 @@ Authoritative server/browser-client scaffold using:
 ## Project Docs
 
 - `overview.md`: canonical summary of what the project is and how it works.
-- `vision.md`: product/gameplay/aesthetic direction and long-range goals.
+- `design-doc.md`: canonical game vision/product direction/gameplay and technical intent.
 - `AGENTS.md`: persistent agent operating instructions/memory.
-- `docs-map.md`: role/read-order map for project Markdown files.
 - `public/assets/README.md`: runtime asset folder conventions (`public/assets/**` is browser-served content).

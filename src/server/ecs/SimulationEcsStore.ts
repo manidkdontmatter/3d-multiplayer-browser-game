@@ -82,7 +82,6 @@ export class SimulationEcsStore {
 
   public registerPlatformComponents(eid: number): void {
     this.ensureBaseComponents(eid);
-    addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.PlatformTag);
   }
 

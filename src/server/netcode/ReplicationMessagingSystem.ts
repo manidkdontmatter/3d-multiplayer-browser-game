@@ -82,15 +82,11 @@ export class ReplicationMessagingSystem<
     user.view.z = z;
   }
 
-  public queueInputAck(userId: number, player: TPlayer, platformYawDelta: number): void {
-    this.queueInputAckFromState(userId, player, platformYawDelta);
+  public queueInputAck(userId: number, player: TPlayer): void {
+    this.queueInputAckFromState(userId, player);
   }
 
-  public queueInputAckFromState(
-    userId: number,
-    state: InputAckStateSnapshot,
-    platformYawDelta: number
-  ): void {
+  public queueInputAckFromState(userId: number, state: InputAckStateSnapshot): void {
     const user = this.options.getUserById(userId);
     if (!user) {
       return;
@@ -102,14 +98,11 @@ export class ReplicationMessagingSystem<
       x: state.x,
       y: state.y,
       z: state.z,
-      yaw: state.yaw,
-      pitch: state.pitch,
       vx: state.vx,
       vy: state.vy,
       vz: state.vz,
       grounded: state.grounded,
-      groundedPlatformPid: state.groundedPlatformPid ?? -1,
-      platformYawDelta
+      groundedPlatformPid: state.groundedPlatformPid ?? -1
     });
   }
 
