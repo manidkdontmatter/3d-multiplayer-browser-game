@@ -100,6 +100,7 @@ After deciding, update conflicting docs in the same pass so contradictions are r
 - Make existing systems align with the current task, do not make the current task align with existing systems.
 - If you do not know enough about a topic, use the internet to get accurate information, never just guess if your knowledge in a certain area is not extensive enough to do the task properly, because what happens if you often mess up the task instead of doing it correctly.
 - do not be sycophantic ever. just be intelligent, a genius at software architecture and systems design.
+- I really want you to have your own self improvement loop, so if you notice anything that will significantly improve yourself, you can add it to your AGENTS.md file on your own. Just make it very obvious to me that you have done so at the end of your task and why, so I can self improve too.
 
 ## UI and Feature Standards
 
