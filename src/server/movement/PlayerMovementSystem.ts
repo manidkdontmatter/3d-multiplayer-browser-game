@@ -1,17 +1,14 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
-  applyPlatformCarryYaw,
-  buildDesiredCharacterTranslation,
   GROUND_CONTACT_MIN_NORMAL_Y,
+  type GroundSupportHit,
   PLAYER_CAMERA_OFFSET_Y,
   quaternionFromYawPitchRoll,
-  resolveGroundedPlatformPid,
-  resolveKinematicPostStepState,
-  resolveVerticalVelocityForSolve
+  resolveGroundSupportColliderHandle as queryGroundSupportColliderHandle,
+  stepKinematicCharacterController
 } from "../../shared/index";
 
 type PlatformCarry = { x: number; y: number; z: number; yaw: number };
-type GroundSupportHit = { hit: boolean; colliderHandle: number | null };
 
 export interface PlayerMovementActor {
   yaw: number;
@@ -30,10 +27,13 @@ export interface PlayerMovementActor {
 }
 
 export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor> {
+  readonly world?: RAPIER.World;
   readonly characterController: RAPIER.KinematicCharacterController;
+  readonly playerCapsuleHalfHeight?: number;
+  readonly playerCapsuleRadius?: number;
   readonly beforePlayerMove?: (player: TPlayer) => void;
   readonly samplePlayerPlatformCarry: (player: TPlayer) => PlatformCarry;
-  readonly resolveGroundSupportColliderHandle: (player: TPlayer, groundedByQuery: boolean) => GroundSupportHit;
+  readonly resolveGroundSupportColliderHandle?: (player: TPlayer, groundedByQuery: boolean) => GroundSupportHit;
   readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
   readonly onPlayerStepped: (userId: number, player: TPlayer) => void;
 }
@@ -45,50 +45,20 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
     for (const [userId, player] of players) {
       this.options.beforePlayerMove?.(player);
       const carry = this.options.samplePlayerPlatformCarry(player);
-      player.yaw = applyPlatformCarryYaw(player.yaw, carry.yaw);
-      const solveVerticalVelocity = resolveVerticalVelocityForSolve(player);
-      const desired = buildDesiredCharacterTranslation(
-        player.vx,
-        player.vz,
+      const next = stepKinematicCharacterController({
+        state: player,
         deltaSeconds,
-        solveVerticalVelocity,
-        carry
-      );
-      this.options.characterController.computeColliderMovement(
-        player.collider,
-        desired,
-        undefined,
-        undefined,
-        (collider) => collider.handle !== player.collider.handle
-      );
-      const corrected = this.options.characterController.computedMovement();
-
-      const current = player.body.translation();
-      player.body.setTranslation(
-        {
-          x: current.x + corrected.x,
-          y: current.y + corrected.y,
-          z: current.z + corrected.z
-        },
-        true
-      );
-
-      const moved = player.body.translation();
-      const groundedByQuery = this.options.characterController.computedGrounded();
-      const supportHit = this.options.resolveGroundSupportColliderHandle(player, groundedByQuery);
-      const groundedPlatformPid = this.resolveGroundedPlatformPidFromComputedCollisions(
-        groundedByQuery,
-        player.groundedPlatformPid,
-        supportHit
-      );
-      const next = resolveKinematicPostStepState({
-        previous: player,
-        movedBody: moved,
-        groundedByQuery,
-        groundedPlatformPid,
-        deltaSeconds,
-        playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y
+        carry,
+        body: player.body,
+        collider: player.collider,
+        characterController: this.options.characterController,
+        playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
+        groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y,
+        resolveGroundSupportColliderHandle: (groundedByQuery) =>
+          this.resolveGroundSupportColliderHandle(player, groundedByQuery),
+        resolvePlatformPidByColliderHandle: this.options.resolvePlatformPidByColliderHandle
       });
+      player.yaw = next.yaw;
       player.grounded = next.grounded;
       player.groundedPlatformPid = next.groundedPlatformPid;
       player.vy = next.vy;
@@ -107,42 +77,33 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
     }
   }
 
-  private resolveGroundedPlatformPidFromComputedCollisions(
-    groundedByQuery: boolean,
-    previousGroundedPlatformPid: number | null,
-    supportHit: GroundSupportHit
-  ): number | null {
-    if (groundedByQuery && supportHit.hit) {
-      const supportPid =
-        supportHit.colliderHandle !== null
-          ? this.options.resolvePlatformPidByColliderHandle(supportHit.colliderHandle)
-          : null;
-      return typeof supportPid === "number" ? supportPid : null;
+  private resolveGroundSupportColliderHandle(
+    player: TPlayer,
+    groundedByQuery: boolean
+  ): GroundSupportHit {
+    if (this.options.resolveGroundSupportColliderHandle) {
+      return this.options.resolveGroundSupportColliderHandle(player, groundedByQuery);
     }
 
-    const collisionPlatformPids: number[] = [];
-    const collisionCount = this.options.characterController.numComputedCollisions();
-    for (let i = 0; i < collisionCount; i += 1) {
-      const collision = this.options.characterController.computedCollision(i);
-      const collider = collision?.collider;
-      if (!collision || !collider) {
-        continue;
-      }
-      if (!Number.isFinite(collision.normal1.y) || collision.normal1.y < GROUND_CONTACT_MIN_NORMAL_Y) {
-        continue;
-      }
-      const pid = this.options.resolvePlatformPidByColliderHandle(collider.handle);
-      if (typeof pid !== "number") {
-        continue;
-      }
-      if (!collisionPlatformPids.includes(pid)) {
-        collisionPlatformPids.push(pid);
-      }
+    if (
+      !this.options.world ||
+      !Number.isFinite(this.options.playerCapsuleHalfHeight) ||
+      !Number.isFinite(this.options.playerCapsuleRadius)
+    ) {
+      throw new Error(
+        "PlayerMovementSystem requires either resolveGroundSupportColliderHandle or world + capsule dimensions"
+      );
     }
-    return resolveGroundedPlatformPid({
+
+    return queryGroundSupportColliderHandle({
       groundedByQuery,
-      previousGroundedPlatformPid,
-      collisionPlatformPids
+      world: this.options.world,
+      characterController: this.options.characterController,
+      body: player.body,
+      collider: player.collider,
+      capsuleHalfHeight: this.options.playerCapsuleHalfHeight,
+      capsuleRadius: this.options.playerCapsuleRadius,
+      groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y
     });
   }
 }

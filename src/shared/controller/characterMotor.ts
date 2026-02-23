@@ -1,3 +1,4 @@
+import RAPIER from "@dimforge/rapier3d-compat";
 import { GRAVITY } from "../config";
 import { normalizeYaw } from "../platforms";
 
@@ -6,6 +7,11 @@ export interface PlatformCarryDelta {
   y: number;
   z: number;
   yaw: number;
+}
+
+export interface GroundSupportHit {
+  hit: boolean;
+  colliderHandle: number | null;
 }
 
 export interface KinematicSolveState {
@@ -110,5 +116,162 @@ export function resolveKinematicPostStepState(options: {
     x: options.movedBody.x,
     y: options.movedBody.y + options.playerCameraOffsetY,
     z: options.movedBody.z
+  };
+}
+
+export interface KinematicControllerStepState extends KinematicSolveState {
+  yaw: number;
+  vx: number;
+  vz: number;
+}
+
+export interface KinematicControllerStepResult extends KinematicPostStepResult {
+  yaw: number;
+}
+
+export function resolveGroundSupportColliderHandle(options: {
+  groundedByQuery: boolean;
+  world: RAPIER.World;
+  characterController: RAPIER.KinematicCharacterController;
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
+  capsuleHalfHeight: number;
+  capsuleRadius: number;
+  groundContactMinNormalY: number;
+}): GroundSupportHit {
+  if (!options.groundedByQuery) {
+    return { hit: false, colliderHandle: null };
+  }
+
+  const snapDistance = options.characterController.snapToGroundDistance() ?? 0;
+  const origin = options.body.translation();
+  const maxToi = options.capsuleHalfHeight + options.capsuleRadius + snapDistance + 0.1;
+  const ray = new RAPIER.Ray(
+    { x: origin.x, y: origin.y + 0.05, z: origin.z },
+    { x: 0, y: -1, z: 0 }
+  );
+  const hit = options.world.castRayAndGetNormal(
+    ray,
+    maxToi,
+    true,
+    undefined,
+    undefined,
+    options.collider,
+    options.body,
+    (collider) => collider.handle !== options.collider.handle
+  );
+  if (!hit) {
+    return { hit: false, colliderHandle: null };
+  }
+  if (!Number.isFinite(hit.normal.y) || hit.normal.y < options.groundContactMinNormalY) {
+    return { hit: false, colliderHandle: null };
+  }
+  return { hit: true, colliderHandle: hit.collider.handle };
+}
+
+export function resolveGroundedPlatformPidFromComputedCollisions(options: {
+  groundedByQuery: boolean;
+  previousGroundedPlatformPid: number | null;
+  supportHit: GroundSupportHit;
+  characterController: RAPIER.KinematicCharacterController;
+  resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
+  groundContactMinNormalY: number;
+}): number | null {
+  if (options.groundedByQuery && options.supportHit.hit) {
+    const supportPid =
+      options.supportHit.colliderHandle !== null
+        ? options.resolvePlatformPidByColliderHandle(options.supportHit.colliderHandle)
+        : null;
+    return typeof supportPid === "number" ? supportPid : null;
+  }
+
+  const collisionPlatformPids: number[] = [];
+  const collisionCount = options.characterController.numComputedCollisions();
+  for (let i = 0; i < collisionCount; i += 1) {
+    const collision = options.characterController.computedCollision(i);
+    const collider = collision?.collider;
+    if (!collision || !collider) {
+      continue;
+    }
+    if (!Number.isFinite(collision.normal1.y) || collision.normal1.y < options.groundContactMinNormalY) {
+      continue;
+    }
+    const pid = options.resolvePlatformPidByColliderHandle(collider.handle);
+    if (typeof pid !== "number") {
+      continue;
+    }
+    if (!collisionPlatformPids.includes(pid)) {
+      collisionPlatformPids.push(pid);
+    }
+  }
+  return resolveGroundedPlatformPid({
+    groundedByQuery: options.groundedByQuery,
+    previousGroundedPlatformPid: options.previousGroundedPlatformPid,
+    collisionPlatformPids
+  });
+}
+
+export function stepKinematicCharacterController(options: {
+  state: KinematicControllerStepState;
+  deltaSeconds: number;
+  carry: PlatformCarryDelta;
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
+  characterController: RAPIER.KinematicCharacterController;
+  playerCameraOffsetY: number;
+  groundContactMinNormalY: number;
+  resolveGroundSupportColliderHandle: (groundedByQuery: boolean) => GroundSupportHit;
+  resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
+}): KinematicControllerStepResult {
+  const yaw = applyPlatformCarryYaw(options.state.yaw, options.carry.yaw);
+  const solveVerticalVelocity = resolveVerticalVelocityForSolve(options.state);
+  const desired = buildDesiredCharacterTranslation(
+    options.state.vx,
+    options.state.vz,
+    options.deltaSeconds,
+    solveVerticalVelocity,
+    options.carry
+  );
+  options.characterController.computeColliderMovement(
+    options.collider,
+    desired,
+    undefined,
+    undefined,
+    (collider) => collider.handle !== options.collider.handle
+  );
+  const corrected = options.characterController.computedMovement();
+
+  const current = options.body.translation();
+  options.body.setTranslation(
+    {
+      x: current.x + corrected.x,
+      y: current.y + corrected.y,
+      z: current.z + corrected.z
+    },
+    true
+  );
+
+  const moved = options.body.translation();
+  const groundedByQuery = options.characterController.computedGrounded();
+  const supportHit = options.resolveGroundSupportColliderHandle(groundedByQuery);
+  const groundedPlatformPid = resolveGroundedPlatformPidFromComputedCollisions({
+    groundedByQuery,
+    previousGroundedPlatformPid: options.state.groundedPlatformPid,
+    supportHit,
+    characterController: options.characterController,
+    resolvePlatformPidByColliderHandle: options.resolvePlatformPidByColliderHandle,
+    groundContactMinNormalY: options.groundContactMinNormalY
+  });
+  const next = resolveKinematicPostStepState({
+    previous: options.state,
+    movedBody: moved,
+    groundedByQuery,
+    groundedPlatformPid,
+    deltaSeconds: options.deltaSeconds,
+    playerCameraOffsetY: options.playerCameraOffsetY
+  });
+  return {
+    ...next,
+    yaw
   };
 }

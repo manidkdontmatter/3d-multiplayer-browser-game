@@ -1,8 +1,8 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
+  createStaticWorldColliders,
   IDENTITY_QUATERNION,
-  quaternionFromYaw,
-  STATIC_WORLD_BLOCKS
+  quaternionFromYaw
 } from "../../shared/index";
 
 export interface WorldBootstrapDummy {
@@ -30,25 +30,7 @@ export class WorldBootstrapSystem {
   public constructor(private readonly options: WorldBootstrapSystemOptions) {}
 
   public createStaticWorldColliders(): void {
-    const groundBody = this.options.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0)
-    );
-    this.options.world.createCollider(RAPIER.ColliderDesc.cuboid(128, 0.5, 128), groundBody);
-
-    for (const block of STATIC_WORLD_BLOCKS) {
-      const rotationZ = block.rotationZ ?? 0;
-      const staticBody = this.options.world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(block.x, block.y, block.z)
-      );
-      this.options.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(block.halfX, block.halfY, block.halfZ),
-        staticBody
-      );
-      staticBody.setRotation(
-        { x: 0, y: 0, z: Math.sin(rotationZ * 0.5), w: Math.cos(rotationZ * 0.5) },
-        true
-      );
-    }
+    createStaticWorldColliders(this.options.world);
   }
 
   public initializeTrainingDummies(

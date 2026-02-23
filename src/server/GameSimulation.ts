@@ -4,13 +4,14 @@ import {
   ABILITY_ID_NONE,
   ABILITY_ID_PUNCH,
   clampHotbarSlotIndex,
+  configurePlayerCharacterController,
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
   getAbilityDefinitionById,
-  GROUND_CONTACT_MIN_NORMAL_Y,
   HOTBAR_SLOT_COUNT,
   NType,
   PLAYER_BODY_CENTER_HEIGHT,
+  PLAYER_CHARACTER_CONTROLLER_OFFSET,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
@@ -132,12 +133,8 @@ export class GameSimulation {
     this.replicationBridge = new NetReplicationBridge(this.spatialChannel);
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
-    this.characterController = this.world.createCharacterController(0.01);
-    this.characterController.setSlideEnabled(true);
-    this.characterController.enableSnapToGround(0.2);
-    this.characterController.disableAutostep();
-    this.characterController.setMaxSlopeClimbAngle((60 * Math.PI) / 180);
-    this.characterController.setMinSlopeSlideAngle((80 * Math.PI) / 180);
+    this.characterController = this.world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
+    configurePlayerCharacterController(this.characterController);
     this.damageSystem = new DamageSystem({
       maxPlayerHealth: this.archetypes.player.maxHealth,
       playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
@@ -249,15 +246,16 @@ export class GameSimulation {
       getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId)
     });
     this.playerMovementSystem = new PlayerMovementSystem<RuntimePlayerState>({
+      world: this.world,
       characterController: this.characterController,
+      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
+      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
       beforePlayerMove: (player) => {
         if (player.primaryHeld) {
           this.abilityExecutionSystem.tryUsePrimaryAbility(player);
         }
       },
       samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
-      resolveGroundSupportColliderHandle: (player, groundedByQuery) =>
-        this.resolveGroundSupportColliderHandle(player, groundedByQuery),
       resolvePlatformPidByColliderHandle: (colliderHandle) =>
         this.platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
       onPlayerStepped: (userId, player) => {
@@ -692,44 +690,6 @@ export class GameSimulation {
       entries.push([userId, runtimePlayer] as const);
     }
     return entries;
-  }
-
-  private resolveGroundSupportColliderHandle(
-    player: RuntimePlayerState,
-    groundedByQuery: boolean
-  ): { hit: boolean; colliderHandle: number | null } {
-    if (!groundedByQuery) {
-      return { hit: false, colliderHandle: null };
-    }
-
-    const snapDistance = this.characterController.snapToGroundDistance() ?? 0;
-    const origin = player.body.translation();
-    const maxToi = PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS + snapDistance + 0.1;
-    const ray = new RAPIER.Ray(
-      {
-        x: origin.x,
-        y: origin.y + 0.05,
-        z: origin.z
-      },
-      { x: 0, y: -1, z: 0 }
-    );
-    const hit = this.world.castRayAndGetNormal(
-      ray,
-      maxToi,
-      true,
-      undefined,
-      undefined,
-      player.collider,
-      player.body,
-      (collider) => collider.handle !== player.collider.handle
-    );
-    if (!hit) {
-      return { hit: false, colliderHandle: null };
-    }
-    if (!Number.isFinite(hit.normal.y) || hit.normal.y < GROUND_CONTACT_MIN_NORMAL_Y) {
-      return { hit: false, colliderHandle: null };
-    }
-    return { hit: true, colliderHandle: hit.collider.handle };
   }
 
   private resolveProjectileModelId(kind: number): number {

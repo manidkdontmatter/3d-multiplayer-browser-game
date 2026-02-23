@@ -1,20 +1,20 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
-  buildDesiredCharacterTranslation,
+  configurePlayerCharacterController,
+  createStaticWorldColliders,
   GROUND_CONTACT_MIN_NORMAL_Y,
   normalizeYaw,
   PLATFORM_DEFINITIONS,
+  PLAYER_CHARACTER_CONTROLLER_OFFSET,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
-  resolveGroundedPlatformPid,
-  resolveKinematicPostStepState,
-  resolveVerticalVelocityForSolve,
-  STATIC_WORLD_BLOCKS,
+  resolveGroundSupportColliderHandle,
   samplePlatformTransform,
+  stepKinematicCharacterController,
   stepHorizontalMovement,
 } from "../../shared/index";
 import type { MovementInput, PlayerPose } from "./types";
@@ -40,11 +40,6 @@ interface LocalPlatformBody {
   y: number;
   z: number;
   yaw: number;
-}
-
-interface GroundSupportHit {
-  hit: boolean;
-  colliderHandle: number | null;
 }
 
 export class LocalPhysicsWorld {
@@ -77,32 +72,9 @@ export class LocalPhysicsWorld {
     await RAPIER.init();
     const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     world.integrationParameters.dt = 1 / 60;
-    const characterController = world.createCharacterController(0.01);
-    characterController.setSlideEnabled(true);
-    characterController.enableSnapToGround(0.2);
-    characterController.disableAutostep();
-    characterController.setMaxSlopeClimbAngle((60 * Math.PI) / 180);
-    characterController.setMinSlopeSlideAngle((80 * Math.PI) / 180);
-
-    const groundBody = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0)
-    );
-    world.createCollider(RAPIER.ColliderDesc.cuboid(128, 0.5, 128), groundBody);
-
-    for (const worldBlock of STATIC_WORLD_BLOCKS) {
-      const rotationZ = worldBlock.rotationZ ?? 0;
-      const staticWorldBody = world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(worldBlock.x, worldBlock.y, worldBlock.z)
-      );
-      world.createCollider(
-        RAPIER.ColliderDesc.cuboid(worldBlock.halfX, worldBlock.halfY, worldBlock.halfZ),
-        staticWorldBody
-      );
-      staticWorldBody.setRotation(
-        { x: 0, y: 0, z: Math.sin(rotationZ * 0.5), w: Math.cos(rotationZ * 0.5) },
-        true
-      );
-    }
+    const characterController = world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
+    configurePlayerCharacterController(characterController);
+    createStaticWorldColliders(world);
 
     const playerBody = world.createRigidBody(
       RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, PLAYER_BODY_CENTER_HEIGHT, 0)
@@ -171,55 +143,35 @@ export class LocalPhysicsWorld {
     }
 
     const carry = this.samplePlatformCarry(previousSimulationSeconds, this.simulationSeconds);
-    const solveVerticalVelocity = resolveVerticalVelocityForSolve({
-      grounded: this.grounded,
-      groundedPlatformPid: this.groundedPlatformPid,
-      vy: this.verticalVelocity
-    });
-    const desired = buildDesiredCharacterTranslation(
-      this.horizontalVelocity.vx,
-      this.horizontalVelocity.vz,
-      dt,
-      solveVerticalVelocity,
-      { x: carry.x, y: carry.y, z: carry.z, yaw: 0 }
-    );
-    this.characterController.computeColliderMovement(
-      this.playerCollider,
-      desired,
-      undefined,
-      undefined,
-      (collider) => collider.handle !== this.playerCollider.handle
-    );
-    const corrected = this.characterController.computedMovement();
-    const current = this.playerBody.translation();
-    this.playerBody.setTranslation(
-      {
-        x: current.x + corrected.x,
-        y: current.y + corrected.y,
-        z: current.z + corrected.z
-      },
-      true
-    );
-    const position = this.playerBody.translation();
-    const groundedByQuery = this.characterController.computedGrounded();
-    const supportHit = this.resolveGroundSupportColliderHandle(groundedByQuery);
-    const groundedPlatformPid =
-      groundedByQuery && supportHit.hit
-        ? (supportHit.colliderHandle !== null
-            ? (this.platformPidByColliderHandle.get(supportHit.colliderHandle) ?? null)
-            : null)
-        : this.resolveGroundedPlatformPidFromComputedCollisions(groundedByQuery, this.groundedPlatformPid);
-    const next = resolveKinematicPostStepState({
-      previous: {
+    const next = stepKinematicCharacterController({
+      state: {
+        yaw,
+        vx: this.horizontalVelocity.vx,
+        vy: this.verticalVelocity,
+        vz: this.horizontalVelocity.vz,
         grounded: this.grounded,
-        groundedPlatformPid: this.groundedPlatformPid,
-        vy: this.verticalVelocity
+        groundedPlatformPid: this.groundedPlatformPid
       },
-      movedBody: position,
-      groundedByQuery,
-      groundedPlatformPid,
       deltaSeconds: dt,
-      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y
+      carry: { x: carry.x, y: carry.y, z: carry.z, yaw: 0 },
+      body: this.playerBody,
+      collider: this.playerCollider,
+      characterController: this.characterController,
+      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
+      groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y,
+      resolveGroundSupportColliderHandle: (groundedByQuery) =>
+        resolveGroundSupportColliderHandle({
+          groundedByQuery,
+          world: this.world,
+          characterController: this.characterController,
+          body: this.playerBody,
+          collider: this.playerCollider,
+          capsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
+          capsuleRadius: PLAYER_CAPSULE_RADIUS,
+          groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y
+        }),
+      resolvePlatformPidByColliderHandle: (colliderHandle) =>
+        this.platformPidByColliderHandle.get(colliderHandle) ?? null
     });
     this.grounded = next.grounded;
     this.groundedPlatformPid = next.groundedPlatformPid;
@@ -227,7 +179,7 @@ export class LocalPhysicsWorld {
     this.pose.x = next.x;
     this.pose.y = next.y;
     this.pose.z = next.z;
-    this.pose.yaw = yaw;
+    this.pose.yaw = next.yaw;
     this.pose.pitch = pitch;
     this.world.step();
   }
@@ -351,67 +303,6 @@ export class LocalPhysicsWorld {
       y: carried.y - bodyPos.y,
       z: carried.z - bodyPos.z
     };
-  }
-
-  private resolveGroundedPlatformPidFromComputedCollisions(
-    groundedByQuery: boolean,
-    previousGroundedPlatformPid: number | null
-  ): number | null {
-    const collisionPlatformPids: number[] = [];
-    const collisionCount = this.characterController.numComputedCollisions();
-    for (let i = 0; i < collisionCount; i += 1) {
-      const collision = this.characterController.computedCollision(i);
-      const collider = collision?.collider;
-      if (!collision || !collider) {
-        continue;
-      }
-      if (!Number.isFinite(collision.normal1.y) || collision.normal1.y < GROUND_CONTACT_MIN_NORMAL_Y) {
-        continue;
-      }
-      const pid = this.platformPidByColliderHandle.get(collider.handle);
-      if (typeof pid !== "number") {
-        continue;
-      }
-      if (!collisionPlatformPids.includes(pid)) {
-        collisionPlatformPids.push(pid);
-      }
-    }
-    return resolveGroundedPlatformPid({
-      groundedByQuery,
-      previousGroundedPlatformPid,
-      collisionPlatformPids
-    });
-  }
-
-  private resolveGroundSupportColliderHandle(groundedByQuery: boolean): GroundSupportHit {
-    if (!groundedByQuery) {
-      return { hit: false, colliderHandle: null };
-    }
-
-    const snapDistance = this.characterController.snapToGroundDistance() ?? 0;
-    const origin = this.playerBody.translation();
-    const maxToi = PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS + snapDistance + 0.1;
-    const ray = new RAPIER.Ray(
-      { x: origin.x, y: origin.y + 0.05, z: origin.z },
-      { x: 0, y: -1, z: 0 }
-    );
-    const hit = this.world.castRayAndGetNormal(
-      ray,
-      maxToi,
-      true,
-      undefined,
-      undefined,
-      this.playerCollider,
-      this.playerBody,
-      (collider) => collider.handle !== this.playerCollider.handle
-    );
-    if (!hit) {
-      return { hit: false, colliderHandle: null };
-    }
-    if (!Number.isFinite(hit.normal.y) || hit.normal.y < GROUND_CONTACT_MIN_NORMAL_Y) {
-      return { hit: false, colliderHandle: null };
-    }
-    return { hit: true, colliderHandle: hit.collider.handle };
   }
 
   private clampStepDelta(delta: number): number {
