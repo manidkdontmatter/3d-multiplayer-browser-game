@@ -4,7 +4,8 @@
 # These settings load when running Codex from this workspace.
 
 model = "gpt-5.3-codex"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "medium"
+model_verbosity = "low"
 personality = "pragmatic"
 web_search = "live"
 
@@ -39,3 +40,14 @@ web_search = "live"
 approval_policy = "untrusted"
 sandbox_mode = "read-only"
 web_search = "cached"
+
+[features]
+memory_tool = true
+sqlite = true
+
+[memories]
+# Balanced productivity defaults: good recall without excessive churn.
+min_rollout_idle_hours = 12
+max_rollouts_per_startup = 6
+max_rollout_age_days = 90
+max_raw_memories_for_global = 300

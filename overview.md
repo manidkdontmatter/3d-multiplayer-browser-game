@@ -35,6 +35,7 @@ Canonical ingestion intent:
 - Strict client/server separation.
 - Server owns authoritative world state + simulation.
 - Client sends intent/commands only.
+- Client is largely a graphical dummy rendering state sent as data from the server
 - Client runs local prediction and reconciles to authoritative snapshots.
 - Shared schemas/protocol/helpers live in `src/shared`.
 - Server networking boundary is explicitly layered in `src/server/net`:
@@ -48,6 +49,8 @@ Canonical ingestion intent:
   - `ClientNetworkOrchestrator`: CSP/reconciliation/platform-carry orchestration boundary
 - Server simulation state is BitECS-backed (`src/server/ecs/SimulationEcs.ts`) with nengi replication bridged separately (`src/server/netcode/NetReplicationBridge.ts`) and keyed by ECS eid.
 - Core content definitions are data-driven via JSON archetype catalogs in `data/archetypes/` (world/platform/projectile/server defaults and base ability definitions/default unlock/loadout).
+- Data Oriented Design preferred where appropriate
+- abuse of Object Oriented Design discouraged
 
 Runtime entry points:
 - Client: `src/client/main.ts`
@@ -61,9 +64,8 @@ Runtime entry points:
 - Inbound wire commands are parsed at the net boundary (not simulation core), then applied as typed operations (`applyInputCommands`, `applyLoadoutCommand`).
 - Simulation code does not directly parse raw nengi queue payloads.
 - Client app loop delegates reconciliation + deterministic platform yaw carry to `ClientNetworkOrchestrator` instead of inlining netcode logic in `GameClientApp`.
-- Local first-person camera look (`yaw`/`pitch`) is client-owned presentation state and updates immediately from local input regardless of CSP mode; reconciliation/acks correct authoritative movement state, not free-look camera orientation.
+- Local first-person camera look (`yaw`/`pitch` etc) is client-owned presentation state and updates immediately from local input regardless of CSP mode; reconciliation/acks correct authoritative movement state, not free-look camera orientation.
 - Moving/rotating platforms are sampled deterministically from shared platform definitions on both server and client using synchronized server-time estimation; platform visuals no longer depend on per-tick replicated platform transform snapshots.
-- Input acks carry authoritative player reconciliation state (`sequence`, `serverTick`, transform/velocity/grounded) only; platform yaw carry is derived from deterministic local platform deltas rather than ack payloads.
 
 ## Key Gameplay Systems (Current)
 
