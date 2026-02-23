@@ -8,7 +8,6 @@ import {
   DEFAULT_UNLOCKED_ABILITY_IDS,
   getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
-  NType,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CHARACTER_CONTROLLER_OFFSET,
   PLAYER_CAMERA_OFFSET_Y,
@@ -35,9 +34,8 @@ import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 import { InputSystem } from "./input/InputSystem";
 import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
-import { ReplicationMessagingSystem } from "./netcode/ReplicationMessagingSystem";
-import { NetReplicationBridge } from "./netcode/NetReplicationBridge";
 import { LoadoutCommandHandler } from "./net/LoadoutCommandHandler";
+import { ServerReplicationCoordinator } from "./net/ServerReplicationCoordinator";
 import { PlatformSystem } from "./platform/PlatformSystem";
 import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
 import { SimulationEcs } from "./ecs/SimulationEcs";
@@ -130,7 +128,7 @@ export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
   private readonly world: RAPIER.World;
   private readonly simulationEcs = new SimulationEcs();
-  private readonly replicationBridge: NetReplicationBridge;
+  private readonly replication: ServerReplicationCoordinator<UserLike, RuntimePlayerState>;
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly persistenceSyncSystem = new PersistenceSyncSystem<PlayerEntity>();
   private readonly worldBootstrapSystem: WorldBootstrapSystem;
@@ -142,7 +140,6 @@ export class GameSimulation {
   private readonly inputSystem: InputSystem<RuntimePlayerState>;
   private readonly loadoutCommandHandler: LoadoutCommandHandler<UserLike>;
   private readonly platformSystem: PlatformSystem;
-  private readonly replicationMessaging: ReplicationMessagingSystem<UserLike, RuntimePlayerState>;
   private readonly playerMovementSystem: PlayerMovementSystem<RuntimePlayerState>;
   private readonly archetypes: ServerArchetypeCatalog;
   private elapsedSeconds = 0;
@@ -155,7 +152,13 @@ export class GameSimulation {
     private readonly createUserView: CreateUserView
   ) {
     this.archetypes = this.resolveServerArchetypes();
-    this.replicationBridge = new NetReplicationBridge(this.spatialChannel);
+    this.replication = new ServerReplicationCoordinator<UserLike, RuntimePlayerState>({
+      spatialChannel: this.spatialChannel,
+      getTickNumber: () => this.tickNumber,
+      getUserById: (userId) => this.usersById.get(userId),
+      sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
+      getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId)
+    });
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
     this.characterController = this.world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
@@ -177,7 +180,7 @@ export class GameSimulation {
       onDummyAdded: (dummy) => {
         this.simulationEcs.registerDummy(dummy);
         const eid = this.requireEid(dummy);
-        const nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(dummy));
+        const nid = this.replication.spawnEntity(eid, this.toReplicationSnapshot(dummy));
         dummy.nid = nid;
         this.simulationEcs.setEntityNidByEid(eid, nid);
       }
@@ -219,14 +222,14 @@ export class GameSimulation {
           despawnOnWorldHit:
             typeof request.despawnOnWorldHit === "boolean" ? request.despawnOnWorldHit : true
         });
-        const nid = this.replicationBridge.spawn(eid, this.simulationEcs.getReplicationSnapshotByEid(eid));
+        const nid = this.replication.spawnEntity(eid, this.simulationEcs.getReplicationSnapshotByEid(eid));
         this.simulationEcs.setProjectileNidByEid(eid, nid);
         return eid;
       },
       getProjectileState: (eid) => this.simulationEcs.getProjectileRuntimeStateByEid(eid),
       applyProjectileState: (eid, state) => this.simulationEcs.applyProjectileRuntimeStateByEid(eid, state),
       removeProjectile: (eid) => {
-        this.replicationBridge.despawn(eid);
+        this.replication.despawnEntity(eid);
         this.simulationEcs.removeEntityByEid(eid);
       }
     });
@@ -244,7 +247,7 @@ export class GameSimulation {
       getElapsedSeconds: () => this.elapsedSeconds,
       resolveSelectedAbility: (player) => this.resolveSelectedAbility(player),
       broadcastAbilityUse: (player, ability) =>
-        this.replicationMessaging.broadcastAbilityUseMessage(player, ability),
+        this.replication.broadcastAbilityUseMessage(player, ability),
       spawnProjectile: (request) => this.projectileSystem.spawn(request),
       applyMeleeHit: (player, meleeProfile) =>
         this.meleeCombatSystem.tryApplyMeleeHit(player, meleeProfile)
@@ -262,13 +265,6 @@ export class GameSimulation {
         this.simulationEcs.syncPlatform(platform);
       }
     });
-    this.replicationMessaging = new ReplicationMessagingSystem<UserLike, RuntimePlayerState>({
-      getTickNumber: () => this.tickNumber,
-      getUserById: (userId) => this.usersById.get(userId),
-      queueSpatialMessage: (message) => this.spatialChannel.addMessage(message),
-      sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
-      getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId)
-    });
     this.loadoutCommandHandler = new LoadoutCommandHandler<UserLike>({
       getLoadoutStateByUserId: (userId) => this.simulationEcs.getPlayerLoadoutStateByUserId(userId),
       setPlayerActiveHotbarSlotByUserId: (userId, slot) =>
@@ -282,7 +278,7 @@ export class GameSimulation {
           dirtyAbilityState: true
         }),
       queueLoadoutStateMessageFromSnapshot: (user, snapshot) =>
-        this.replicationMessaging.queueLoadoutStateMessageFromSnapshot(user, snapshot),
+        this.replication.queueLoadoutStateMessageFromSnapshot(user, snapshot),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       sanitizeSelectedAbilityId: (rawAbilityId, fallbackAbilityId, unlockedAbilityIds) =>
         this.sanitizeSelectedAbilityId(rawAbilityId, fallbackAbilityId, unlockedAbilityIds)
@@ -304,8 +300,8 @@ export class GameSimulation {
         this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, player);
         const ackState = this.simulationEcs.getPlayerInputAckStateByUserId(userId);
         if (ackState) {
-          this.replicationMessaging.syncUserViewPosition(userId, ackState.x, ackState.y, ackState.z);
-          this.replicationMessaging.queueInputAckFromState(userId, ackState);
+          this.replication.syncUserViewPosition(userId, ackState.x, ackState.y, ackState.z);
+          this.replication.queueInputAckFromState(userId, ackState);
         }
         this.persistenceSyncSystem.markAccountDirty(player.accountId, {
           dirtyCharacter: true,
@@ -373,18 +369,13 @@ export class GameSimulation {
       },
       unregisterPlayerCollider: (colliderHandle) => this.damageSystem.unregisterCollider(colliderHandle),
       removeProjectilesByOwner: (ownerNid) => this.projectileSystem.removeByOwner(ownerNid),
-      queueIdentityMessage: (user, playerNid) => {
-        user.queueMessage({
-          ntype: NType.IdentityMessage,
-          playerNid
-        });
-      },
+      queueIdentityMessage: (user, playerNid) => this.replication.queueIdentityMessage(user, playerNid),
       sendInitialReplicationState: (user, _player) => {
         const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
         if (!loadout) {
           return;
         }
-        this.replicationMessaging.sendInitialAbilityStateFromSnapshot(user, loadout);
+        this.replication.sendInitialAbilityStateFromSnapshot(user, loadout);
       },
       queueOfflineSnapshot: (accountId, snapshot) =>
         this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
@@ -397,7 +388,7 @@ export class GameSimulation {
       onPlayerAdded: (user, player) => {
         this.simulationEcs.registerPlayer(player);
         const eid = this.requireEid(player);
-        const nid = this.replicationBridge.spawn(eid, this.toReplicationSnapshot(player));
+        const nid = this.replication.spawnEntity(eid, this.toReplicationSnapshot(player));
         player.nid = nid;
         this.simulationEcs.setEntityNidByEid(eid, nid);
         this.simulationEcs.bindPlayerLookupIndexes(player, user.id);
@@ -406,7 +397,7 @@ export class GameSimulation {
         this.simulationEcs.unbindPlayerLookupIndexes(player, user.id);
         const eid = this.simulationEcs.getEidForObject(player);
         if (typeof eid === "number") {
-          this.replicationBridge.despawn(eid);
+          this.replication.despawnEntity(eid);
         }
         this.simulationEcs.unregister(player);
       }
@@ -463,7 +454,7 @@ export class GameSimulation {
     this.projectileSystem.step(delta);
     this.simulationEcs.forEachReplicatedState(
       (eid, _nid, modelId, x, y, z, rx, ry, rz, rw, grounded, health, maxHealth) => {
-        this.replicationBridge.syncFromValues(
+        this.replication.syncEntityFromValues(
           eid,
           modelId,
           x,

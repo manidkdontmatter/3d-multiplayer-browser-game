@@ -131,6 +131,26 @@ function main(): void {
     "InputAckMessage interface must not include platformYawDelta"
   );
 
+  const serverInputSystem = read("src/server/input/InputSystem.ts");
+  assert(
+    !serverInputSystem.includes("LoadoutCommand"),
+    "InputSystem must not parse or depend on LoadoutCommand wire types"
+  );
+
+  const gameSimulation = read("src/server/GameSimulation.ts");
+  assert(
+    !gameSimulation.includes('from "./netcode/ReplicationMessagingSystem"'),
+    "GameSimulation must not import ReplicationMessagingSystem directly"
+  );
+  assert(
+    !gameSimulation.includes('from "./netcode/NetReplicationBridge"'),
+    "GameSimulation must not import NetReplicationBridge directly"
+  );
+  assert(
+    gameSimulation.includes("ServerReplicationCoordinator"),
+    "GameSimulation must use ServerReplicationCoordinator as replication boundary"
+  );
+
   console.log("architecture-guards passed");
 }
 
