@@ -72,12 +72,22 @@ function main(): void {
     "GameClientApp must preserve authoritative snapshot position path for CSP-off rendering"
   );
   assert(
-    gameClientApp.includes("this.platformTimeline.sampleStates(this.resolveRenderServerTimeSeconds())"),
+    gameClientApp.includes(
+      "this.platformTimeline.sampleStates(this.networkOrchestrator.getRenderServerTimeSeconds(this.isCspActive()))"
+    ),
     "GameClientApp must source rendered platforms from deterministic platform timeline"
   );
   assert(
     !gameClientApp.includes("this.network.getPlatforms()"),
     "GameClientApp must not source rendered platforms from snapshot platform entities"
+  );
+  assert(
+    !gameClientApp.includes("consumeReconciliationFrame("),
+    "GameClientApp must not directly consume reconciliation frames; use ClientNetworkOrchestrator"
+  );
+  assert(
+    !gameClientApp.includes("new ReconciliationSmoother("),
+    "GameClientApp must not directly construct ReconciliationSmoother"
   );
 
   const ackBuffer = read("src/client/runtime/network/AckReconciliationBuffer.ts");

@@ -2,19 +2,15 @@ import { Clock } from "three";
 import {
   ABILITY_ID_NONE,
   DEFAULT_HOTBAR_ABILITY_IDS,
-  getAbilityDefinitionById,
-  normalizeYaw,
-  PLATFORM_DEFINITIONS,
-  SERVER_TICK_SECONDS
+  getAbilityDefinitionById
 } from "../../shared/index";
-import { samplePlatformTransform } from "../../shared/platforms";
 import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
 import { LocalPhysicsWorld } from "./LocalPhysicsWorld";
 import { DeterministicPlatformTimeline } from "./DeterministicPlatformTimeline";
 import { RenderSnapshotAssembler } from "./RenderSnapshotAssembler";
-import { ReconciliationSmoother } from "./ReconciliationSmoother";
 import { WorldRenderer } from "./WorldRenderer";
+import { ClientNetworkOrchestrator } from "./network/ClientNetworkOrchestrator";
 import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
 import { AbilityHud } from "../ui/AbilityHud";
 import { resolveAccessKey, storeAccessKey, writeAccessKeyToFragment } from "../auth/accessKey";
@@ -31,9 +27,9 @@ export class GameClientApp {
   private readonly abilityHud: AbilityHud;
   private readonly authPanel: AuthPanel;
   private readonly network = new NetworkClient();
+  private readonly networkOrchestrator: ClientNetworkOrchestrator;
   private readonly platformTimeline = new DeterministicPlatformTimeline();
   private readonly renderSnapshotAssembler: RenderSnapshotAssembler;
-  private readonly reconciliationSmoother: ReconciliationSmoother;
   private readonly clock = new Clock();
   private readonly physics: LocalPhysicsWorld;
   private accumulator = 0;
@@ -49,7 +45,6 @@ export class GameClientApp {
   private cspEnabled: boolean;
   private readonly e2eSimulationOnly: boolean;
   private testMovementOverride: MovementInput | null = null;
-  private lastNonCspYawCarryServerTimeSeconds: number | null = null;
   private totalUngroundedFixedTicks = 0;
   private totalUngroundedEntries = 0;
   private groundingSampleInitialized = false;
@@ -95,10 +90,7 @@ export class GameClientApp {
       initialAccessKey
     });
     this.renderer = new WorldRenderer(canvas);
-    this.reconciliationSmoother = new ReconciliationSmoother({
-      getPlatformTransform: (pid) => this.physics.getPlatformTransform(pid),
-      getCurrentGroundedPlatformPid: () => this.physics.getKinematicState().groundedPlatformPid
-    });
+    this.networkOrchestrator = new ClientNetworkOrchestrator(this.network, this.physics);
     this.renderSnapshotAssembler = new RenderSnapshotAssembler({
       getRenderSnapshotState: (frameDeltaSeconds) => this.createRenderSnapshot(frameDeltaSeconds)
     });
@@ -170,7 +162,7 @@ export class GameClientApp {
     }
     if (this.input.consumeCspToggle()) {
       this.cspEnabled = !this.cspEnabled;
-      this.reconciliationSmoother.reset();
+      this.networkOrchestrator.onCspModeChanged();
     }
     let shouldReleasePointerLock = false;
     if (this.input.consumeAbilityLoadoutToggle()) {
@@ -201,7 +193,7 @@ export class GameClientApp {
 
   private stepFixed(delta: number): void {
     const movement = this.testMovementOverride ?? this.input.sampleMovement();
-    let yaw = this.input.getYaw();
+    const yaw = this.input.getYaw();
     const pitch = this.input.getPitch();
     const usePrimaryPressed =
       this.input.consumePrimaryActionTrigger() || this.consumeTestPrimaryActionTrigger();
@@ -209,75 +201,21 @@ export class GameClientApp {
     if (usePrimaryPressed && this.getSelectedAbilityDefinition()?.melee) {
       this.renderer.triggerLocalMeleePunch();
     }
-    this.network.step(
+    this.networkOrchestrator.stepFixed({
       delta,
       movement,
-      { yaw, pitch },
-      {
+      isCspActive: this.isCspActive(),
+      orientation: { yaw, pitch },
+      actions: {
         usePrimaryPressed,
         usePrimaryHeld
+      },
+      look: {
+        getYaw: () => this.input.getYaw(),
+        getPitch: () => this.input.getPitch(),
+        applyYawDelta: (deltaYaw) => this.input.applyYawDelta(deltaYaw)
       }
-    );
-
-    const cspActive = this.isCspActive();
-    let preReconciliationPose: PlayerPose | null = null;
-    if (cspActive) {
-      this.lastNonCspYawCarryServerTimeSeconds = null;
-      const predictedPlatformYawDelta = this.physics.predictAttachedPlatformYawDelta(delta);
-      if (Math.abs(predictedPlatformYawDelta) > 1e-6) {
-        this.input.applyYawDelta(predictedPlatformYawDelta);
-        this.network.syncSentYaw(this.input.getYaw());
-        yaw = this.input.getYaw();
-      }
-      this.physics.step(delta, movement, yaw, pitch);
-      preReconciliationPose = this.physics.getPose();
-    } else {
-      this.applyDeterministicPlatformYawCarryForCspOff();
-      this.reconciliationSmoother.reset();
-    }
-
-    const recon = this.network.consumeReconciliationFrame();
-    if (recon) {
-      this.physics.setReconciliationState({
-        x: recon.ack.x,
-        y: recon.ack.y,
-        z: recon.ack.z,
-        yaw: this.input.getYaw(),
-        pitch: this.input.getPitch(),
-        vx: recon.ack.vx,
-        vy: recon.ack.vy,
-        vz: recon.ack.vz,
-        grounded: recon.ack.grounded,
-        groundedPlatformPid: recon.ack.groundedPlatformPid,
-        serverTimeSeconds: recon.ack.serverTick * SERVER_TICK_SECONDS
-      });
-
-      if (cspActive) {
-        for (const pending of recon.replay) {
-          this.physics.step(
-            pending.delta,
-            pending.movement,
-            pending.orientation.yaw,
-            pending.orientation.pitch
-          );
-        }
-
-        const postReconciliationPose = this.physics.getPose();
-        if (preReconciliationPose) {
-          this.reconciliationSmoother.applyCorrection(
-            preReconciliationPose,
-            postReconciliationPose,
-            recon.replay.length,
-            this.physics.getKinematicState().groundedPlatformPid
-          );
-        }
-      }
-    }
-
-    if (cspActive) {
-      this.reconciliationSmoother.syncPlatformFrame();
-      this.reconciliationSmoother.decay(delta);
-    }
+    });
 
     this.sampleGroundingDiagnostics();
   }
@@ -311,7 +249,7 @@ export class GameClientApp {
     const netState = this.network.getConnectionState();
     const cspActive = this.isCspActive();
     const cspLabel = cspActive ? "on" : "off";
-    const reconDiagnostics = this.reconciliationSmoother.getDiagnostics();
+    const reconDiagnostics = this.networkOrchestrator.getDiagnostics();
     const smoothingMagnitude = reconDiagnostics.worldOffsetMagnitude;
     const yawErrorDegrees = (reconDiagnostics.lastYawError * 180) / Math.PI;
     const interpDelayMs = this.network.getInterpolationDelayMs();
@@ -344,7 +282,7 @@ export class GameClientApp {
 
   private buildRenderGameStatePayload(scope: "full" | "minimal" = "full"): RenderGameStatePayload {
     const pose = this.getRenderPose();
-    const reconDiagnostics = this.reconciliationSmoother.getDiagnostics();
+    const reconDiagnostics = this.networkOrchestrator.getDiagnostics();
     const selectedSlot = this.input.getSelectedHotbarSlot();
     const selectedAbilityId = this.hotbarAbilityIds[selectedSlot] ?? ABILITY_ID_NONE;
     const remotePlayers = this.network.getRemotePlayers();
@@ -504,7 +442,7 @@ export class GameClientApp {
       return { ...this.frozenCameraPose };
     }
     const renderPosition = this.getRenderPosition();
-    const renderOffset = this.reconciliationSmoother.getWorldOffset();
+    const renderOffset = this.networkOrchestrator.getWorldOffset();
     return {
       x: renderPosition.x + renderOffset.x,
       y: renderPosition.y + renderOffset.y,
@@ -544,46 +482,7 @@ export class GameClientApp {
   }
 
   private getRenderPlatformStates() {
-    return this.platformTimeline.sampleStates(this.resolveRenderServerTimeSeconds());
-  }
-
-  private resolveRenderServerTimeSeconds(): number {
-    if (this.isCspActive()) {
-      return this.physics.getSimulationSeconds();
-    }
-    const estimatedServerSeconds = this.network.getEstimatedServerTimeSeconds();
-    if (estimatedServerSeconds !== null) {
-      const interpolationDelaySeconds = this.network.getInterpolationDelayMs() / 1000;
-      return Math.max(0, estimatedServerSeconds - interpolationDelaySeconds);
-    }
-    return this.physics.getSimulationSeconds();
-  }
-
-  private applyDeterministicPlatformYawCarryForCspOff(): void {
-    const currentServerTimeSeconds = this.resolveRenderServerTimeSeconds();
-    const previousServerTimeSeconds = this.lastNonCspYawCarryServerTimeSeconds;
-    this.lastNonCspYawCarryServerTimeSeconds = currentServerTimeSeconds;
-    if (previousServerTimeSeconds === null) {
-      return;
-    }
-
-    const groundedPlatformPid = this.network.getServerGroundedPlatformPid();
-    if (groundedPlatformPid < 0) {
-      return;
-    }
-    const definition = PLATFORM_DEFINITIONS.find((platform) => platform.pid === groundedPlatformPid);
-    if (!definition) {
-      return;
-    }
-
-    const previousPose = samplePlatformTransform(definition, previousServerTimeSeconds);
-    const currentPose = samplePlatformTransform(definition, currentServerTimeSeconds);
-    const yawDelta = normalizeYaw(currentPose.yaw - previousPose.yaw);
-    if (Math.abs(yawDelta) <= 1e-6) {
-      return;
-    }
-    this.input.applyYawDelta(yawDelta);
-    this.network.syncSentYaw(this.input.getYaw());
+    return this.platformTimeline.sampleStates(this.networkOrchestrator.getRenderServerTimeSeconds(this.isCspActive()));
   }
 
   private readonly onResize = (): void => {
