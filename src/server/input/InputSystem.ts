@@ -1,8 +1,5 @@
 import { normalizeYaw, PLAYER_JUMP_VELOCITY, SERVER_TICK_SECONDS, stepHorizontalMovement } from "../../shared/index";
-import type {
-  InputCommand as InputWireCommand,
-  LoadoutCommand as LoadoutWireCommand
-} from "../../shared/netcode";
+import type { InputCommand as InputWireCommand } from "../../shared/netcode";
 import { NType } from "../../shared/netcode";
 
 const INPUT_SEQUENCE_MODULO = 0x10000;
@@ -22,19 +19,14 @@ export interface InputCommandActor {
   vz: number;
 }
 
-export interface InputSystemOptions<TUser, TPlayer extends InputCommandActor> {
-  readonly onLoadoutCommand: (
-    user: TUser,
-    player: TPlayer,
-    command: Partial<LoadoutWireCommand>
-  ) => void;
+export interface InputSystemOptions<TPlayer extends InputCommandActor> {
   readonly onPrimaryPressed: (player: TPlayer) => void;
 }
 
-export class InputSystem<TUser, TPlayer extends InputCommandActor> {
-  public constructor(private readonly options: InputSystemOptions<TUser, TPlayer>) {}
+export class InputSystem<TPlayer extends InputCommandActor> {
+  public constructor(private readonly options: InputSystemOptions<TPlayer>) {}
 
-  public applyCommands(user: TUser, player: TPlayer, commands: unknown[]): void {
+  public applyCommands(player: TPlayer, commands: Partial<InputWireCommand>[]): void {
     let latestSequence = player.lastProcessedSequence;
     let hasAcceptedCommand = false;
     let mergedForward = 0;
@@ -46,14 +38,7 @@ export class InputSystem<TUser, TPlayer extends InputCommandActor> {
     let queuedJump = false;
     let mergedYaw = player.yaw;
 
-    for (const rawCommand of commands) {
-      const ntype = (rawCommand as { ntype?: unknown })?.ntype;
-      if (ntype === NType.LoadoutCommand) {
-        this.options.onLoadoutCommand(user, player, rawCommand as Partial<LoadoutWireCommand>);
-        continue;
-      }
-
-      const command = rawCommand as Partial<InputWireCommand>;
+    for (const command of commands) {
       if (command.ntype !== NType.InputCommand) {
         continue;
       }
@@ -139,4 +124,3 @@ export class InputSystem<TUser, TPlayer extends InputCommandActor> {
     return delta > 0 && delta < INPUT_SEQUENCE_HALF_RANGE;
   }
 }
-

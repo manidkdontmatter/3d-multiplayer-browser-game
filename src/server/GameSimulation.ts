@@ -19,7 +19,6 @@ import {
   SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
-import type { LoadoutCommand as LoadoutWireCommand } from "../shared/netcode";
 import {
   PersistenceService
 } from "./persistence/PersistenceService";
@@ -35,6 +34,8 @@ import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { ReplicationMessagingSystem } from "./netcode/ReplicationMessagingSystem";
 import { NetReplicationBridge } from "./netcode/NetReplicationBridge";
+import { ServerCommandRouter } from "./net/ServerCommandRouter";
+import { LoadoutCommandHandler } from "./net/LoadoutCommandHandler";
 import { PlatformSystem } from "./platform/PlatformSystem";
 import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
 import { SimulationEcs } from "./ecs/SimulationEcs";
@@ -116,7 +117,9 @@ export class GameSimulation {
   private readonly meleeCombatSystem: MeleeCombatSystem;
   private readonly abilityExecutionSystem: AbilityExecutionSystem<RuntimePlayerState>;
   private readonly projectileSystem: ProjectileSystem;
-  private readonly inputSystem: InputSystem<UserLike, RuntimePlayerState>;
+  private readonly inputSystem: InputSystem<RuntimePlayerState>;
+  private readonly commandRouter = new ServerCommandRouter<UserLike>();
+  private readonly loadoutCommandHandler: LoadoutCommandHandler<UserLike>;
   private readonly platformSystem: PlatformSystem;
   private readonly replicationMessaging: ReplicationMessagingSystem<UserLike, RuntimePlayerState>;
   private readonly playerMovementSystem: PlayerMovementSystem<RuntimePlayerState>;
@@ -224,8 +227,7 @@ export class GameSimulation {
       applyMeleeHit: (player, meleeProfile) =>
         this.meleeCombatSystem.tryApplyMeleeHit(player, meleeProfile)
     });
-    this.inputSystem = new InputSystem<UserLike, RuntimePlayerState>({
-      onLoadoutCommand: (user, _player, command) => this.processLoadoutCommand(user, command),
+    this.inputSystem = new InputSystem<RuntimePlayerState>({
       onPrimaryPressed: (player) => this.abilityExecutionSystem.tryUsePrimaryAbility(player)
     });
     this.platformSystem = new PlatformSystem({
@@ -244,6 +246,24 @@ export class GameSimulation {
       queueSpatialMessage: (message) => this.spatialChannel.addMessage(message),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId)
+    });
+    this.loadoutCommandHandler = new LoadoutCommandHandler<UserLike>({
+      getLoadoutStateByUserId: (userId) => this.simulationEcs.getPlayerLoadoutStateByUserId(userId),
+      setPlayerActiveHotbarSlotByUserId: (userId, slot) =>
+        this.simulationEcs.setPlayerActiveHotbarSlotByUserId(userId, slot),
+      setPlayerHotbarAbilityByUserId: (userId, slot, abilityId) =>
+        this.simulationEcs.setPlayerHotbarAbilityByUserId(userId, slot, abilityId),
+      getPlayerAccountIdByUserId: (userId) => this.simulationEcs.getPlayerAccountIdByUserId(userId),
+      markAccountAbilityStateDirty: (accountId) =>
+        this.persistenceSyncSystem.markAccountDirty(accountId, {
+          dirtyCharacter: false,
+          dirtyAbilityState: true
+        }),
+      queueLoadoutStateMessageFromSnapshot: (user, snapshot) =>
+        this.replicationMessaging.queueLoadoutStateMessageFromSnapshot(user, snapshot),
+      sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
+      sanitizeSelectedAbilityId: (rawAbilityId, fallbackAbilityId, unlockedAbilityIds) =>
+        this.sanitizeSelectedAbilityId(rawAbilityId, fallbackAbilityId, unlockedAbilityIds)
     });
     this.playerMovementSystem = new PlayerMovementSystem<RuntimePlayerState>({
       world: this.world,
@@ -397,7 +417,10 @@ export class GameSimulation {
     if (!runtimePlayer) {
       return;
     }
-    this.inputSystem.applyCommands(user, runtimePlayer, commands);
+    this.commandRouter.route(user, commands, {
+      onInputCommands: (inputCommands) => this.inputSystem.applyCommands(runtimePlayer, inputCommands),
+      onLoadoutCommand: (commandUser, command) => this.loadoutCommandHandler.apply(commandUser, command)
+    });
     this.simulationEcs.applyPlayerRuntimeStateByUserId(user.id, runtimePlayer);
   }
 
@@ -454,83 +477,6 @@ export class GameSimulation {
       pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount(),
       ecsEntities: ecsStats.total
     };
-  }
-
-  private processLoadoutCommand(
-    user: UserLike,
-    command: Partial<LoadoutWireCommand>
-  ): void {
-    const applySelectedHotbarSlot = Boolean(command.applySelectedHotbarSlot);
-    const applyAssignment = Boolean(command.applyAssignment);
-    if (!applySelectedHotbarSlot && !applyAssignment) {
-      return;
-    }
-
-    const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
-    if (!loadout) {
-      return;
-    }
-    const previousActiveHotbarSlot = loadout.activeHotbarSlot;
-    const activeSlot = this.sanitizeHotbarSlot(loadout.activeHotbarSlot, 0);
-    const previousAssignedAbilityId = loadout.hotbarAbilityIds[activeSlot] ?? ABILITY_ID_NONE;
-    let requiresLoadoutResync = false;
-    let didAssignMutation = false;
-    let nextActiveHotbarSlot = loadout.activeHotbarSlot;
-    const unlockedAbilityIds = new Set<number>(loadout.unlockedAbilityIds);
-    const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
-
-    if (applySelectedHotbarSlot) {
-      const requestedSlot =
-        typeof command.selectedHotbarSlot === "number" && Number.isFinite(command.selectedHotbarSlot)
-          ? Math.max(0, Math.floor(command.selectedHotbarSlot))
-          : null;
-      const sanitizedSlot = this.sanitizeHotbarSlot(command.selectedHotbarSlot, loadout.activeHotbarSlot);
-      if (requestedSlot !== null && requestedSlot !== sanitizedSlot) {
-        requiresLoadoutResync = true;
-      }
-      this.simulationEcs.setPlayerActiveHotbarSlotByUserId(user.id, sanitizedSlot);
-      nextActiveHotbarSlot = sanitizedSlot;
-    }
-
-    if (applyAssignment) {
-      const targetSlot = this.sanitizeHotbarSlot(command.assignTargetSlot, nextActiveHotbarSlot);
-      const fallbackAbilityId = loadout.hotbarAbilityIds[targetSlot] ?? ABILITY_ID_NONE;
-      const requestedAbilityId =
-        typeof command.assignAbilityId === "number" && Number.isFinite(command.assignAbilityId)
-          ? Math.max(0, Math.floor(command.assignAbilityId))
-          : null;
-      const sanitizedAbilityId = this.sanitizeSelectedAbilityId(
-        command.assignAbilityId,
-        fallbackAbilityId,
-        unlockedAbilityIds
-      );
-      if (requestedAbilityId !== null && requestedAbilityId !== sanitizedAbilityId) {
-        requiresLoadoutResync = true;
-      }
-      didAssignMutation =
-        this.simulationEcs.setPlayerHotbarAbilityByUserId(user.id, targetSlot, sanitizedAbilityId) ||
-        didAssignMutation;
-    }
-
-    const nextLoadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id) ?? loadout;
-    const nextActiveSlot = this.sanitizeHotbarSlot(nextLoadout.activeHotbarSlot, 0);
-    const nextAssignedAbilityId = nextLoadout.hotbarAbilityIds[nextActiveSlot] ?? ABILITY_ID_NONE;
-    const loadoutChanged =
-      previousActiveHotbarSlot !== nextActiveSlot ||
-      previousAssignedAbilityId !== nextAssignedAbilityId ||
-      didAssignMutation;
-    if (loadoutChanged || requiresLoadoutResync) {
-      if (accountId !== null) {
-        this.persistenceSyncSystem.markAccountDirty(accountId, {
-          dirtyCharacter: false,
-          dirtyAbilityState: true
-        });
-      }
-      const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
-      if (loadout) {
-        this.replicationMessaging.queueLoadoutStateMessageFromSnapshot(user, loadout);
-      }
-    }
   }
 
   private getAbilityDefinitionForUnlockedSet(
