@@ -1,13 +1,6 @@
 import { Vector3 } from "three";
 import { AudioEngine } from "./audio/AudioEngine";
-import type {
-  AbilityUseEvent,
-  PlayerPose,
-  PlatformState,
-  ProjectileState,
-  RemotePlayerState,
-  TrainingDummyState
-} from "./types";
+import type { RenderFrameSnapshot } from "./types";
 import { AudioEventBridge } from "./rendering/AudioEventBridge";
 import { LocalCharacterVisualSystem } from "./rendering/LocalCharacterVisualSystem";
 import { ProjectileVisualSystem } from "./rendering/ProjectileVisualSystem";
@@ -46,40 +39,22 @@ export class WorldRenderer {
     this.environment.resize(width, height);
   }
 
-  public syncRemotePlayers(players: RemotePlayerState[], frameDeltaSeconds: number): void {
-    this.remoteCharacters.syncRemotePlayers(players, frameDeltaSeconds);
-  }
-
-  public syncLocalPlayer(localPose: PlayerPose, options: { frameDeltaSeconds: number; grounded: boolean }): void {
-    this.localCharacter.syncLocalPlayer(localPose, options);
-  }
-
-  public setLocalPlayerNid(nid: number | null): void {
-    this.localPlayerNid = typeof nid === "number" ? nid : null;
-  }
-
   public triggerLocalMeleePunch(): void {
     this.localCharacter.triggerLocalMeleePunch();
   }
 
-  public applyAbilityUseEvents(events: AbilityUseEvent[]): void {
-    this.audioEventBridge.applyAbilityUseEvents(events);
-  }
-
-  public syncPlatforms(platformStates: PlatformState[]): void {
-    this.worldEntities.syncPlatforms(platformStates);
-  }
-
-  public syncProjectiles(projectiles: ProjectileState[], frameDeltaSeconds = 1 / 60): void {
-    this.projectileVisuals.syncProjectiles(projectiles, frameDeltaSeconds);
-  }
-
-  public syncTrainingDummies(dummies: TrainingDummyState[]): void {
-    this.worldEntities.syncTrainingDummies(dummies);
-  }
-
-  public render(localPose: PlayerPose): void {
-    this.environment.render(localPose);
+  public apply(snapshot: RenderFrameSnapshot): void {
+    this.localPlayerNid = typeof snapshot.localPlayerNid === "number" ? snapshot.localPlayerNid : null;
+    this.localCharacter.syncLocalPlayer(snapshot.localPose, {
+      frameDeltaSeconds: snapshot.frameDeltaSeconds,
+      grounded: snapshot.localGrounded
+    });
+    this.remoteCharacters.syncRemotePlayers(snapshot.remotePlayers, snapshot.frameDeltaSeconds);
+    this.audioEventBridge.applyAbilityUseEvents(snapshot.abilityUseEvents);
+    this.worldEntities.syncPlatforms(snapshot.platforms);
+    this.worldEntities.syncTrainingDummies(snapshot.trainingDummies);
+    this.projectileVisuals.syncProjectiles(snapshot.projectiles, snapshot.frameDeltaSeconds);
+    this.environment.render(snapshot.localPose);
   }
 
   public getForwardDirection(): Vector3 {

@@ -59,3 +59,15 @@ export interface AbilityUseEvent {
   category: "projectile" | "melee" | "passive";
   serverTick: number;
 }
+
+export interface RenderFrameSnapshot {
+  frameDeltaSeconds: number;
+  localPose: PlayerPose;
+  localGrounded: boolean;
+  localPlayerNid: number | null;
+  remotePlayers: RemotePlayerState[];
+  abilityUseEvents: AbilityUseEvent[];
+  platforms: PlatformState[];
+  projectiles: ProjectileState[];
+  trainingDummies: TrainingDummyState[];
+}

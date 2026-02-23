@@ -67,7 +67,6 @@ Runtime entry points:
 - `npm run verify:quick`: fast local loop (`typecheck:client` + `test:smoke:fast`, expects running services)
 - `npm run test:smoke`: Playwright smoke validation
 - `npm run test:multiplayer`: two-client replication validation
-- `npm run test:multiplayer:quick`: faster multiplayer sanity run
 - `npm run test:multiplayer:csp`: multiplayer validation with CSP enabled
 - `npm run test:multiplayer:chaos`: CSP validation under simulated ack drop/reorder jitter
 

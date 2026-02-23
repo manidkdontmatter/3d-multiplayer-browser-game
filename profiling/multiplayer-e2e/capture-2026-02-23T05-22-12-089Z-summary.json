@@ -1,0 +1,16 @@
+{
+  "mode": "profile-only",
+  "serverUrl": "ws://127.0.0.1:9001",
+  "headless": true,
+  "simOnly": true,
+  "movementPollMs": 120,
+  "requestedCaptureMs": 5000,
+  "actualCaptureMs": 5380,
+  "loopIterations": 40,
+  "approxLoopHz": 7.43,
+  "files": {
+    "node": "C:\\Users\\Main\\OneDrive\\Desktop\\vibe-coded-3d-browser-game\\profiling\\multiplayer-e2e\\capture-2026-02-23T05-22-12-089Z-node.cpuprofile",
+    "browserA": "C:\\Users\\Main\\OneDrive\\Desktop\\vibe-coded-3d-browser-game\\profiling\\multiplayer-e2e\\capture-2026-02-23T05-22-12-089Z-browser-a.cpuprofile",
+    "browserB": "C:\\Users\\Main\\OneDrive\\Desktop\\vibe-coded-3d-browser-game\\profiling\\multiplayer-e2e\\capture-2026-02-23T05-22-12-089Z-browser-b.cpuprofile"
+  }
+}

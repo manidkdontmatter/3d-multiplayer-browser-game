@@ -12,17 +12,15 @@ import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
 import { LocalPhysicsWorld } from "./LocalPhysicsWorld";
 import { DeterministicPlatformTimeline } from "./DeterministicPlatformTimeline";
+import { RenderSnapshotAssembler } from "./RenderSnapshotAssembler";
+import { ReconciliationSmoother } from "./ReconciliationSmoother";
 import { WorldRenderer } from "./WorldRenderer";
-import type { MovementInput, PlayerPose } from "./types";
+import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
 import { AbilityHud } from "../ui/AbilityHud";
 import { resolveAccessKey, storeAccessKey, writeAccessKeyToFragment } from "../auth/accessKey";
 import { AuthPanel } from "../ui/AuthPanel";
 
 const FIXED_STEP = 1 / 60;
-const RECONCILE_POSITION_SMOOTH_RATE = 14;
-const RECONCILE_POSITION_SNAP_THRESHOLD = 2.5;
-const RECONCILE_YAW_SNAP_THRESHOLD = Math.PI * 0.75;
-const RECONCILE_OFFSET_EPSILON = 0.0005;
 const LOOK_PITCH_LIMIT = 1.45;
 
 export type ClientCreatePhase = "physics" | "network" | "ready";
@@ -34,6 +32,8 @@ export class GameClientApp {
   private readonly authPanel: AuthPanel;
   private readonly network = new NetworkClient();
   private readonly platformTimeline = new DeterministicPlatformTimeline();
+  private readonly renderSnapshotAssembler: RenderSnapshotAssembler;
+  private readonly reconciliationSmoother: ReconciliationSmoother;
   private readonly clock = new Clock();
   private readonly physics: LocalPhysicsWorld;
   private accumulator = 0;
@@ -47,18 +47,9 @@ export class GameClientApp {
   private freezeCamera = false;
   private frozenCameraPose: PlayerPose | null = null;
   private cspEnabled: boolean;
-  private predictedPlatformYawCarrySinceAck = 0;
+  private readonly e2eSimulationOnly: boolean;
   private testMovementOverride: MovementInput | null = null;
   private lastNonCspYawCarryServerTimeSeconds: number | null = null;
-  private reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
-  private reconciliationRenderOffsetPlatformPid: number | null = null;
-  private reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
-  private lastReconcilePositionError = 0;
-  private lastReconcileYawError = 0;
-  private lastReconcilePitchError = 0;
-  private lastReconcileReplayCount = 0;
-  private reconcileCorrectionCount = 0;
-  private reconcileHardSnapCount = 0;
   private totalUngroundedFixedTicks = 0;
   private totalUngroundedEntries = 0;
   private groundingSampleInitialized = false;
@@ -73,12 +64,14 @@ export class GameClientApp {
     statusNode: HTMLElement | null,
     physics: LocalPhysicsWorld,
     cspEnabled: boolean,
+    e2eSimulationOnly: boolean,
     private readonly serverUrl: string,
     initialAccessKey: string
   ) {
     this.statusNode = statusNode;
     this.physics = physics;
     this.cspEnabled = cspEnabled;
+    this.e2eSimulationOnly = e2eSimulationOnly;
     this.input = new InputController(canvas);
     this.abilityHud = AbilityHud.mount(document, {
       initialHotbarAssignments: this.hotbarAbilityIds,
@@ -102,6 +95,13 @@ export class GameClientApp {
       initialAccessKey
     });
     this.renderer = new WorldRenderer(canvas);
+    this.reconciliationSmoother = new ReconciliationSmoother({
+      getPlatformTransform: (pid) => this.physics.getPlatformTransform(pid),
+      getCurrentGroundedPlatformPid: () => this.physics.getKinematicState().groundedPlatformPid
+    });
+    this.renderSnapshotAssembler = new RenderSnapshotAssembler({
+      getRenderSnapshotState: (frameDeltaSeconds) => this.createRenderSnapshot(frameDeltaSeconds)
+    });
   }
 
   public static async create(
@@ -120,6 +120,7 @@ export class GameClientApp {
       statusNode,
       physics,
       GameClientApp.resolveCspEnabled(),
+      GameClientApp.resolveE2eSimulationOnly(),
       serverUrl,
       resolvedAccessKey.key
     );
@@ -139,8 +140,10 @@ export class GameClientApp {
     this.input.attach();
     window.addEventListener("resize", this.onResize);
     this.onResize();
-    this.clock.start();
-    this.rafId = window.requestAnimationFrame(this.loop);
+    if (!this.e2eSimulationOnly) {
+      this.clock.start();
+      this.rafId = window.requestAnimationFrame(this.loop);
+    }
   }
 
   public stop(): void {
@@ -167,7 +170,7 @@ export class GameClientApp {
     }
     if (this.input.consumeCspToggle()) {
       this.cspEnabled = !this.cspEnabled;
-      this.resetReconciliationSmoothing();
+      this.reconciliationSmoother.reset();
     }
     let shouldReleasePointerLock = false;
     if (this.input.consumeAbilityLoadoutToggle()) {
@@ -191,18 +194,8 @@ export class GameClientApp {
     }
     this.applyAbilityEvents();
 
-    const pose = this.getRenderPose();
-    this.renderer.syncLocalPlayer(pose, {
-      frameDeltaSeconds: seconds,
-      grounded: this.resolveLocalGroundedState()
-    });
-    this.renderer.setLocalPlayerNid(this.network.getLocalPlayerNid());
-    this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), seconds);
-    this.renderer.applyAbilityUseEvents(this.network.consumeAbilityUseEvents());
-    this.renderer.syncPlatforms(this.getRenderPlatformStates());
-    this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
-    this.renderer.syncProjectiles(this.network.getProjectiles(), seconds);
-    this.renderer.render(pose);
+    const renderSnapshot = this.renderSnapshotAssembler.build(seconds);
+    this.renderer.apply(renderSnapshot);
     this.updateStatus();
   }
 
@@ -234,23 +227,17 @@ export class GameClientApp {
       if (Math.abs(predictedPlatformYawDelta) > 1e-6) {
         this.input.applyYawDelta(predictedPlatformYawDelta);
         this.network.syncSentYaw(this.input.getYaw());
-        this.predictedPlatformYawCarrySinceAck = normalizeYaw(
-          this.predictedPlatformYawCarrySinceAck + predictedPlatformYawDelta
-        );
         yaw = this.input.getYaw();
       }
       this.physics.step(delta, movement, yaw, pitch);
       preReconciliationPose = this.physics.getPose();
     } else {
-      this.predictedPlatformYawCarrySinceAck = 0;
       this.applyDeterministicPlatformYawCarryForCspOff();
-      this.resetReconciliationSmoothing();
+      this.reconciliationSmoother.reset();
     }
 
     const recon = this.network.consumeReconciliationFrame();
     if (recon) {
-      this.predictedPlatformYawCarrySinceAck = 0;
-
       this.physics.setReconciliationState({
         x: recon.ack.x,
         y: recon.ack.y,
@@ -277,18 +264,19 @@ export class GameClientApp {
 
         const postReconciliationPose = this.physics.getPose();
         if (preReconciliationPose) {
-          this.updateReconciliationSmoothing(
+          this.reconciliationSmoother.applyCorrection(
             preReconciliationPose,
             postReconciliationPose,
-            recon.replay.length
+            recon.replay.length,
+            this.physics.getKinematicState().groundedPlatformPid
           );
         }
       }
     }
 
     if (cspActive) {
-      this.syncReconciliationOffsetPlatformFrame();
-      this.decayReconciliationSmoothing(delta);
+      this.reconciliationSmoother.syncPlatformFrame();
+      this.reconciliationSmoother.decay(delta);
     }
 
     this.sampleGroundingDiagnostics();
@@ -323,8 +311,9 @@ export class GameClientApp {
     const netState = this.network.getConnectionState();
     const cspActive = this.isCspActive();
     const cspLabel = cspActive ? "on" : "off";
-    const smoothingMagnitude = this.getReconciliationOffsetMagnitude();
-    const yawErrorDegrees = (this.lastReconcileYawError * 180) / Math.PI;
+    const reconDiagnostics = this.reconciliationSmoother.getDiagnostics();
+    const smoothingMagnitude = reconDiagnostics.worldOffsetMagnitude;
+    const yawErrorDegrees = (reconDiagnostics.lastYawError * 180) / Math.PI;
     const interpDelayMs = this.network.getInterpolationDelayMs();
     const ackJitterMs = this.network.getAckJitterMs();
     const localHealth = this.network.getLocalPlayerPose()?.health ?? 100;
@@ -333,7 +322,7 @@ export class GameClientApp {
     const selectedAbilityId = this.hotbarAbilityIds[activeSlot - 1] ?? ABILITY_ID_NONE;
     const activeAbilityName = this.resolveAbilityName(selectedAbilityId);
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${this.lastReconcilePositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${this.lastReconcileReplayCount} | hs=${this.reconcileHardSnapCount}/${this.reconcileCorrectionCount} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${reconDiagnostics.lastPositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${reconDiagnostics.lastReplayCount} | hs=${reconDiagnostics.hardSnapCorrections}/${reconDiagnostics.totalCorrections} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private trackFps(seconds: number): void {
@@ -353,6 +342,110 @@ export class GameClientApp {
     this.fpsSampleFrames = 0;
   }
 
+  private buildRenderGameStatePayload(scope: "full" | "minimal" = "full"): RenderGameStatePayload {
+    const pose = this.getRenderPose();
+    const reconDiagnostics = this.reconciliationSmoother.getDiagnostics();
+    const selectedSlot = this.input.getSelectedHotbarSlot();
+    const selectedAbilityId = this.hotbarAbilityIds[selectedSlot] ?? ABILITY_ID_NONE;
+    const remotePlayers = this.network.getRemotePlayers();
+    const basePayload: RenderGameStatePayload = {
+      mode: this.network.getConnectionState(),
+      pointerLock: document.pointerLockElement === this.canvas,
+      coordinateSystem: "right-handed; +x right, +y up, -z forward",
+      player: {
+        ...pose,
+        nid: this.network.getLocalPlayerNid()
+      },
+      remotePlayers: remotePlayers.map((p) => ({
+        nid: p.nid,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        grounded: p.grounded,
+        health: p.health
+      })),
+      perf: {
+        fps: this.fps,
+        lowFpsFrameCount: this.lowFpsFrameCount
+      }
+    };
+
+    if (scope === "minimal") {
+      return basePayload;
+    }
+
+    return {
+      ...basePayload,
+      platforms: this.getRenderPlatformStates().map((p) => ({
+        nid: p.nid,
+        modelId: p.modelId,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        rotation: p.rotation
+      })),
+      projectiles: this.network.getProjectiles().map((projectile) => ({
+        nid: projectile.nid,
+        modelId: projectile.modelId,
+        x: projectile.x,
+        y: projectile.y,
+        z: projectile.z
+      })),
+      trainingDummies: this.network.getTrainingDummies().map((dummy) => ({
+        nid: dummy.nid,
+        modelId: dummy.modelId,
+        x: dummy.x,
+        y: dummy.y,
+        z: dummy.z,
+        rotation: dummy.rotation,
+        health: dummy.health,
+        maxHealth: dummy.maxHealth
+      })),
+      localAbility: {
+        selectedSlot,
+        selectedAbilityId,
+        ui: {
+          loadoutPanelOpen: this.abilityHud.isLoadoutPanelOpen()
+        },
+        selectedAbilityName: this.resolveAbilityName(selectedAbilityId),
+        hotbar: this.hotbarAbilityIds.map((abilityId, slot) => ({
+          slot,
+          abilityId,
+          abilityName: this.resolveAbilityName(abilityId)
+        })),
+        catalog: this.network.getAbilityCatalog().map((ability) => ({
+          id: ability.id,
+          name: ability.name,
+          category: ability.category,
+          hasProjectile: Boolean(ability.projectile),
+          hasMelee: Boolean(ability.melee)
+        }))
+      },
+      netTiming: {
+        interpolationDelayMs: this.network.getInterpolationDelayMs(),
+        ackJitterMs: this.network.getAckJitterMs()
+      },
+      reconciliation: {
+        lastError: {
+          position: reconDiagnostics.lastPositionError,
+          yaw: reconDiagnostics.lastYawError,
+          pitch: reconDiagnostics.lastPitchError
+        },
+        smoothingOffset: {
+          x: reconDiagnostics.rawOffset.x,
+          y: reconDiagnostics.rawOffset.y,
+          z: reconDiagnostics.rawOffset.z,
+          yaw: 0,
+          pitch: 0,
+          positionMagnitude: reconDiagnostics.worldOffsetMagnitude
+        },
+        lastReplayCount: reconDiagnostics.lastReplayCount,
+        totalCorrections: reconDiagnostics.totalCorrections,
+        hardSnapCorrections: reconDiagnostics.hardSnapCorrections
+      }
+    };
+  }
+
   private registerTestingHooks(): void {
     window.advanceTime = (ms: number) => {
       const clampedMs = Math.max(1, Math.min(ms, 5000));
@@ -361,115 +454,19 @@ export class GameClientApp {
         this.stepFixed(FIXED_STEP);
       }
       this.applyAbilityEvents();
-      this.renderer.syncLocalPlayer(this.getRenderPose(), {
-        frameDeltaSeconds: FIXED_STEP,
-        grounded: this.resolveLocalGroundedState()
-      });
-      this.renderer.setLocalPlayerNid(this.network.getLocalPlayerNid());
-      this.renderer.syncRemotePlayers(this.network.getRemotePlayers(), FIXED_STEP);
-      this.renderer.applyAbilityUseEvents(this.network.consumeAbilityUseEvents());
-      this.renderer.syncPlatforms(this.getRenderPlatformStates());
-      this.renderer.syncTrainingDummies(this.network.getTrainingDummies());
-      this.renderer.syncProjectiles(this.network.getProjectiles(), FIXED_STEP);
-      this.renderer.render(this.getRenderPose());
-      this.updateStatus();
+      if (!this.e2eSimulationOnly) {
+        const renderSnapshot = this.renderSnapshotAssembler.build(FIXED_STEP);
+        this.renderer.apply(renderSnapshot);
+        this.updateStatus();
+      }
+    };
+
+    window.render_game_state = (scope = "full") => {
+      return this.buildRenderGameStatePayload(scope);
     };
 
     window.render_game_to_text = () => {
-      const pose = this.getRenderPose();
-      const selectedSlot = this.input.getSelectedHotbarSlot();
-      const selectedAbilityId = this.hotbarAbilityIds[selectedSlot] ?? ABILITY_ID_NONE;
-      const payload = {
-        mode: this.network.getConnectionState(),
-        pointerLock: document.pointerLockElement === this.canvas,
-        coordinateSystem: "right-handed; +x right, +y up, -z forward",
-        player: {
-          ...pose,
-          nid: this.network.getLocalPlayerNid()
-        },
-        platforms: this.getRenderPlatformStates().map((p) => ({
-          nid: p.nid,
-          modelId: p.modelId,
-          x: p.x,
-          y: p.y,
-          z: p.z,
-          rotation: p.rotation
-        })),
-        projectiles: this.network.getProjectiles().map((projectile) => ({
-          nid: projectile.nid,
-          modelId: projectile.modelId,
-          x: projectile.x,
-          y: projectile.y,
-          z: projectile.z
-        })),
-        trainingDummies: this.network.getTrainingDummies().map((dummy) => ({
-          nid: dummy.nid,
-          modelId: dummy.modelId,
-          x: dummy.x,
-          y: dummy.y,
-          z: dummy.z,
-          rotation: dummy.rotation,
-          health: dummy.health,
-          maxHealth: dummy.maxHealth
-        })),
-        remotePlayers: this.network.getRemotePlayers().map((p) => ({
-          nid: p.nid,
-          modelId: p.modelId,
-          x: p.x,
-          y: p.y,
-          z: p.z,
-          rotation: p.rotation,
-          grounded: p.grounded,
-          health: p.health
-        })),
-        localAbility: {
-          selectedSlot,
-          selectedAbilityId,
-          ui: {
-            loadoutPanelOpen: this.abilityHud.isLoadoutPanelOpen()
-          },
-          selectedAbilityName: this.resolveAbilityName(selectedAbilityId),
-          hotbar: this.hotbarAbilityIds.map((abilityId, slot) => ({
-            slot,
-            abilityId,
-            abilityName: this.resolveAbilityName(abilityId)
-          })),
-          catalog: this.network.getAbilityCatalog().map((ability) => ({
-            id: ability.id,
-            name: ability.name,
-            category: ability.category,
-            hasProjectile: Boolean(ability.projectile),
-            hasMelee: Boolean(ability.melee)
-          }))
-        },
-        netTiming: {
-          interpolationDelayMs: this.network.getInterpolationDelayMs(),
-          ackJitterMs: this.network.getAckJitterMs()
-        },
-        perf: {
-          fps: this.fps,
-          lowFpsFrameCount: this.lowFpsFrameCount
-        },
-        reconciliation: {
-          lastError: {
-            position: this.lastReconcilePositionError,
-            yaw: this.lastReconcileYawError,
-            pitch: this.lastReconcilePitchError
-          },
-          smoothingOffset: {
-            x: this.reconciliationRenderOffset.x,
-            y: this.reconciliationRenderOffset.y,
-            z: this.reconciliationRenderOffset.z,
-            yaw: 0,
-            pitch: 0,
-            positionMagnitude: this.getReconciliationOffsetMagnitude()
-          },
-          lastReplayCount: this.lastReconcileReplayCount,
-          totalCorrections: this.reconcileCorrectionCount,
-          hardSnapCorrections: this.reconcileHardSnapCount
-        }
-      };
-      return JSON.stringify(payload);
+      return JSON.stringify(this.buildRenderGameStatePayload("full"));
     };
 
     window.set_test_movement = (movement) => {
@@ -507,13 +504,27 @@ export class GameClientApp {
       return { ...this.frozenCameraPose };
     }
     const renderPosition = this.getRenderPosition();
-    const renderOffset = this.getReconciliationRenderOffsetWorld();
+    const renderOffset = this.reconciliationSmoother.getWorldOffset();
     return {
       x: renderPosition.x + renderOffset.x,
       y: renderPosition.y + renderOffset.y,
       z: renderPosition.z + renderOffset.z,
       yaw: this.input.getYaw(),
       pitch: Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, this.input.getPitch()))
+    };
+  }
+
+  private createRenderSnapshot(frameDeltaSeconds: number): RenderFrameSnapshot {
+    return {
+      frameDeltaSeconds,
+      localPose: this.getRenderPose(),
+      localGrounded: this.resolveLocalGroundedState(),
+      localPlayerNid: this.network.getLocalPlayerNid(),
+      remotePlayers: this.network.getRemotePlayers(),
+      abilityUseEvents: this.network.consumeAbilityUseEvents(),
+      platforms: this.getRenderPlatformStates(),
+      trainingDummies: this.network.getTrainingDummies(),
+      projectiles: this.network.getProjectiles()
     };
   }
 
@@ -575,157 +586,6 @@ export class GameClientApp {
     this.network.syncSentYaw(this.input.getYaw());
   }
 
-  private updateReconciliationSmoothing(
-    preReconciliationPose: PlayerPose,
-    postReconciliationPose: PlayerPose,
-    replayCount: number
-  ): void {
-    const currentRenderOffset = this.getReconciliationRenderOffsetWorld();
-    const preRenderedPose = {
-      x: preReconciliationPose.x + currentRenderOffset.x,
-      y: preReconciliationPose.y + currentRenderOffset.y,
-      z: preReconciliationPose.z + currentRenderOffset.z
-    };
-
-    const positionError = Math.hypot(
-      preReconciliationPose.x - postReconciliationPose.x,
-      preReconciliationPose.y - postReconciliationPose.y,
-      preReconciliationPose.z - postReconciliationPose.z
-    );
-    const yawError = Math.abs(normalizeYaw(preReconciliationPose.yaw - postReconciliationPose.yaw));
-    const pitchError = Math.abs(preReconciliationPose.pitch - postReconciliationPose.pitch);
-    const shouldHardSnap =
-      positionError > RECONCILE_POSITION_SNAP_THRESHOLD || yawError > RECONCILE_YAW_SNAP_THRESHOLD;
-
-    this.lastReconcilePositionError = positionError;
-    this.lastReconcileYawError = yawError;
-    this.lastReconcilePitchError = pitchError;
-    this.lastReconcileReplayCount = replayCount;
-    this.reconcileCorrectionCount += 1;
-
-    if (shouldHardSnap) {
-      this.reconcileHardSnapCount += 1;
-      this.resetReconciliationSmoothing();
-      return;
-    }
-
-    this.setReconciliationRenderOffsetFromWorld(
-      {
-        x: preRenderedPose.x - postReconciliationPose.x,
-        y: preRenderedPose.y - postReconciliationPose.y,
-        z: preRenderedPose.z - postReconciliationPose.z
-      },
-      this.physics.getKinematicState().groundedPlatformPid
-    );
-  }
-
-  private decayReconciliationSmoothing(delta: number): void {
-    const clampedDelta = Math.max(0, delta);
-    const positionDecay = Math.exp(-RECONCILE_POSITION_SMOOTH_RATE * clampedDelta);
-    if (this.reconciliationRenderOffsetPlatformPid === null) {
-      this.reconciliationRenderOffset.x *= positionDecay;
-      this.reconciliationRenderOffset.z *= positionDecay;
-      if (Math.abs(this.reconciliationRenderOffset.x) < RECONCILE_OFFSET_EPSILON) {
-        this.reconciliationRenderOffset.x = 0;
-      }
-      if (Math.abs(this.reconciliationRenderOffset.z) < RECONCILE_OFFSET_EPSILON) {
-        this.reconciliationRenderOffset.z = 0;
-      }
-    } else {
-      this.reconciliationRenderOffsetPlatformLocal.x *= positionDecay;
-      this.reconciliationRenderOffsetPlatformLocal.z *= positionDecay;
-      if (Math.abs(this.reconciliationRenderOffsetPlatformLocal.x) < RECONCILE_OFFSET_EPSILON) {
-        this.reconciliationRenderOffsetPlatformLocal.x = 0;
-      }
-      if (Math.abs(this.reconciliationRenderOffsetPlatformLocal.z) < RECONCILE_OFFSET_EPSILON) {
-        this.reconciliationRenderOffsetPlatformLocal.z = 0;
-      }
-    }
-    this.reconciliationRenderOffset.y *= positionDecay;
-
-    if (Math.abs(this.reconciliationRenderOffset.y) < RECONCILE_OFFSET_EPSILON) {
-      this.reconciliationRenderOffset.y = 0;
-    }
-  }
-
-  private resetReconciliationSmoothing(): void {
-    this.reconciliationRenderOffset = { x: 0, y: 0, z: 0 };
-    this.reconciliationRenderOffsetPlatformPid = null;
-    this.reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
-    this.predictedPlatformYawCarrySinceAck = 0;
-  }
-
-  private getReconciliationOffsetMagnitude(): number {
-    const renderOffset = this.getReconciliationRenderOffsetWorld();
-    return Math.hypot(renderOffset.x, renderOffset.y, renderOffset.z);
-  }
-
-  private getReconciliationRenderOffsetWorld(): { x: number; y: number; z: number } {
-    if (this.reconciliationRenderOffsetPlatformPid === null) {
-      return { ...this.reconciliationRenderOffset };
-    }
-
-    const platform = this.physics.getPlatformTransform(this.reconciliationRenderOffsetPlatformPid);
-    if (!platform) {
-      return { ...this.reconciliationRenderOffset };
-    }
-
-    const cos = Math.cos(platform.yaw);
-    const sin = Math.sin(platform.yaw);
-    return {
-      x: this.reconciliationRenderOffsetPlatformLocal.x * cos + this.reconciliationRenderOffsetPlatformLocal.z * sin,
-      y: this.reconciliationRenderOffset.y,
-      z:
-        -this.reconciliationRenderOffsetPlatformLocal.x * sin +
-        this.reconciliationRenderOffsetPlatformLocal.z * cos
-    };
-  }
-
-  private setReconciliationRenderOffsetFromWorld(
-    worldOffset: { x: number; y: number; z: number },
-    groundedPlatformPid: number | null
-  ): void {
-    this.reconciliationRenderOffset.y = worldOffset.y;
-    if (groundedPlatformPid === null) {
-      this.reconciliationRenderOffset.x = worldOffset.x;
-      this.reconciliationRenderOffset.z = worldOffset.z;
-      this.reconciliationRenderOffsetPlatformPid = null;
-      this.reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
-      return;
-    }
-
-    const platform = this.physics.getPlatformTransform(groundedPlatformPid);
-    if (!platform) {
-      this.reconciliationRenderOffset.x = worldOffset.x;
-      this.reconciliationRenderOffset.z = worldOffset.z;
-      this.reconciliationRenderOffsetPlatformPid = null;
-      this.reconciliationRenderOffsetPlatformLocal = { x: 0, z: 0 };
-      return;
-    }
-
-    const cos = Math.cos(platform.yaw);
-    const sin = Math.sin(platform.yaw);
-    this.reconciliationRenderOffsetPlatformPid = groundedPlatformPid;
-    this.reconciliationRenderOffsetPlatformLocal.x = worldOffset.x * cos - worldOffset.z * sin;
-    this.reconciliationRenderOffsetPlatformLocal.z = worldOffset.x * sin + worldOffset.z * cos;
-    this.reconciliationRenderOffset.x = 0;
-    this.reconciliationRenderOffset.z = 0;
-  }
-
-  private syncReconciliationOffsetPlatformFrame(): void {
-    if (this.reconciliationRenderOffsetPlatformPid === null) {
-      return;
-    }
-
-    const currentGroundedPlatformPid = this.physics.getKinematicState().groundedPlatformPid;
-    if (currentGroundedPlatformPid === this.reconciliationRenderOffsetPlatformPid) {
-      return;
-    }
-
-    const worldOffset = this.getReconciliationRenderOffsetWorld();
-    this.setReconciliationRenderOffsetFromWorld(worldOffset, currentGroundedPlatformPid);
-  }
-
   private readonly onResize = (): void => {
     this.renderer.resize(window.innerWidth, window.innerHeight);
   };
@@ -785,6 +645,12 @@ export class GameClientApp {
       return true;
     }
     return false;
+  }
+
+  private static resolveE2eSimulationOnly(): boolean {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("e2eSimOnly");
+    return raw === "1" || raw === "true";
   }
 
   private isCspActive(): boolean {

@@ -1,0 +1,165 @@
+{
+  "generatedAt": "2026-02-23T05:44:42.534Z",
+  "exitCode": 0,
+  "failureMessage": null,
+  "totalDurationMs": 10687,
+  "activePhaseAtExit": null,
+  "mode": "functional",
+  "config": {
+    "serverUrl": "ws://127.0.0.1:1676",
+    "useExistingServer": false,
+    "useExistingClient": false,
+    "headless": true,
+    "simOnly": true,
+    "movementPollMs": 120
+  },
+  "phases": [
+    {
+      "name": "server:allocate-port",
+      "startedAt": 1771825471671,
+      "status": "ok",
+      "endedAt": 1771825471675,
+      "durationMs": 4
+    },
+    {
+      "name": "server:start-and-wait",
+      "startedAt": 1771825471693,
+      "status": "ok",
+      "endedAt": 1771825475380,
+      "durationMs": 3687
+    },
+    {
+      "name": "client:start-and-wait",
+      "startedAt": 1771825475381,
+      "status": "ok",
+      "endedAt": 1771825477454,
+      "durationMs": 2073
+    },
+    {
+      "name": "browser-a:launch",
+      "startedAt": 1771825477454,
+      "status": "ok",
+      "endedAt": 1771825478461,
+      "durationMs": 1007
+    },
+    {
+      "name": "browser-b:launch",
+      "startedAt": 1771825478461,
+      "status": "ok",
+      "endedAt": 1771825478575,
+      "durationMs": 114
+    },
+    {
+      "name": "browser-a:new-page",
+      "startedAt": 1771825478575,
+      "status": "ok",
+      "endedAt": 1771825479146,
+      "durationMs": 571
+    },
+    {
+      "name": "browser-b:new-page",
+      "startedAt": 1771825479146,
+      "status": "ok",
+      "endedAt": 1771825479203,
+      "durationMs": 57
+    },
+    {
+      "name": "page-a:goto",
+      "startedAt": 1771825479203,
+      "status": "ok",
+      "endedAt": 1771825480488,
+      "durationMs": 1285
+    },
+    {
+      "name": "page-b:goto",
+      "startedAt": 1771825480488,
+      "status": "ok",
+      "endedAt": 1771825480683,
+      "durationMs": 195
+    },
+    {
+      "name": "pages:initial-focus",
+      "startedAt": 1771825480683,
+      "status": "ok",
+      "endedAt": 1771825481444,
+      "durationMs": 761
+    },
+    {
+      "name": "connect:wait-a",
+      "startedAt": 1771825481444,
+      "status": "ok",
+      "endedAt": 1771825481463,
+      "durationMs": 19
+    },
+    {
+      "name": "connect:wait-b",
+      "startedAt": 1771825481463,
+      "status": "ok",
+      "endedAt": 1771825481484,
+      "durationMs": 21
+    },
+    {
+      "name": "hooks:status-a",
+      "startedAt": 1771825481484,
+      "status": "ok",
+      "endedAt": 1771825481486,
+      "durationMs": 2
+    },
+    {
+      "name": "hooks:status-b",
+      "startedAt": 1771825481486,
+      "status": "ok",
+      "endedAt": 1771825481488,
+      "durationMs": 2
+    },
+    {
+      "name": "state:baseline-a",
+      "startedAt": 1771825481488,
+      "status": "ok",
+      "endedAt": 1771825481490,
+      "durationMs": 2
+    },
+    {
+      "name": "state:baseline-b",
+      "startedAt": 1771825481490,
+      "status": "ok",
+      "endedAt": 1771825481492,
+      "durationMs": 2
+    },
+    {
+      "name": "presence:wait-a-on-b",
+      "startedAt": 1771825481492,
+      "status": "ok",
+      "endedAt": 1771825481496,
+      "durationMs": 4
+    },
+    {
+      "name": "movement:prep-a",
+      "startedAt": 1771825481497,
+      "status": "ok",
+      "endedAt": 1771825481651,
+      "durationMs": 154
+    },
+    {
+      "name": "movement:local-a",
+      "startedAt": 1771825481651,
+      "status": "ok",
+      "endedAt": 1771825482204,
+      "durationMs": 553
+    },
+    {
+      "name": "movement:prep-b",
+      "startedAt": 1771825482204,
+      "status": "ok",
+      "endedAt": 1771825482338,
+      "durationMs": 134
+    },
+    {
+      "name": "movement:remote-b",
+      "startedAt": 1771825482339,
+      "status": "ok",
+      "endedAt": 1771825482357,
+      "durationMs": 18
+    }
+  ]
+}

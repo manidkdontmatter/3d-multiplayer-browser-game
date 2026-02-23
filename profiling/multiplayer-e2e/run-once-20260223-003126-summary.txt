@@ -1,0 +1,28 @@
+exitCode=
+elapsedMs=14269
+stdoutLog=C:\Users\Main\OneDrive\Desktop\vibe-coded-3d-browser-game\profiling\multiplayer-e2e\run-once-20260223-003126-stdout.log
+stderrLog=C:\Users\Main\OneDrive\Desktop\vibe-coded-3d-browser-game\profiling\multiplayer-e2e\run-once-20260223-003126-stderr.log
+cpuCsv=C:\Users\Main\OneDrive\Desktop\vibe-coded-3d-browser-game\profiling\multiplayer-e2e\run-once-20260223-003126-cpu.csv
+--- stdout tail ---
+
+> vibe-coded-3d-browser-game@0.1.0 test:multiplayer
+> node scripts/multiplayer-e2e.js
+
+[server] 
+> vibe-coded-3d-browser-game@0.1.0 dev:server
+> tsx watch src/server/main.ts
+
+[server] [server] transport=uws
+[server] [server] nengi listening on ws://localhost:7143
+[client] 
+> vibe-coded-3d-browser-game@0.1.0 dev:client
+> vite --host 127.0.0.1 --port 5173
+
+[client] 
+  [32m[1mVITE[22m v7.3.1[39m  [2mready in [0m[1m374[22m[2m[0m ms[22m
+
+[client]   [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+--- stderr tail ---
+[server:err] using deprecated parameters for the initialization function; pass a single object instead
+[multi] FAIL Error: Expected primary action nonce to advance on remote view from 0, got 0.
+    at main (file:///C:/Users/Main/OneDrive/Desktop/vibe-coded-3d-browser-game/scripts/multiplayer-e2e.js:801:15)

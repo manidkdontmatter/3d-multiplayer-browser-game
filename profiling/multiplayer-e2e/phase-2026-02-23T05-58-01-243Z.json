@@ -1,0 +1,172 @@
+{
+  "generatedAt": "2026-02-23T05:58:01.244Z",
+  "exitCode": 1,
+  "failureMessage": "Expected primary action nonce to advance on remote view from 0, got 0.",
+  "totalDurationMs": 12188,
+  "activePhaseAtExit": null,
+  "mode": "functional",
+  "config": {
+    "serverUrl": "ws://127.0.0.1:1966",
+    "useExistingServer": false,
+    "useExistingClient": false,
+    "headless": true,
+    "simOnly": true,
+    "movementPollMs": 120
+  },
+  "phases": [
+    {
+      "name": "server:allocate-port",
+      "startedAt": 1771826268626,
+      "status": "ok",
+      "endedAt": 1771826268629,
+      "durationMs": 3
+    },
+    {
+      "name": "server:start-and-wait",
+      "startedAt": 1771826268633,
+      "status": "ok",
+      "endedAt": 1771826269923,
+      "durationMs": 1290
+    },
+    {
+      "name": "client:start-and-wait",
+      "startedAt": 1771826269923,
+      "status": "ok",
+      "endedAt": 1771826270735,
+      "durationMs": 812
+    },
+    {
+      "name": "browser-a:launch",
+      "startedAt": 1771826270735,
+      "status": "ok",
+      "endedAt": 1771826270817,
+      "durationMs": 82
+    },
+    {
+      "name": "browser-b:launch",
+      "startedAt": 1771826270817,
+      "status": "ok",
+      "endedAt": 1771826270991,
+      "durationMs": 174
+    },
+    {
+      "name": "browser-a:new-page",
+      "startedAt": 1771826270991,
+      "status": "ok",
+      "endedAt": 1771826271101,
+      "durationMs": 110
+    },
+    {
+      "name": "browser-b:new-page",
+      "startedAt": 1771826271101,
+      "status": "ok",
+      "endedAt": 1771826271158,
+      "durationMs": 57
+    },
+    {
+      "name": "page-a:goto",
+      "startedAt": 1771826271159,
+      "status": "ok",
+      "endedAt": 1771826271773,
+      "durationMs": 614
+    },
+    {
+      "name": "page-b:goto",
+      "startedAt": 1771826271773,
+      "status": "ok",
+      "endedAt": 1771826271973,
+      "durationMs": 200
+    },
+    {
+      "name": "pages:initial-focus",
+      "startedAt": 1771826271973,
+      "status": "ok",
+      "endedAt": 1771826272717,
+      "durationMs": 744
+    },
+    {
+      "name": "connect:wait-a",
+      "startedAt": 1771826272717,
+      "status": "ok",
+      "endedAt": 1771826272731,
+      "durationMs": 14
+    },
+    {
+      "name": "connect:wait-b",
+      "startedAt": 1771826272731,
+      "status": "ok",
+      "endedAt": 1771826272743,
+      "durationMs": 12
+    },
+    {
+      "name": "hooks:status-a",
+      "startedAt": 1771826272743,
+      "status": "ok",
+      "endedAt": 1771826272745,
+      "durationMs": 2
+    },
+    {
+      "name": "hooks:status-b",
+      "startedAt": 1771826272745,
+      "status": "ok",
+      "endedAt": 1771826272747,
+      "durationMs": 2
+    },
+    {
+      "name": "state:baseline-a",
+      "startedAt": 1771826272747,
+      "status": "ok",
+      "endedAt": 1771826272749,
+      "durationMs": 2
+    },
+    {
+      "name": "state:baseline-b",
+      "startedAt": 1771826272749,
+      "status": "ok",
+      "endedAt": 1771826272752,
+      "durationMs": 3
+    },
+    {
+      "name": "presence:wait-a-on-b",
+      "startedAt": 1771826272752,
+      "status": "ok",
+      "endedAt": 1771826272758,
+      "durationMs": 6
+    },
+    {
+      "name": "movement:prep-a",
+      "startedAt": 1771826272758,
+      "status": "ok",
+      "endedAt": 1771826272899,
+      "durationMs": 141
+    },
+    {
+      "name": "movement:local-a",
+      "startedAt": 1771826272899,
+      "status": "ok",
+      "endedAt": 1771826273330,
+      "durationMs": 431
+    },
+    {
+      "name": "movement:prep-b",
+      "startedAt": 1771826273330,
+      "status": "ok",
+      "endedAt": 1771826273463,
+      "durationMs": 133
+    },
+    {
+      "name": "movement:remote-b",
+      "startedAt": 1771826273463,
+      "status": "ok",
+      "endedAt": 1771826273482,
+      "durationMs": 19
+    },
+    {
+      "name": "action:primary-remote",
+      "startedAt": 1771826273483,
+      "status": "ok",
+      "endedAt": 1771826280811,
+      "durationMs": 7328
+    }
+  ]
+}
