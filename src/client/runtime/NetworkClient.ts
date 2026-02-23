@@ -2,10 +2,7 @@ import {
   type AbilityDefinition
 } from "../../shared/index";
 import {
-  type AbilityUseMessage,
   NType,
-  type IdentityMessage,
-  type InputAckMessage,
   type LoadoutCommand,
   ncontext
 } from "../../shared/netcode";
@@ -21,6 +18,7 @@ import type {
 import { AbilityStateStore } from "./network/AbilityStateStore";
 import { AckReconciliationBuffer } from "./network/AckReconciliationBuffer";
 import { InterpolationController } from "./network/InterpolationController";
+import { InboundMessageRouter } from "./network/InboundMessageRouter";
 import { NetTransportClient } from "./network/NetTransportClient";
 import { ServerTimeSync } from "./network/ServerTimeSync";
 import { SnapshotStore } from "./network/SnapshotStore";
@@ -42,6 +40,7 @@ export class NetworkClient {
   private readonly interpolation = new InterpolationController();
   private readonly serverTimeSync = new ServerTimeSync();
   private readonly ackBuffer: AckReconciliationBuffer;
+  private readonly inboundMessageRouter = new InboundMessageRouter();
   private readonly netSimulation = this.resolveNetSimulationConfig();
   private queuedLoadoutCommand: QueuedLoadoutCommand | null = null;
   private localPlayerNid: number | null = null;
@@ -231,25 +230,17 @@ export class NetworkClient {
       return;
     }
 
-    for (const message of messages) {
-      const typed = message as
-        | IdentityMessage
-        | InputAckMessage
-        | AbilityUseMessage
-        | undefined;
-
-      if (typed?.ntype === NType.IdentityMessage) {
-        this.localPlayerNid = typed.playerNid;
-        continue;
+    this.inboundMessageRouter.route(messages, {
+      onIdentityMessage: (message) => {
+        this.localPlayerNid = message.playerNid;
+      },
+      onInputAckMessage: (message) => {
+        this.ackBuffer.enqueueAckMessage(message, this.netSimulation);
+      },
+      onUnhandledMessage: (message) => {
+        this.abilities.processMessage(message);
       }
-
-      if (typed?.ntype === NType.InputAckMessage) {
-        this.ackBuffer.enqueueAckMessage(typed, this.netSimulation);
-        continue;
-      }
-
-      this.abilities.processMessage(message);
-    }
+    });
 
     this.ackBuffer.processBufferedAcks();
   }
