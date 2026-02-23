@@ -1,12 +1,19 @@
 import RAPIER from "@dimforge/rapier3d-compat";
-import { AABB3D, type Channel, type ChannelAABB3D } from "nengi";
 import type { PlayerSnapshot } from "../persistence/PersistenceService";
+
+export interface BroadcastSubscriptionChannel<TUser> {
+  subscribe(user: TUser): void;
+}
+
+export interface SpatialSubscriptionChannel<TUser, TView> {
+  subscribe(user: TUser, view: TView): void;
+}
 
 export interface LifecycleUser {
   id: number;
   queueMessage: (message: unknown) => void;
   accountId?: number;
-  view?: AABB3D;
+  view?: { x: number; y: number; z: number };
 }
 
 export interface LifecyclePlayer {
@@ -39,8 +46,16 @@ export interface LifecyclePlayer {
 
 export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlayer extends LifecyclePlayer> {
   readonly world: RAPIER.World;
-  readonly globalChannel: Channel;
-  readonly spatialChannel: ChannelAABB3D;
+  readonly globalChannel: BroadcastSubscriptionChannel<TUser>;
+  readonly spatialChannel: SpatialSubscriptionChannel<TUser, TUser["view"]>;
+  readonly createUserView: (position: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  }) => NonNullable<TUser["view"]>;
   readonly usersById: Map<number, TUser>;
   readonly resolvePlayerByUserId: (userId: number) => TPlayer | undefined;
   readonly takePendingSnapshotForLogin: (accountId: number) => PlayerSnapshot | null;
@@ -138,14 +153,14 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     this.options.onPlayerAdded?.(user, player);
     this.options.registerPlayerForDamage(player);
 
-    const view = new AABB3D(
-      player.x,
-      player.y,
-      player.z,
-      this.options.viewHalfWidth,
-      this.options.viewHalfHeight,
-      this.options.viewHalfDepth
-    );
+    const view = this.options.createUserView({
+      x: player.x,
+      y: player.y,
+      z: player.z,
+      halfWidth: this.options.viewHalfWidth,
+      halfHeight: this.options.viewHalfHeight,
+      halfDepth: this.options.viewHalfDepth
+    });
     user.view = view;
     this.options.spatialChannel.subscribe(user, view);
 

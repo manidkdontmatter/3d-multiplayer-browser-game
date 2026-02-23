@@ -1,41 +1,20 @@
 import { performance } from "node:perf_hooks";
-import {
-  Channel,
-  ChannelAABB3D,
-  Instance,
-  NetworkEvent,
-  type Context
-} from "nengi";
+import type { Context } from "nengi";
 import { SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
 import { GameSimulation } from "./GameSimulation";
 import { PersistenceService } from "./persistence/PersistenceService";
-
-type QueueEvent = {
-  type: NetworkEvent;
-  user?: {
-    id: number;
-    queueMessage: (message: unknown) => void;
-    remoteAddress?: string;
-    networkAdapter?: {
-      disconnect?: (user: unknown, reason: unknown) => void;
-    };
-    accountId?: number;
-  };
-  commands?: unknown[];
-  payload?: unknown;
-};
+import { ServerNetworkHost } from "./net/ServerNetworkHost";
+import { ServerNetworkEventRouter } from "./net/ServerNetworkEventRouter";
 
 const MAX_TICK_INTERVAL_SAMPLES = 6000;
 const DEFAULT_PERSIST_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_HEALTH_LOG_INTERVAL_MS = 5000;
 
 export class GameServer {
-  private readonly instance: Instance;
-  private readonly globalChannel: Channel;
-  private readonly spatialChannel: ChannelAABB3D;
+  private readonly networkHost: ServerNetworkHost;
   private readonly simulation: GameSimulation;
   private readonly persistence: PersistenceService;
-  private adapter: { listen: (port: number, ready: () => void) => void; close?: () => void } | null = null;
+  private readonly networkEventRouter: ServerNetworkEventRouter;
   private loopHandle: NodeJS.Timeout | null = null;
   private running = false;
   private nextTickAtMs = 0;
@@ -62,32 +41,40 @@ export class GameServer {
   private lastLiveMetricsSampleCount = 0;
 
   public constructor(context: Context) {
-    this.instance = new Instance(context);
-    this.globalChannel = new Channel(this.instance.localState);
-    this.spatialChannel = new ChannelAABB3D(this.instance.localState);
+    this.networkHost = new ServerNetworkHost(context);
     this.persistFlushIntervalMs = this.resolvePersistFlushIntervalMs();
     this.healthLogIntervalMs = this.resolveHealthLogIntervalMs();
     this.persistence = new PersistenceService(process.env.SERVER_DATA_PATH ?? "./data/game.sqlite");
-    this.simulation = new GameSimulation(this.globalChannel, this.spatialChannel, this.persistence);
+    this.simulation = new GameSimulation(
+      this.networkHost.getGlobalChannel(),
+      this.networkHost.getSpatialChannel(),
+      this.persistence
+    );
+    this.networkEventRouter = new ServerNetworkEventRouter(
+      this.networkHost,
+      this.simulation,
+      this.persistence
+    );
   }
 
   public async start(port = SERVER_PORT): Promise<void> {
-    this.instance.onConnect = async (handshake: unknown) => {
-      if (!handshake || typeof handshake !== "object") {
-        throw new Error("Handshake payload required.");
+    await this.networkHost.start({
+      port,
+      onListen: () => {
+        console.log(`[server] nengi listening on ws://localhost:${port}`);
+      },
+      onHandshake: async (handshake: unknown) => {
+        if (!handshake || typeof handshake !== "object") {
+          throw new Error("Handshake payload required.");
+        }
+        const authKey = (handshake as { authKey?: unknown }).authKey;
+        if (typeof authKey !== "string" || authKey.length === 0) {
+          throw new Error("authKey required.");
+        }
+        return {
+          authKey
+        };
       }
-      const authKey = (handshake as { authKey?: unknown }).authKey;
-      if (typeof authKey !== "string" || authKey.length === 0) {
-        throw new Error("authKey required.");
-      }
-      return {
-        authKey
-      };
-    };
-
-    this.adapter = await this.createNetworkAdapter();
-    this.adapter.listen(port, () => {
-      console.log(`[server] nengi listening on ws://localhost:${port}`);
     });
 
     this.running = true;
@@ -108,9 +95,7 @@ export class GameServer {
 
     this.flushPersistenceNow();
 
-    if (this.adapter?.close) {
-      this.adapter.close();
-    }
+    this.networkHost.stop();
     this.persistence.close();
 
     if (process.env.SERVER_TICK_METRICS === "1") {
@@ -144,28 +129,6 @@ export class GameServer {
     this.lastLiveMetricsSampleCount = 0;
   }
 
-  private async createNetworkAdapter(): Promise<{
-    listen: (port: number, ready: () => void) => void;
-    close?: () => void;
-  }> {
-    const nodeMajor = Number(process.versions.node.split(".")[0] ?? 0);
-    const nodeSupportsUws = nodeMajor === 20;
-    if (!nodeSupportsUws) {
-      throw new Error(
-        `uWS transport requires Node 20.x in this project. Current Node: ${process.versions.node}`
-      );
-    }
-
-    try {
-      const { uWebSocketsInstanceAdapter } = await import("nengi-uws-instance-adapter");
-      console.log("[server] transport=uws");
-      return new uWebSocketsInstanceAdapter(this.instance.network, {});
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`uWS adapter failed to initialize: ${message}`);
-    }
-  }
-
   private tick(): void {
     const tickStart = performance.now();
     const now = performance.now();
@@ -187,27 +150,11 @@ export class GameServer {
     }
     this.lastTickStartMs = now;
 
-    while (!this.instance.queue.isEmpty()) {
-      const event = this.instance.queue.next() as QueueEvent;
-
-      if (event.type === NetworkEvent.UserConnected && event.user) {
-        this.handleUserConnected(event.user, event.payload);
-        continue;
-      }
-
-      if (event.type === NetworkEvent.CommandSet && event.user) {
-        this.simulation.applyCommands(event.user, event.commands ?? []);
-        continue;
-      }
-
-      if (event.type === NetworkEvent.UserDisconnected && event.user) {
-        this.simulation.removeUser(event.user);
-      }
-    }
+    this.networkEventRouter.drainQueue();
 
     this.simulation.step(SERVER_TICK_SECONDS);
     this.maybeFlushPersistence(performance.now());
-    this.instance.step();
+    this.networkHost.step();
 
     const tickDurationMs = performance.now() - tickStart;
     this.lastTickDurationMs = tickDurationMs;
@@ -257,32 +204,6 @@ export class GameServer {
 
     const delay = this.nextTickAtMs - performance.now();
     this.scheduleLoop(delay);
-  }
-
-  private handleUserConnected(
-    user: NonNullable<QueueEvent["user"]>,
-    payload: unknown
-  ): void {
-    const authKey = (payload as { authKey?: unknown } | undefined)?.authKey;
-    const auth = this.persistence.authenticateOrCreate(authKey, user.remoteAddress);
-    if (!auth.ok || !auth.accountId) {
-      this.disconnectUser(user, {
-        code: auth.code,
-        retryAfterMs: auth.retryAfterMs
-      });
-      return;
-    }
-
-    user.accountId = auth.accountId;
-    this.simulation.addUser(user);
-  }
-
-  private disconnectUser(user: NonNullable<QueueEvent["user"]>, reason: unknown): void {
-    try {
-      user.networkAdapter?.disconnect?.(user, reason);
-    } catch (error) {
-      console.warn("[server] failed to disconnect rejected user", error);
-    }
   }
 
   private maybeFlushPersistence(nowMs: number): void {

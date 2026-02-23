@@ -1,4 +1,3 @@
-import { AABB3D } from "nengi";
 import {
   ABILITY_ID_NONE,
   abilityCategoryToWireValue,
@@ -10,7 +9,7 @@ import type { AbilityDefinition } from "../../shared/index";
 export interface ReplicationUser {
   id: number;
   queueMessage: (message: unknown) => void;
-  view?: AABB3D;
+  view?: { x: number; y: number; z: number };
 }
 
 export interface ReplicationPlayer {

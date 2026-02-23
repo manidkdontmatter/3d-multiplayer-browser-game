@@ -47,7 +47,7 @@ type UserLike = {
   id: number;
   queueMessage: (message: unknown) => void;
   accountId?: number;
-  view?: AABB3D;
+  view?: { x: number; y: number; z: number };
 };
 
 type PlayerEntity = {
@@ -275,6 +275,8 @@ export class GameSimulation {
       world: this.world,
       globalChannel: this.globalChannel,
       spatialChannel: this.spatialChannel,
+      createUserView: ({ x, y, z, halfWidth, halfHeight, halfDepth }) =>
+        new AABB3D(x, y, z, halfWidth, halfHeight, halfDepth),
       usersById: this.usersById,
       resolvePlayerByUserId: (userId) => this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(userId),
       takePendingSnapshotForLogin: (accountId) =>
