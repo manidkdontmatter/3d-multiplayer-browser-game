@@ -309,99 +309,7 @@ export class GameSimulation {
         });
       }
     });
-    this.playerLifecycleSystem = new PlayerLifecycleSystem<UserLike, PlayerEntity>({
-      world: this.world,
-      globalChannel: this.globalChannel,
-      spatialChannel: this.spatialChannel,
-      createUserView: ({ x, y, z, halfWidth, halfHeight, halfDepth }) =>
-        this.createUserView({ x, y, z, halfWidth, halfHeight, halfDepth }),
-      usersById: this.usersById,
-      resolvePlayerByUserId: (userId) => this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(userId),
-      takePendingSnapshotForLogin: (accountId) =>
-        this.persistenceSyncSystem.takePendingSnapshotForLogin(accountId),
-      loadPlayerState: (accountId) => this.persistence.loadPlayerState(accountId),
-      getSpawnPosition: () => this.getSpawnPosition(),
-      playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
-      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
-      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
-      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
-      maxPlayerHealth: this.archetypes.player.maxHealth,
-      defaultUnlockedAbilityIds: DEFAULT_UNLOCKED_ABILITY_IDS,
-      sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
-      createInitialHotbar: (savedHotbar) => this.createInitialHotbar(savedHotbar),
-      clampHealth: (value) => this.clampHealth(value),
-      ensurePunchAssigned: (player) => this.ensurePunchAssigned(player),
-      buildPlayerEntity: (options) => ({
-        accountId: options.accountId,
-        nid: 0,
-        modelId: this.archetypes.player.modelId,
-        position: {
-          x: options.spawnX,
-          y: options.spawnCameraY,
-          z: options.spawnZ
-        },
-        rotation: quaternionFromYawPitchRoll(options.loaded?.yaw ?? 0, 0),
-        x: options.spawnX,
-        y: options.spawnCameraY,
-        z: options.spawnZ,
-        yaw: options.loaded?.yaw ?? 0,
-        pitch: options.loaded?.pitch ?? 0,
-        vy: options.loaded?.vy ?? 0,
-        vx: options.loaded?.vx ?? 0,
-        vz: options.loaded?.vz ?? 0,
-        grounded: false,
-        groundedPlatformPid: null,
-        health: options.health,
-        maxHealth: this.archetypes.player.maxHealth,
-        activeHotbarSlot: options.activeHotbarSlot,
-        hotbarAbilityIds: options.hotbarAbilityIds,
-        lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
-        lastProcessedSequence: 0,
-        primaryHeld: false,
-        unlockedAbilityIds: options.unlockedAbilityIds,
-        body: options.body,
-        collider: options.collider
-      }),
-      markPlayerDirty: (player, options) => this.persistenceSyncSystem.markPlayerDirty(player, options),
-      registerPlayerForDamage: (player) => {
-        const eid = this.requireEid(player);
-        this.damageSystem.registerPlayerCollider(player.collider.handle, eid);
-      },
-      unregisterPlayerCollider: (colliderHandle) => this.damageSystem.unregisterCollider(colliderHandle),
-      removeProjectilesByOwner: (ownerNid) => this.projectileSystem.removeByOwner(ownerNid),
-      queueIdentityMessage: (user, playerNid) => this.replication.queueIdentityMessage(user, playerNid),
-      sendInitialReplicationState: (user, _player) => {
-        const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
-        if (!loadout) {
-          return;
-        }
-        this.replication.sendInitialAbilityStateFromSnapshot(user, loadout);
-      },
-      queueOfflineSnapshot: (accountId, snapshot) =>
-        this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
-      resolveOfflineSnapshotByAccountId: (accountId) => {
-        return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId);
-      },
-      viewHalfWidth: 128,
-      viewHalfHeight: 64,
-      viewHalfDepth: 128,
-      onPlayerAdded: (user, player) => {
-        this.simulationEcs.registerPlayer(player);
-        const eid = this.requireEid(player);
-        const nid = this.replication.spawnEntity(eid, this.toReplicationSnapshot(player));
-        player.nid = nid;
-        this.simulationEcs.setEntityNidByEid(eid, nid);
-        this.simulationEcs.bindPlayerLookupIndexes(player, user.id);
-      },
-      onPlayerRemoved: (user, player) => {
-        this.simulationEcs.unbindPlayerLookupIndexes(player, user.id);
-        const eid = this.simulationEcs.getEidForObject(player);
-        if (typeof eid === "number") {
-          this.replication.despawnEntity(eid);
-        }
-        this.simulationEcs.unregister(player);
-      }
-    });
+    this.playerLifecycleSystem = this.createPlayerLifecycleSystem();
 
     this.worldBootstrapSystem.createStaticWorldColliders();
     this.platformSystem.initializePlatforms();
@@ -670,6 +578,102 @@ export class GameSimulation {
 
   private resolveServerArchetypes(): ServerArchetypeCatalog {
     return loadServerArchetypeCatalog();
+  }
+
+  private createPlayerLifecycleSystem(): PlayerLifecycleSystem<UserLike, PlayerEntity> {
+    return new PlayerLifecycleSystem<UserLike, PlayerEntity>({
+      world: this.world,
+      globalChannel: this.globalChannel,
+      spatialChannel: this.spatialChannel,
+      createUserView: ({ x, y, z, halfWidth, halfHeight, halfDepth }) =>
+        this.createUserView({ x, y, z, halfWidth, halfHeight, halfDepth }),
+      usersById: this.usersById,
+      resolvePlayerByUserId: (userId) => this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(userId),
+      takePendingSnapshotForLogin: (accountId) =>
+        this.persistenceSyncSystem.takePendingSnapshotForLogin(accountId),
+      loadPlayerState: (accountId) => this.persistence.loadPlayerState(accountId),
+      getSpawnPosition: () => this.getSpawnPosition(),
+      playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
+      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
+      playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
+      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
+      maxPlayerHealth: this.archetypes.player.maxHealth,
+      defaultUnlockedAbilityIds: DEFAULT_UNLOCKED_ABILITY_IDS,
+      sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
+      createInitialHotbar: (savedHotbar) => this.createInitialHotbar(savedHotbar),
+      clampHealth: (value) => this.clampHealth(value),
+      ensurePunchAssigned: (player) => this.ensurePunchAssigned(player),
+      buildPlayerEntity: (options) => ({
+        accountId: options.accountId,
+        nid: 0,
+        modelId: this.archetypes.player.modelId,
+        position: {
+          x: options.spawnX,
+          y: options.spawnCameraY,
+          z: options.spawnZ
+        },
+        rotation: quaternionFromYawPitchRoll(options.loaded?.yaw ?? 0, 0),
+        x: options.spawnX,
+        y: options.spawnCameraY,
+        z: options.spawnZ,
+        yaw: options.loaded?.yaw ?? 0,
+        pitch: options.loaded?.pitch ?? 0,
+        vy: options.loaded?.vy ?? 0,
+        vx: options.loaded?.vx ?? 0,
+        vz: options.loaded?.vz ?? 0,
+        grounded: false,
+        groundedPlatformPid: null,
+        health: options.health,
+        maxHealth: this.archetypes.player.maxHealth,
+        activeHotbarSlot: options.activeHotbarSlot,
+        hotbarAbilityIds: options.hotbarAbilityIds,
+        lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
+        lastProcessedSequence: 0,
+        primaryHeld: false,
+        unlockedAbilityIds: options.unlockedAbilityIds,
+        body: options.body,
+        collider: options.collider
+      }),
+      markPlayerDirty: (player, options) => this.persistenceSyncSystem.markPlayerDirty(player, options),
+      registerPlayerForDamage: (player) => {
+        const eid = this.requireEid(player);
+        this.damageSystem.registerPlayerCollider(player.collider.handle, eid);
+      },
+      unregisterPlayerCollider: (colliderHandle) => this.damageSystem.unregisterCollider(colliderHandle),
+      removeProjectilesByOwner: (ownerNid) => this.projectileSystem.removeByOwner(ownerNid),
+      queueIdentityMessage: (user, playerNid) => this.replication.queueIdentityMessage(user, playerNid),
+      sendInitialReplicationState: (user, _player) => {
+        const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
+        if (!loadout) {
+          return;
+        }
+        this.replication.sendInitialAbilityStateFromSnapshot(user, loadout);
+      },
+      queueOfflineSnapshot: (accountId, snapshot) =>
+        this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
+      resolveOfflineSnapshotByAccountId: (accountId) => {
+        return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId);
+      },
+      viewHalfWidth: 128,
+      viewHalfHeight: 64,
+      viewHalfDepth: 128,
+      onPlayerAdded: (user, player) => {
+        this.simulationEcs.registerPlayer(player);
+        const eid = this.requireEid(player);
+        const nid = this.replication.spawnEntity(eid, this.toReplicationSnapshot(player));
+        player.nid = nid;
+        this.simulationEcs.setEntityNidByEid(eid, nid);
+        this.simulationEcs.bindPlayerLookupIndexes(player, user.id);
+      },
+      onPlayerRemoved: (user, player) => {
+        this.simulationEcs.unbindPlayerLookupIndexes(player, user.id);
+        const eid = this.simulationEcs.getEidForObject(player);
+        if (typeof eid === "number") {
+          this.replication.despawnEntity(eid);
+        }
+        this.simulationEcs.unregister(player);
+      }
+    });
   }
 
   private requireEid(entity: object): number {

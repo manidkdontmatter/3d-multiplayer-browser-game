@@ -160,6 +160,22 @@ function main(): void {
     gameSimulation.includes("ServerReplicationCoordinator"),
     "GameSimulation must use ServerReplicationCoordinator as replication boundary"
   );
+  assert(
+    gameSimulation.includes("createPlayerLifecycleSystem("),
+    "GameSimulation must keep player-session lifecycle wiring behind a dedicated factory method"
+  );
+
+  const networkClient = read("src/client/runtime/NetworkClient.ts");
+  assert(
+    !networkClient.includes("LocalPhysicsWorld"),
+    "NetworkClient must not import or reference LocalPhysicsWorld"
+  );
+
+  const clientOrchestrator = read("src/client/runtime/network/ClientNetworkOrchestrator.ts");
+  assert(
+    clientOrchestrator.includes("consumeReconciliationFrame"),
+    "ClientNetworkOrchestrator must own reconciliation-frame consumption"
+  );
 
   console.log("architecture-guards passed");
 }

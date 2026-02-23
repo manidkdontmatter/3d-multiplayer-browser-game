@@ -58,7 +58,7 @@ export type ProjectileCreateRequest = {
 
 export type WorldWithComponents = {
   components: {
-    NengiNid: { value: number[] };
+    NetworkId: { value: number[] };
     ModelId: { value: number[] };
     Position: { x: number[]; y: number[]; z: number[] };
     Rotation: { x: number[]; y: number[]; z: number[]; w: number[] };

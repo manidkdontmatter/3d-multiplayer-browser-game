@@ -11,7 +11,7 @@ import type {
 export class SimulationEcsStore {
   public readonly world = createWorld({
     components: {
-      NengiNid: { value: [] as number[] },
+      NetworkId: { value: [] as number[] },
       ModelId: { value: [] as number[] },
       Position: { x: [] as number[], y: [] as number[], z: [] as number[] },
       Rotation: { x: [] as number[], y: [] as number[], z: [] as number[], w: [] as number[] },
@@ -111,7 +111,7 @@ export class SimulationEcsStore {
     addComponent(this.world, eid, this.world.components.ProjectileDespawnOnDamageableHit);
     addComponent(this.world, eid, this.world.components.ProjectileDespawnOnWorldHit);
 
-    this.world.components.NengiNid.value[eid] = 0;
+    this.world.components.NetworkId.value[eid] = 0;
     this.world.components.ModelId.value[eid] = Math.max(0, Math.floor(request.modelId));
     this.world.components.Position.x[eid] = request.x;
     this.world.components.Position.y[eid] = request.y;
@@ -143,7 +143,7 @@ export class SimulationEcsStore {
   }
 
   public syncBaseFromObject(eid: number, entity: SimObject): void {
-    this.world.components.NengiNid.value[eid] = Math.max(0, Math.floor(entity.nid));
+    this.world.components.NetworkId.value[eid] = Math.max(0, Math.floor(entity.nid));
     this.world.components.ModelId.value[eid] = Math.max(0, Math.floor(entity.modelId));
     this.world.components.Position.x[eid] = entity.position.x;
     this.world.components.Position.y[eid] = entity.position.y;
@@ -219,11 +219,11 @@ export class SimulationEcsStore {
   }
 
   public setEntityNid(eid: number, nid: number): void {
-    this.world.components.NengiNid.value[eid] = Math.max(0, Math.floor(nid));
+    this.world.components.NetworkId.value[eid] = Math.max(0, Math.floor(nid));
   }
 
   public getEntityNid(eid: number): number {
-    return this.world.components.NengiNid.value[eid] ?? 0;
+    return this.world.components.NetworkId.value[eid] ?? 0;
   }
 
   public getEntityAccountId(eid: number): number {
@@ -294,7 +294,7 @@ export class SimulationEcsStore {
   }
 
   private ensureBaseComponents(eid: number): void {
-    addComponent(this.world, eid, this.world.components.NengiNid);
+    addComponent(this.world, eid, this.world.components.NetworkId);
     addComponent(this.world, eid, this.world.components.ModelId);
     addComponent(this.world, eid, this.world.components.Position);
     addComponent(this.world, eid, this.world.components.Rotation);

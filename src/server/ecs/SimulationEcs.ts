@@ -493,7 +493,7 @@ export class SimulationEcs {
     for (const eid of replicatedEids) {
       visitor(
         eid,
-        c.NengiNid.value[eid] ?? 0,
+        c.NetworkId.value[eid] ?? 0,
         c.ModelId.value[eid] ?? 0,
         c.Position.x[eid] ?? 0,
         c.Position.y[eid] ?? 0,

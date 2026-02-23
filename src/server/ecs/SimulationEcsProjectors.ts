@@ -55,7 +55,7 @@ export class SimulationEcsProjectors {
   } {
     const c = this.store.world.components;
     return {
-      nid: c.NengiNid.value[eid] ?? 0,
+      nid: c.NetworkId.value[eid] ?? 0,
       modelId: c.ModelId.value[eid] ?? 0,
       position: {
         x: c.Position.x[eid] ?? 0,
@@ -96,7 +96,7 @@ export class SimulationEcsProjectors {
     despawnOnWorldHit: boolean;
   } | null {
     const c = this.store.world.components;
-    const nid = c.NengiNid.value[eid];
+    const nid = c.NetworkId.value[eid];
     if (typeof nid !== "number") {
       return null;
     }
@@ -164,7 +164,7 @@ export class SimulationEcsProjectors {
     const z = c.Position.z[eid] ?? 0;
     return {
       accountId: Math.max(1, Math.floor(c.AccountId.value[eid] ?? 1)),
-      nid: c.NengiNid.value[eid] ?? 0,
+      nid: c.NetworkId.value[eid] ?? 0,
       x,
       y,
       z,
@@ -216,7 +216,7 @@ export class SimulationEcsProjectors {
     const groundedPlatformPidRaw = c.GroundedPlatformPid.value[eid] ?? -1;
     return {
       accountId: Math.max(1, Math.floor(c.AccountId.value[eid] ?? 1)),
-      nid: c.NengiNid.value[eid] ?? 0,
+      nid: c.NetworkId.value[eid] ?? 0,
       health: c.Health.value[eid] ?? 0,
       maxHealth: c.Health.max[eid] ?? 0,
       x: c.Position.x[eid] ?? 0,
@@ -255,7 +255,7 @@ export class SimulationEcsProjectors {
         return null;
       }
       return {
-        nid: c.NengiNid.value[target.eid] ?? 0,
+        nid: c.NetworkId.value[target.eid] ?? 0,
         body,
         collider
       };
@@ -267,7 +267,7 @@ export class SimulationEcsProjectors {
       return null;
     }
     return {
-      nid: c.NengiNid.value[target.eid] ?? 0,
+      nid: c.NetworkId.value[target.eid] ?? 0,
       body,
       collider
     };
@@ -294,7 +294,7 @@ export class SimulationEcsProjectors {
     const c = this.store.world.components;
     const groundedPlatformPidRaw = c.GroundedPlatformPid.value[eid] ?? -1;
     return {
-      nid: c.NengiNid.value[eid] ?? 0,
+      nid: c.NetworkId.value[eid] ?? 0,
       lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
       x: c.Position.x[eid] ?? 0,
       y: c.Position.y[eid] ?? 0,
