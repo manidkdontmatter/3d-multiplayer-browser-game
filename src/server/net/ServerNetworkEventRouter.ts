@@ -1,9 +1,12 @@
 import { GameSimulation } from "../GameSimulation";
 import { PersistenceService } from "../persistence/PersistenceService";
 import { ServerNetworkHost } from "./ServerNetworkHost";
+import { ServerCommandRouter } from "./ServerCommandRouter";
 import type { ServerNetworkUser } from "./ServerNetworkTypes";
 
 export class ServerNetworkEventRouter {
+  private readonly commandRouter = new ServerCommandRouter<ServerNetworkUser>();
+
   public constructor(
     private readonly networkHost: ServerNetworkHost,
     private readonly simulation: GameSimulation,
@@ -13,8 +16,15 @@ export class ServerNetworkEventRouter {
   public drainQueue(): void {
     this.networkHost.drainQueue({
       onUserConnected: (user, payload) => this.handleUserConnected(user, payload),
-      onCommandSet: (user, commands) => this.simulation.applyCommands(user, commands),
+      onCommandSet: (user, commands) => this.handleCommandSet(user, commands),
       onUserDisconnected: (user) => this.simulation.removeUser(user)
+    });
+  }
+
+  private handleCommandSet(user: ServerNetworkUser, commands: unknown[]): void {
+    this.commandRouter.route(user, commands, {
+      onInputCommands: (inputCommands) => this.simulation.applyInputCommands(user.id, inputCommands),
+      onLoadoutCommand: (commandUser, command) => this.simulation.applyLoadoutCommand(commandUser, command)
     });
   }
 

@@ -18,6 +18,10 @@ import {
   SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
+import type {
+  InputCommand as InputWireCommand,
+  LoadoutCommand as LoadoutWireCommand
+} from "../shared/netcode";
 import {
   PersistenceService
 } from "./persistence/PersistenceService";
@@ -33,7 +37,6 @@ import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { ReplicationMessagingSystem } from "./netcode/ReplicationMessagingSystem";
 import { NetReplicationBridge } from "./netcode/NetReplicationBridge";
-import { ServerCommandRouter } from "./net/ServerCommandRouter";
 import { LoadoutCommandHandler } from "./net/LoadoutCommandHandler";
 import { PlatformSystem } from "./platform/PlatformSystem";
 import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
@@ -137,7 +140,6 @@ export class GameSimulation {
   private readonly abilityExecutionSystem: AbilityExecutionSystem<RuntimePlayerState>;
   private readonly projectileSystem: ProjectileSystem;
   private readonly inputSystem: InputSystem<RuntimePlayerState>;
-  private readonly commandRouter = new ServerCommandRouter<UserLike>();
   private readonly loadoutCommandHandler: LoadoutCommandHandler<UserLike>;
   private readonly platformSystem: PlatformSystem;
   private readonly replicationMessaging: ReplicationMessagingSystem<UserLike, RuntimePlayerState>;
@@ -432,15 +434,21 @@ export class GameSimulation {
     this.playerLifecycleSystem.removeUser(user);
   }
 
-  public applyCommands(user: UserLike, commands: unknown[]): void {
+  public applyInputCommands(userId: number, commands: Partial<InputWireCommand>[]): void {
+    const runtimePlayer = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+    if (!runtimePlayer) {
+      return;
+    }
+    this.inputSystem.applyCommands(runtimePlayer, commands);
+    this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, runtimePlayer);
+  }
+
+  public applyLoadoutCommand(user: UserLike, command: Partial<LoadoutWireCommand>): void {
     const runtimePlayer = this.simulationEcs.getPlayerRuntimeStateByUserId(user.id);
     if (!runtimePlayer) {
       return;
     }
-    this.commandRouter.route(user, commands, {
-      onInputCommands: (inputCommands) => this.inputSystem.applyCommands(runtimePlayer, inputCommands),
-      onLoadoutCommand: (commandUser, command) => this.loadoutCommandHandler.apply(commandUser, command)
-    });
+    this.loadoutCommandHandler.apply(user, command);
     this.simulationEcs.applyPlayerRuntimeStateByUserId(user.id, runtimePlayer);
   }
 
