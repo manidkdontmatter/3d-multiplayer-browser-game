@@ -1,5 +1,4 @@
 import RAPIER from "@dimforge/rapier3d-compat";
-import { AABB3D, Channel, ChannelAABB3D } from "nengi";
 import {
   ABILITY_ID_NONE,
   ABILITY_ID_PUNCH,
@@ -50,6 +49,26 @@ type UserLike = {
   accountId?: number;
   view?: { x: number; y: number; z: number };
 };
+
+type GlobalChannelLike = {
+  subscribe: (user: UserLike) => void;
+};
+
+type SpatialChannelLike = {
+  subscribe: (user: UserLike, view: NonNullable<UserLike["view"]>) => void;
+  addEntity: (entity: unknown) => void;
+  removeEntity: (entity: unknown) => void;
+  addMessage: (message: unknown) => void;
+};
+
+type CreateUserView = (position: {
+  x: number;
+  y: number;
+  z: number;
+  halfWidth: number;
+  halfHeight: number;
+  halfDepth: number;
+}) => NonNullable<UserLike["view"]>;
 
 type PlayerEntity = {
   accountId: number;
@@ -128,9 +147,10 @@ export class GameSimulation {
   private tickNumber = 0;
 
   public constructor(
-    private readonly globalChannel: Channel,
-    private readonly spatialChannel: ChannelAABB3D,
-    private readonly persistence: PersistenceService
+    private readonly globalChannel: GlobalChannelLike,
+    private readonly spatialChannel: SpatialChannelLike,
+    private readonly persistence: PersistenceService,
+    private readonly createUserView: CreateUserView
   ) {
     this.archetypes = this.resolveServerArchetypes();
     this.replicationBridge = new NetReplicationBridge(this.spatialChannel);
@@ -296,7 +316,7 @@ export class GameSimulation {
       globalChannel: this.globalChannel,
       spatialChannel: this.spatialChannel,
       createUserView: ({ x, y, z, halfWidth, halfHeight, halfDepth }) =>
-        new AABB3D(x, y, z, halfWidth, halfHeight, halfDepth),
+        this.createUserView({ x, y, z, halfWidth, halfHeight, halfDepth }),
       usersById: this.usersById,
       resolvePlayerByUserId: (userId) => this.simulationEcs.getPlayerObjectByUserId<PlayerEntity>(userId),
       takePendingSnapshotForLogin: (accountId) =>

@@ -1,4 +1,5 @@
 import {
+  AABB3D,
   Channel,
   ChannelAABB3D,
   Instance,
@@ -41,6 +42,24 @@ export class ServerNetworkHost {
 
   public getSpatialChannel(): ChannelAABB3D {
     return this.spatialChannel;
+  }
+
+  public createUserView(position: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  }): AABB3D {
+    return new AABB3D(
+      position.x,
+      position.y,
+      position.z,
+      position.halfWidth,
+      position.halfHeight,
+      position.halfDepth
+    );
   }
 
   public async start(options: ServerNetworkHostStartOptions): Promise<void> {

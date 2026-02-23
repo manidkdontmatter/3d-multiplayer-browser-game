@@ -48,7 +48,8 @@ export class GameServer {
     this.simulation = new GameSimulation(
       this.networkHost.getGlobalChannel(),
       this.networkHost.getSpatialChannel(),
-      this.persistence
+      this.persistence,
+      (position) => this.networkHost.createUserView(position)
     );
     this.networkEventRouter = new ServerNetworkEventRouter(
       this.networkHost,

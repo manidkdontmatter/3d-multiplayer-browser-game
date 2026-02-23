@@ -1,4 +1,3 @@
-import type { ChannelAABB3D } from "nengi";
 import { NType } from "../../shared/netcode";
 
 export interface ReplicatedSnapshot {
@@ -28,7 +27,12 @@ type NetEntity = {
 export class NetReplicationBridge {
   private readonly netBySimEid = new Map<number, NetEntity>();
 
-  public constructor(private readonly spatialChannel: ChannelAABB3D) {}
+  public constructor(
+    private readonly spatialChannel: {
+      addEntity: (entity: unknown) => void;
+      removeEntity: (entity: unknown) => void;
+    }
+  ) {}
 
   public spawn(simEid: number, snapshot: ReplicatedSnapshot): number {
     const netEntity: NetEntity = {
