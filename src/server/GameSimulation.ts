@@ -37,7 +37,7 @@ import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { LoadoutCommandHandler } from "./net/LoadoutCommandHandler";
 import { ServerReplicationCoordinator } from "./net/ServerReplicationCoordinator";
 import { PlatformSystem } from "./platform/PlatformSystem";
-import { WorldBootstrapSystem } from "./world/WorldBootstrapSystem";
+import { WorldContentCoordinator } from "./world/WorldContentCoordinator";
 import { SimulationEcs } from "./ecs/SimulationEcs";
 import {
   loadServerArchetypeCatalog,
@@ -131,7 +131,7 @@ export class GameSimulation {
   private readonly replication: ServerReplicationCoordinator<UserLike, RuntimePlayerState>;
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly persistenceSyncSystem = new PersistenceSyncSystem<PlayerEntity>();
-  private readonly worldBootstrapSystem: WorldBootstrapSystem;
+  private readonly worldContentCoordinator: WorldContentCoordinator;
   private readonly playerLifecycleSystem: PlayerLifecycleSystem<UserLike, PlayerEntity>;
   private readonly damageSystem: DamageSystem;
   private readonly meleeCombatSystem: MeleeCombatSystem;
@@ -175,7 +175,7 @@ export class GameSimulation {
       getDummyStateByEid: (eid) => this.simulationEcs.getDummyDamageStateByEid(eid),
       applyDummyStateByEid: (eid, state) => this.simulationEcs.applyDummyDamageStateByEid(eid, state)
     });
-    this.worldBootstrapSystem = new WorldBootstrapSystem({
+    this.worldContentCoordinator = new WorldContentCoordinator({
       world: this.world,
       onDummyAdded: (dummy) => {
         this.simulationEcs.registerDummy(dummy);
@@ -311,18 +311,19 @@ export class GameSimulation {
     });
     this.playerLifecycleSystem = this.createPlayerLifecycleSystem();
 
-    this.worldBootstrapSystem.createStaticWorldColliders();
-    this.platformSystem.initializePlatforms();
-    for (const dummy of this.worldBootstrapSystem.initializeTrainingDummies(
-      this.archetypes.trainingDummy.spawns,
-      this.archetypes.trainingDummy.capsuleHalfHeight,
-      this.archetypes.trainingDummy.capsuleRadius,
-      this.archetypes.trainingDummy.maxHealth,
-      this.archetypes.trainingDummy.modelId
-    )) {
-      const eid = this.requireEid(dummy);
-      this.damageSystem.registerDummyCollider(dummy.collider.handle, eid);
-    }
+    this.worldContentCoordinator.initializeWorldContent({
+      platformSystem: this.platformSystem,
+      trainingDummies: {
+        spawns: this.archetypes.trainingDummy.spawns,
+        capsuleHalfHeight: this.archetypes.trainingDummy.capsuleHalfHeight,
+        capsuleRadius: this.archetypes.trainingDummy.capsuleRadius,
+        maxHealth: this.archetypes.trainingDummy.maxHealth,
+        modelId: this.archetypes.trainingDummy.modelId
+      },
+      resolveDummyEid: (dummy) => this.requireEid(dummy),
+      registerDummyCollider: (colliderHandle, eid) =>
+        this.damageSystem.registerDummyCollider(colliderHandle, eid)
+    });
   }
 
   public addUser(user: UserLike): void {
