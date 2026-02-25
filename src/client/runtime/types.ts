@@ -68,6 +68,7 @@ export interface AbilityUseEvent {
 
 export interface RenderFrameSnapshot {
   frameDeltaSeconds: number;
+  renderServerTimeSeconds: number;
   localPose: PlayerPose;
   localGrounded: boolean;
   localMovementMode: MovementMode;

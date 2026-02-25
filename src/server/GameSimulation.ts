@@ -15,6 +15,10 @@ import {
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   quaternionFromYawPitchRoll,
+  resolveRuntimeMapConfig,
+  sampleOceanHeightAt,
+  sampleWorldHeight,
+  sampleWorldSlopeDegrees,
   type MovementMode,
   SERVER_TICK_SECONDS
 } from "../shared/index";
@@ -162,6 +166,7 @@ export class GameSimulation {
   private readonly platformSystem: PlatformSystem;
   private readonly playerMovementSystem: PlayerMovementSystem<RuntimePlayerState>;
   private readonly archetypes: ServerArchetypeCatalog;
+  private readonly runtimeMapConfig = resolveRuntimeMapConfig();
   private readonly loadTestSpawnMode: "default" | "grid";
   private readonly loadTestGridSpacing: number;
   private readonly loadTestGridColumns: number;
@@ -198,6 +203,7 @@ export class GameSimulation {
       playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       getSpawnPosition: () => this.getSpawnPosition(),
+      getSpawnBodyY: (x, z) => this.getSpawnBodyY(x, z),
       markPlayerDirtyByAccountId: (accountId, options) =>
         this.persistenceSyncSystem.markAccountDirty(accountId, options),
       getPlayerStateByEid: (eid) => this.simulationEcs.getPlayerDamageStateByEid(eid),
@@ -334,6 +340,8 @@ export class GameSimulation {
       samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
       resolvePlatformPidByColliderHandle: (colliderHandle) =>
         this.platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
+      sampleOceanSurfaceY: (x, z, simulationSeconds) =>
+        sampleOceanHeightAt(this.runtimeMapConfig, x, z, simulationSeconds),
       onPlayerStepped: (userId, player) => {
         this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, player);
         const ackState = this.simulationEcs.getPlayerInputAckStateByUserId(userId);
@@ -515,7 +523,7 @@ export class GameSimulation {
     this.elapsedSeconds += delta;
     this.world.integrationParameters.dt = delta;
     this.platformSystem.updatePlatforms(previousElapsedSeconds, this.elapsedSeconds);
-    this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta);
+    this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta, this.elapsedSeconds);
 
     this.projectileSystem.step(delta);
     this.simulationEcs.forEachReplicatedState(
@@ -740,6 +748,9 @@ export class GameSimulation {
         }
 
         if (!intersectsExisting) {
+          if (!this.isSpawnCandidateValid(candidateX, candidateZ)) {
+            continue;
+          }
           return { x: candidateX, z: candidateZ };
         }
       }
@@ -760,6 +771,19 @@ export class GameSimulation {
     const x = (col - centerCol) * spacing;
     const z = (row - centerRow) * spacing;
     return { x, z };
+  }
+
+  private getSpawnBodyY(x: number, z: number): number {
+    return sampleWorldHeight(this.runtimeMapConfig, x, z) + PLAYER_BODY_CENTER_HEIGHT;
+  }
+
+  private isSpawnCandidateValid(x: number, z: number): boolean {
+    const height = sampleWorldHeight(this.runtimeMapConfig, x, z);
+    if (height <= this.runtimeMapConfig.oceanBaseHeight + 0.35) {
+      return false;
+    }
+    const slopeDegrees = sampleWorldSlopeDegrees(this.runtimeMapConfig, x, z, 1.6);
+    return slopeDegrees <= 27;
   }
 
   private resolveLoadTestSpawnMode(): "default" | "grid" {
@@ -843,6 +867,7 @@ export class GameSimulation {
         this.persistenceSyncSystem.takePendingSnapshotForLogin(accountId),
       loadPlayerState: (accountId) => this.persistence.loadPlayerState(accountId),
       getSpawnPosition: () => this.getSpawnPosition(),
+      getSpawnBodyY: (x, z) => this.getSpawnBodyY(x, z),
       playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,

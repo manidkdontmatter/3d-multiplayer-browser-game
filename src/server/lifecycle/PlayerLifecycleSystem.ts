@@ -73,6 +73,7 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly takePendingSnapshotForLogin: (accountId: number) => PlayerSnapshot | null;
   readonly loadPlayerState: (accountId: number) => PlayerSnapshot | null;
   readonly getSpawnPosition: () => { x: number; z: number };
+  readonly getSpawnBodyY: (x: number, z: number) => number;
   readonly playerBodyCenterHeight: number;
   readonly playerCameraOffsetY: number;
   readonly playerCapsuleHalfHeight: number;
@@ -132,7 +133,8 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     const pendingSnapshot = this.options.takePendingSnapshotForLogin(accountId);
     const loaded = pendingSnapshot ?? this.options.loadPlayerState(accountId);
     const spawn = loaded ? { x: loaded.x, z: loaded.z } : this.options.getSpawnPosition();
-    const initialCameraY = loaded?.y ?? (this.options.playerBodyCenterHeight + this.options.playerCameraOffsetY);
+    const spawnedBodyY = this.options.getSpawnBodyY(spawn.x, spawn.z);
+    const initialCameraY = loaded?.y ?? (spawnedBodyY + this.options.playerCameraOffsetY);
     const initialBodyY = initialCameraY - this.options.playerCameraOffsetY;
     const body = this.options.world.createRigidBody(
       RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(

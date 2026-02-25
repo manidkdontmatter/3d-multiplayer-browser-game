@@ -174,6 +174,24 @@ Hard invariant:
 - Server additionally generates mutable/dynamic gameplay entities authoritatively.
 - Client does not spawn authoritative dynamic entities from seed; nengi replication handles those.
 
+### Authoritative collision vs visual representation
+
+- Server world representation is gameplay-authoritative and may be simplified:
+  - heightfield/terrain collision
+  - simplified static blockers (for example tree trunks as capsules/boxes)
+  - no requirement to load/render full visual assets/material layers
+- Client world representation can be visually richer:
+  - biome texture blending
+  - grass/foliage/detail meshes
+  - other visual-only decoration
+- Hard rule: gameplay-relevant static collision must match deterministically between server and client.
+  - Same seed + `MapConfig` must produce the same terrain heights used for collision.
+  - Same deterministic static blocker placements and collider dimensions/rotations must be used.
+  - Visual-only extras must not introduce gameplay collision not present on server.
+- Practical tree example:
+  - server: trunk collider only (simplified primitive)
+  - client: full tree mesh for rendering, but local prediction collision must use the same trunk-collider truth.
+
 ### Static generation (shared server/client)
 
 - Terrain surface and bounds (target map size around 2km x 2km per map unless configured).

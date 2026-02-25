@@ -33,6 +33,7 @@ export interface DamageSystemOptions {
   readonly playerBodyCenterHeight: number;
   readonly playerCameraOffsetY: number;
   readonly getSpawnPosition: () => { x: number; z: number };
+  readonly getSpawnBodyY: (x: number, z: number) => number;
   readonly markPlayerDirtyByAccountId: (
     accountId: number,
     options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }
@@ -106,8 +107,9 @@ export class DamageSystem {
 
   private respawnPlayer(player: DamageablePlayerState): void {
     const spawn = this.options.getSpawnPosition();
+    const spawnBodyY = this.options.getSpawnBodyY(spawn.x, spawn.z);
     player.body.setTranslation(
-      { x: spawn.x, y: this.options.playerBodyCenterHeight, z: spawn.z },
+      { x: spawn.x, y: spawnBodyY, z: spawn.z },
       true
     );
     player.vx = 0;
@@ -119,7 +121,7 @@ export class DamageSystem {
     player.health = this.options.maxPlayerHealth;
     player.maxHealth = this.options.maxPlayerHealth;
     player.x = spawn.x;
-    player.y = this.options.playerBodyCenterHeight + this.options.playerCameraOffsetY;
+    player.y = spawnBodyY + this.options.playerCameraOffsetY;
     player.z = spawn.z;
     this.options.markPlayerDirtyByAccountId(player.accountId, {
       dirtyCharacter: true,

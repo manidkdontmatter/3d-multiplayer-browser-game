@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { ncontext } from "../shared/netcode";
 import { SERVER_PORT } from "../shared/config";
+import { resolveRuntimeMapConfig } from "../shared/world";
 import { GameServer } from "./GameServer";
 import { ServerDiagnostics } from "./ServerDiagnostics";
 
@@ -60,12 +61,9 @@ async function notifyOrchestratorMapReady(runtimePort: number): Promise<void> {
   if (!orchestratorUrl || !secret) {
     return;
   }
-  const mapId = process.env.MAP_ID ?? "sandbox-alpha";
-  const instanceId = process.env.MAP_INSTANCE_ID ?? "default-1";
-  const seed = Number(process.env.MAP_SEED ?? 1337);
-  const groundHalfExtent = Number(process.env.MAP_GROUND_HALF_EXTENT ?? 192);
-  const groundHalfThickness = Number(process.env.MAP_GROUND_HALF_THICKNESS ?? 0.5);
-  const cubeCount = Number(process.env.MAP_CUBE_COUNT ?? 280);
+  const mapConfig = resolveRuntimeMapConfig();
+  const mapId = mapConfig.mapId;
+  const instanceId = mapConfig.instanceId;
   const response = await fetch(`${orchestratorUrl}/orch/map-ready`, {
     method: "POST",
     headers: {
@@ -78,12 +76,7 @@ async function notifyOrchestratorMapReady(runtimePort: number): Promise<void> {
       wsUrl: `ws://localhost:${runtimePort}`,
       pid: process.pid,
       mapConfig: {
-        mapId,
-        instanceId,
-        seed,
-        groundHalfExtent,
-        groundHalfThickness,
-        cubeCount
+        ...mapConfig
       }
     })
   });

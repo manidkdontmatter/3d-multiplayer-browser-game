@@ -16,7 +16,7 @@ import {
   type ValidateJoinTicketRequest,
   type ValidateJoinTicketResponse
 } from "../shared/orchestrator";
-import type { RuntimeMapConfig } from "../shared/world";
+import { coerceRuntimeMapConfig, type RuntimeMapConfig } from "../shared/world";
 import { MapProcessSupervisor, type MapProcessSpec } from "./MapProcessSupervisor";
 import {
   GUEST_ACCOUNT_ID_BASE,
@@ -69,12 +69,11 @@ const persistence = new PersistenceService(process.env.ORCH_DATA_PATH ?? "./data
 let nextGuestAccountId = GUEST_ACCOUNT_ID_BASE;
 
 const defaultMapConfig = (instanceId: string, seed: number): RuntimeMapConfig => ({
-  mapId: DEFAULT_MAP_ID,
-  instanceId,
-  seed,
-  groundHalfExtent: 192,
-  groundHalfThickness: 0.5,
-  cubeCount: 280
+  ...coerceRuntimeMapConfig({
+    mapId: DEFAULT_MAP_ID,
+    instanceId,
+    seed
+  })
 });
 
 const mapSpecs: MapProcessSpec[] = [

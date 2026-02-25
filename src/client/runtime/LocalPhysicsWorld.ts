@@ -15,6 +15,9 @@ import {
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
+  resolveRuntimeMapConfig,
+  sampleOceanHeightAt,
+  sampleTerrainHeightAt,
   resolveGroundSupportColliderHandle,
   samplePlatformTransform,
   stepFlyingMovement,
@@ -56,6 +59,7 @@ export class LocalPhysicsWorld {
   private readonly world: RAPIER.World;
   private readonly platformBodies = new Map<number, LocalPlatformBody>();
   private readonly platformPidByColliderHandle = new Map<number, number>();
+  private readonly runtimeMapConfig = resolveRuntimeMapConfig();
   private grounded = false;
   private groundedPlatformPid: number | null = null;
   private movementMode: MovementMode = MOVEMENT_MODE_GROUNDED;
@@ -83,9 +87,11 @@ export class LocalPhysicsWorld {
     const characterController = world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
     configurePlayerCharacterController(characterController);
     createStaticWorldColliders(world);
+    const runtimeMapConfig = resolveRuntimeMapConfig();
+    const spawnBodyY = sampleTerrainHeightAt(runtimeMapConfig, 0, 0) + PLAYER_BODY_CENTER_HEIGHT;
 
     const playerBody = world.createRigidBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, PLAYER_BODY_CENTER_HEIGHT, 0)
+      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, spawnBodyY, 0)
     );
     const playerCollider = world.createCollider(
       RAPIER.ColliderDesc.capsule(PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS).setFriction(0.0),
@@ -93,6 +99,9 @@ export class LocalPhysicsWorld {
     );
 
     const local = new LocalPhysicsWorld(world, playerBody, playerCollider, characterController);
+    local.pose.x = 0;
+    local.pose.y = spawnBodyY + PLAYER_CAMERA_OFFSET_Y;
+    local.pose.z = 0;
     for (const platformDef of PLATFORM_DEFINITIONS) {
       const platformPose = samplePlatformTransform(platformDef, 0);
       const platformBody = world.createRigidBody(
@@ -198,6 +207,9 @@ export class LocalPhysicsWorld {
       characterController: this.characterController,
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y,
+      simulationSeconds: this.simulationSeconds,
+      sampleOceanSurfaceY: (x, z, simulationSeconds) =>
+        sampleOceanHeightAt(this.runtimeMapConfig, x, z, simulationSeconds),
       resolveGroundSupportColliderHandle: (groundedByQuery) =>
         resolveGroundSupportColliderHandle({
           groundedByQuery,

@@ -1,5 +1,6 @@
 // Client network facade handling commands, snapshots, interpolation, and ability-state sync.
 import {
+  coerceRuntimeMapConfig,
   type RuntimeMapConfig,
   type AbilityDefinition
 } from "../../shared/index";
@@ -389,16 +390,19 @@ export class NetworkClient {
         if (wsUrl.length === 0 || joinTicket.length === 0) {
           return;
         }
-        const mapConfig: RuntimeMapConfig = {
-          mapId: typeof message.mapId === "string" ? message.mapId : "sandbox-alpha",
-          instanceId: typeof message.instanceId === "string" ? message.instanceId : "default-1",
-          seed: Number.isFinite(message.seed) ? Math.floor(message.seed) : 1337,
-          groundHalfExtent: Number.isFinite(message.groundHalfExtent) ? message.groundHalfExtent : 192,
-          groundHalfThickness: Number.isFinite(message.groundHalfThickness)
-            ? message.groundHalfThickness
-            : 0.5,
-          cubeCount: Number.isFinite(message.cubeCount) ? Math.max(0, Math.floor(message.cubeCount)) : 280
-        };
+        const mapConfig: RuntimeMapConfig = coerceRuntimeMapConfig({
+          mapId: message.mapId,
+          instanceId: message.instanceId,
+          seed: message.seed,
+          groundHalfExtent: message.groundHalfExtent,
+          groundHalfThickness: message.groundHalfThickness,
+          cubeCount: message.cubeCount,
+          oceanBaseHeight: message.oceanBaseHeight,
+          oceanEdgeDepth: message.oceanEdgeDepth,
+          oceanWaveAmplitude: message.oceanWaveAmplitude,
+          oceanWaveSpeed: message.oceanWaveSpeed,
+          oceanWaveLength: message.oceanWaveLength
+        });
         this.pendingMapTransferInstruction = {
           wsUrl,
           joinTicket,

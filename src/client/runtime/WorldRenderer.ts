@@ -56,7 +56,7 @@ export class WorldRenderer {
     this.worldEntities.syncPlatforms(snapshot.platforms);
     this.worldEntities.syncTrainingDummies(snapshot.trainingDummies);
     this.projectileVisuals.syncProjectiles(snapshot.projectiles, snapshot.frameDeltaSeconds);
-    this.environment.render(snapshot.localPose);
+    this.environment.render(snapshot.localPose, snapshot.renderServerTimeSeconds);
   }
 
   public getForwardDirection(): Vector3 {

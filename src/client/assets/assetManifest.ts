@@ -15,6 +15,7 @@ export const CHARACTER_ANIM_RUN_ASSET_ID = "character.anim.run";
 export const CHARACTER_ANIM_JUMP_ASSET_ID = "character.anim.jump";
 export const CHARACTER_ANIM_PUNCH_ASSET_ID = "character.anim.punch";
 export const SFX_HIT_ASSET_ID = "sfx.hit";
+export const WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID = "world.foliage.grass.plain";
 
 // Keep this list as the single source of truth for runtime-loaded assets.
 // For now we preload everything in this manifest during boot.
@@ -66,6 +67,13 @@ export const ASSET_MANIFEST: AssetDefinition[] = [
     label: "Melee Hit Sound",
     kind: "audio",
     url: "/assets/audio/hit.ogg",
+    preload: true
+  },
+  {
+    id: WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID,
+    label: "Grass Billboard Texture",
+    kind: "texture",
+    url: "/assets/textures/foliage/grass.png",
     preload: true
   }
 ];

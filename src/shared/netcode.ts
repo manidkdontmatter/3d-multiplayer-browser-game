@@ -192,7 +192,12 @@ export const mapTransferMessageSchema = defineSchema({
   seed: Binary.Int32,
   groundHalfExtent: Binary.Float32,
   groundHalfThickness: Binary.Float32,
-  cubeCount: Binary.UInt16
+  cubeCount: Binary.UInt16,
+  oceanBaseHeight: Binary.Float32,
+  oceanEdgeDepth: Binary.Float32,
+  oceanWaveAmplitude: Binary.Float32,
+  oceanWaveSpeed: Binary.Float32,
+  oceanWaveLength: Binary.Float32
 });
 
 export const ncontext = new Context();
@@ -401,4 +406,9 @@ export interface MapTransferMessage {
   groundHalfExtent: number;
   groundHalfThickness: number;
   cubeCount: number;
+  oceanBaseHeight: number;
+  oceanEdgeDepth: number;
+  oceanWaveAmplitude: number;
+  oceanWaveSpeed: number;
+  oceanWaveLength: number;
 }

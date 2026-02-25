@@ -560,8 +560,10 @@ export class GameClientApp {
   }
 
   private createRenderSnapshot(frameDeltaSeconds: number): RenderFrameSnapshot {
+    const renderServerTimeSeconds = this.networkOrchestrator.getRenderServerTimeSeconds(this.isCspActive());
     return {
       frameDeltaSeconds,
+      renderServerTimeSeconds,
       localPose: this.getRenderPose(),
       localGrounded: this.resolveLocalGroundedState(),
       localMovementMode: this.resolveLocalMovementMode(),

@@ -38,13 +38,18 @@ export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor
   readonly samplePlayerPlatformCarry: (player: TPlayer) => PlatformCarry;
   readonly resolveGroundSupportColliderHandle?: (player: TPlayer, groundedByQuery: boolean) => GroundSupportHit;
   readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
+  readonly sampleOceanSurfaceY?: (x: number, z: number, simulationSeconds: number) => number;
   readonly onPlayerStepped: (userId: number, player: TPlayer) => void;
 }
 
 export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
   public constructor(private readonly options: PlayerMovementSystemOptions<TPlayer>) {}
 
-  public stepPlayers(players: Iterable<readonly [number, TPlayer]>, deltaSeconds: number): void {
+  public stepPlayers(
+    players: Iterable<readonly [number, TPlayer]>,
+    deltaSeconds: number,
+    simulationSeconds: number
+  ): void {
     for (const [userId, player] of players) {
       this.options.beforePlayerMove?.(player);
       const carry = this.options.samplePlayerPlatformCarry(player);
@@ -57,6 +62,8 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
         characterController: this.options.characterController,
         playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
         groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y,
+        simulationSeconds,
+        sampleOceanSurfaceY: this.options.sampleOceanSurfaceY,
         resolveGroundSupportColliderHandle: (groundedByQuery) =>
           this.resolveGroundSupportColliderHandle(player, groundedByQuery),
         resolvePlatformPidByColliderHandle: this.options.resolvePlatformPidByColliderHandle

@@ -7,6 +7,8 @@ import { ServerNetworkHost } from "./ServerNetworkHost";
 import { ServerCommandRouter } from "./ServerCommandRouter";
 import type { ServerNetworkUser } from "./ServerNetworkTypes";
 
+const MAP_TRANSFER_DISCONNECT_DELAY_MS = 800;
+
 export class ServerNetworkEventRouter {
   private readonly commandRouter = new ServerCommandRouter<ServerNetworkUser>();
   private nextGuestAccountId = GUEST_ACCOUNT_ID_BASE;
@@ -133,7 +135,12 @@ export class ServerNetworkEventRouter {
       seed: transfer.mapConfig.seed,
       groundHalfExtent: transfer.mapConfig.groundHalfExtent,
       groundHalfThickness: transfer.mapConfig.groundHalfThickness,
-      cubeCount: transfer.mapConfig.cubeCount
+      cubeCount: transfer.mapConfig.cubeCount,
+      oceanBaseHeight: transfer.mapConfig.oceanBaseHeight,
+      oceanEdgeDepth: transfer.mapConfig.oceanEdgeDepth,
+      oceanWaveAmplitude: transfer.mapConfig.oceanWaveAmplitude,
+      oceanWaveSpeed: transfer.mapConfig.oceanWaveSpeed,
+      oceanWaveLength: transfer.mapConfig.oceanWaveLength
     });
     this.scheduleTransferDisconnect(user, targetMapInstanceId);
   }
@@ -191,7 +198,7 @@ export class ServerNetworkEventRouter {
         code: "map_transfer",
         toMapInstanceId: targetMapInstanceId
       });
-    }, 200);
+    }, MAP_TRANSFER_DISCONNECT_DELAY_MS);
     this.transferDisconnectTimers.set(user.id, timer);
   }
 

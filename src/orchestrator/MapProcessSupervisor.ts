@@ -115,6 +115,11 @@ export class MapProcessSupervisor {
           MAP_GROUND_HALF_EXTENT: String(spec.mapConfig.groundHalfExtent),
           MAP_GROUND_HALF_THICKNESS: String(spec.mapConfig.groundHalfThickness),
           MAP_CUBE_COUNT: String(spec.mapConfig.cubeCount),
+          MAP_OCEAN_BASE_HEIGHT: String(spec.mapConfig.oceanBaseHeight),
+          MAP_OCEAN_EDGE_DEPTH: String(spec.mapConfig.oceanEdgeDepth),
+          MAP_OCEAN_WAVE_AMPLITUDE: String(spec.mapConfig.oceanWaveAmplitude),
+          MAP_OCEAN_WAVE_SPEED: String(spec.mapConfig.oceanWaveSpeed),
+          MAP_OCEAN_WAVE_LENGTH: String(spec.mapConfig.oceanWaveLength),
           ORCHESTRATOR_INTERNAL_URL: this.orchestratorBaseUrl,
           ORCH_INTERNAL_RPC_SECRET: this.internalRpcSecret,
           SERVER_DISABLE_PERSISTENCE_WRITES: "1"
