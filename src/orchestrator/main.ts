@@ -31,6 +31,10 @@ interface JoinTicketRecord {
 const ORCH_PORT = Number(process.env.ORCH_PORT ?? 9000);
 const INTERNAL_RPC_SECRET = process.env.ORCH_INTERNAL_RPC_SECRET ?? randomBytes(24).toString("hex");
 const JOIN_TICKET_TTL_MS = Number(process.env.ORCH_JOIN_TICKET_TTL_MS ?? 10_000);
+const ORCH_ENABLE_DEBUG_ENDPOINTS = process.env.ORCH_ENABLE_DEBUG_ENDPOINTS === "1";
+const ORCH_MAP_RESTART_WINDOW_MS = Math.max(1_000, Math.floor(Number(process.env.ORCH_MAP_RESTART_WINDOW_MS ?? 60_000)));
+const ORCH_MAP_RESTART_MAX_IN_WINDOW = Math.max(1, Math.floor(Number(process.env.ORCH_MAP_RESTART_MAX_IN_WINDOW ?? 3)));
+const ORCH_MAP_QUARANTINE_MS = Math.max(1_000, Math.floor(Number(process.env.ORCH_MAP_QUARANTINE_MS ?? 60_000)));
 const DEFAULT_MAP_ID = process.env.ORCH_DEFAULT_MAP_ID ?? "sandbox-alpha";
 const MAP_A_PORT = Number(process.env.MAP_A_PORT ?? 9001);
 const MAP_B_PORT = Number(process.env.MAP_B_PORT ?? 9002);
@@ -65,7 +69,14 @@ const mapSpecs: MapProcessSpec[] = [
 const joinTickets = new Map<string, JoinTicketRecord>();
 const mapReady = new Map<string, { wsUrl: string; mapConfig: RuntimeMapConfig; pid: number; atMs: number }>();
 const orchestratorBaseUrl = `http://localhost:${ORCH_PORT}`;
-const supervisor = new MapProcessSupervisor(orchestratorBaseUrl, INTERNAL_RPC_SECRET);
+const supervisor = new MapProcessSupervisor(orchestratorBaseUrl, INTERNAL_RPC_SECRET, {
+  restartWindowMs: ORCH_MAP_RESTART_WINDOW_MS,
+  restartMaxInWindow: ORCH_MAP_RESTART_MAX_IN_WINDOW,
+  quarantineMs: ORCH_MAP_QUARANTINE_MS,
+  onMapProcessExit: (instanceId) => {
+    mapReady.delete(instanceId);
+  }
+});
 const persistenceQueue = new Map<number, PersistSnapshotRequest>();
 const persistenceMetrics = {
   enqueued: 0,
@@ -123,7 +134,8 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       maps: mapSpecs.map((spec) => ({
         instanceId: spec.instanceId,
         wsUrl: `ws://localhost:${spec.wsPort}`,
-        ready: mapReady.has(spec.instanceId)
+        ready: mapReady.has(spec.instanceId),
+        pid: mapReady.get(spec.instanceId)?.pid ?? null
       })),
       persistence: {
         queueSize: persistenceQueue.size,
@@ -218,6 +230,29 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     enqueuePersistSnapshot(payload);
     if (persistenceQueue.size >= 512) {
       await flushPersistenceQueue();
+    }
+    sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/orch/debug/crash-map") {
+    if (!ORCH_ENABLE_DEBUG_ENDPOINTS) {
+      sendJson(res, 404, { ok: false, error: "not_found" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    if (!isAuthorizedInternalRequest(req)) {
+      sendJson(res, 401, { ok: false, error: "unauthorized" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    const payload = (await readJsonBody(req)) as { instanceId?: unknown };
+    const instanceId = typeof payload.instanceId === "string" ? payload.instanceId.trim() : "";
+    if (instanceId.length === 0) {
+      sendJson(res, 400, { ok: false, error: "instance_id_required" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    if (!supervisor.killInstance(instanceId)) {
+      sendJson(res, 404, { ok: false, error: "instance_not_found" } satisfies GenericOrchestratorResponse);
+      return;
     }
     sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
     return;
