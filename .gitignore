@@ -48,3 +48,8 @@ profiling/network-load/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# Perf/debug artifacts
+*.cpuprofile
+*.heapprofile
+*.heapsnapshot
