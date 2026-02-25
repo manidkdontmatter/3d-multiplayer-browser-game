@@ -1,11 +1,13 @@
 // Client network facade handling commands, snapshots, interpolation, and ability-state sync.
 import {
+  type RuntimeMapConfig,
   type AbilityDefinition
 } from "../../shared/index";
 import {
   NType,
   type AbilityCommand,
   type AbilityCreatorCommand,
+  type MapTransferCommand,
   ncontext
 } from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
@@ -33,7 +35,8 @@ import type {
   NetSimulationConfig,
   QueuedAbilityCommand,
   ReconciliationFrame,
-  PendingInput
+  PendingInput,
+  MapTransferInstruction
 } from "./network/types";
 
 export type { PendingInput, ReconciliationFrame, AbilityState, AbilityEventBatch };
@@ -53,6 +56,7 @@ export class NetworkClient {
   private nextAbilityCreatorSequence = 1;
   private localPlayerNid: number | null = null;
   private serverPlayerCount: number | null = null;
+  private pendingMapTransferInstruction: MapTransferInstruction | null = null;
 
   public constructor() {
     this.ackBuffer = new AckReconciliationBuffer((acceptedAtMs, serverTick) => {
@@ -74,6 +78,7 @@ export class NetworkClient {
         this.queuedAbilityCreatorCommands.length = 0;
         this.nextAbilityCreatorSequence = 1;
         this.serverPlayerCount = null;
+        this.pendingMapTransferInstruction = null;
       },
       () => {
         // Errors are expected when server is unavailable during local-only workflows.
@@ -81,8 +86,12 @@ export class NetworkClient {
     );
   }
 
-  public async connect(serverUrl: string, authKey: string | null): Promise<void> {
-    await this.transport.connect(serverUrl, authKey);
+  public async connect(
+    serverUrl: string,
+    authKey: string | null,
+    options?: { joinTicket?: string | null }
+  ): Promise<void> {
+    await this.transport.connect(serverUrl, authKey, options);
   }
 
   public step(
@@ -247,6 +256,20 @@ export class NetworkClient {
     });
   }
 
+  public queueMapTransfer(targetMapInstanceId: string): void {
+    if (!this.transport.isConnected()) {
+      return;
+    }
+    const normalized = typeof targetMapInstanceId === "string" ? targetMapInstanceId.trim() : "";
+    if (normalized.length === 0) {
+      return;
+    }
+    this.transport.addCommand({
+      ntype: NType.MapTransferCommand,
+      targetMapInstanceId: normalized
+    } satisfies MapTransferCommand);
+  }
+
   public consumeAbilityEvents(): AbilityEventBatch | null {
     return this.abilities.consumeAbilityEvents();
   }
@@ -303,6 +326,12 @@ export class NetworkClient {
     return this.serverPlayerCount;
   }
 
+  public consumeMapTransferInstruction(): MapTransferInstruction | null {
+    const pending = this.pendingMapTransferInstruction;
+    this.pendingMapTransferInstruction = null;
+    return pending;
+  }
+
   public isServerGroundedOnPlatform(): boolean {
     return this.ackBuffer.getServerGroundedPlatformPid() >= 0;
   }
@@ -352,6 +381,28 @@ export class NetworkClient {
       onServerPopulationMessage: (message) => {
         const raw = Number(message.onlinePlayers);
         this.serverPlayerCount = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : null;
+      },
+      onMapTransferMessage: (message) => {
+        const wsUrl = typeof message.wsUrl === "string" ? message.wsUrl : "";
+        const joinTicket = typeof message.joinTicket === "string" ? message.joinTicket : "";
+        if (wsUrl.length === 0 || joinTicket.length === 0) {
+          return;
+        }
+        const mapConfig: RuntimeMapConfig = {
+          mapId: typeof message.mapId === "string" ? message.mapId : "sandbox-alpha",
+          instanceId: typeof message.instanceId === "string" ? message.instanceId : "default-1",
+          seed: Number.isFinite(message.seed) ? Math.floor(message.seed) : 1337,
+          groundHalfExtent: Number.isFinite(message.groundHalfExtent) ? message.groundHalfExtent : 192,
+          groundHalfThickness: Number.isFinite(message.groundHalfThickness)
+            ? message.groundHalfThickness
+            : 0.5,
+          cubeCount: Number.isFinite(message.cubeCount) ? Math.max(0, Math.floor(message.cubeCount)) : 280
+        };
+        this.pendingMapTransferInstruction = {
+          wsUrl,
+          joinTicket,
+          mapConfig
+        };
       },
       onUnhandledMessage: (message) => {
         if (this.abilities.processMessage(message)) {

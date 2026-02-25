@@ -52,7 +52,27 @@ declare global {
     set_test_primary_hold?: (held: boolean) => void;
     set_test_secondary_hold?: (held: boolean) => void;
     set_test_look_angles?: (yaw: number, pitch: number) => void;
+    request_map_transfer?: (targetMapInstanceId: string) => void;
+    __runtimeMapConfig?: {
+      mapId: string;
+      instanceId: string;
+      seed: number;
+      groundHalfExtent: number;
+      groundHalfThickness: number;
+      cubeCount: number;
+    };
   }
+
+  var __runtimeMapConfig:
+    | {
+        mapId: string;
+        instanceId: string;
+        seed: number;
+        groundHalfExtent: number;
+        groundHalfThickness: number;
+        cubeCount: number;
+      }
+    | undefined;
 }
 
 export {};

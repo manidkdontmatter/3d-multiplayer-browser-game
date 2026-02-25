@@ -13,7 +13,9 @@ export enum NType {
   ServerPopulationMessage = 14,
   AbilityOwnershipMessage = 15,
   AbilityCreatorCommand = 16,
-  AbilityCreatorStateMessage = 17
+  AbilityCreatorStateMessage = 17,
+  MapTransferCommand = 18,
+  MapTransferMessage = 19
 }
 
 export const inputCommandSchema = defineSchema({
@@ -64,6 +66,10 @@ export const abilityCreatorCommandSchema = defineSchema({
   applyTemplateAbilityId: Binary.Boolean,
   templateAbilityId: Binary.UInt16,
   submitCreate: Binary.Boolean
+});
+
+export const mapTransferCommandSchema = defineSchema({
+  targetMapInstanceId: Binary.String
 });
 
 export const baseEntitySchema = defineSchema({
@@ -178,6 +184,17 @@ export const serverPopulationMessageSchema = defineSchema({
   onlinePlayers: Binary.UInt16
 });
 
+export const mapTransferMessageSchema = defineSchema({
+  wsUrl: Binary.String,
+  joinTicket: Binary.String,
+  mapId: Binary.String,
+  instanceId: Binary.String,
+  seed: Binary.Int32,
+  groundHalfExtent: Binary.Float32,
+  groundHalfThickness: Binary.Float32,
+  cubeCount: Binary.UInt16
+});
+
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCommand, abilityCommandSchema);
@@ -191,6 +208,8 @@ ncontext.register(NType.AbilityUseMessage, abilityUseMessageSchema);
 ncontext.register(NType.ServerPopulationMessage, serverPopulationMessageSchema);
 ncontext.register(NType.AbilityOwnershipMessage, abilityOwnershipMessageSchema);
 ncontext.register(NType.AbilityCreatorStateMessage, abilityCreatorStateMessageSchema);
+ncontext.register(NType.MapTransferCommand, mapTransferCommandSchema);
+ncontext.register(NType.MapTransferMessage, mapTransferMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -243,6 +262,11 @@ export interface AbilityCreatorCommand {
   applyTemplateAbilityId: boolean;
   templateAbilityId: number;
   submitCreate: boolean;
+}
+
+export interface MapTransferCommand {
+  ntype: NType.MapTransferCommand;
+  targetMapInstanceId: string;
 }
 
 export interface BaseEntity {
@@ -365,4 +389,16 @@ export interface AbilityCreatorStateMessage {
 export interface ServerPopulationMessage {
   ntype: NType.ServerPopulationMessage;
   onlinePlayers: number;
+}
+
+export interface MapTransferMessage {
+  ntype: NType.MapTransferMessage;
+  wsUrl: string;
+  joinTicket: string;
+  mapId: string;
+  instanceId: string;
+  seed: number;
+  groundHalfExtent: number;
+  groundHalfThickness: number;
+  cubeCount: number;
 }

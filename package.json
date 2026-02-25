@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "concurrently -n CLIENT,SERVER -c cyan,green \"npm:dev:client\" \"npm:dev:server\"",
     "dev:client": "vite",
-    "dev:server": "tsx watch src/server/main.ts",
+    "dev:server": "tsx watch src/orchestrator/main.ts",
+    "dev:server:single": "tsx watch src/server/main.ts",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
-    "build:server": "tsup src/server/main.ts --format esm --target node20 --sourcemap --out-dir dist/server",
+    "build:server": "tsup src/orchestrator/main.ts src/server/main.ts --format esm --target node20 --sourcemap --out-dir dist/server",
     "preview": "vite preview",
     "typecheck": "npm run typecheck:client && npm run typecheck:server",
     "typecheck:client": "tsc -p tsconfig.client.json --noEmit --incremental --tsBuildInfoFile tsconfig.client.tsbuildinfo",

@@ -7,6 +7,7 @@ export * from "./controller/characterMotor";
 export * from "./movement";
 export * from "./movementMode";
 export * from "./netcode";
+export * from "./orchestrator";
 export * from "./platforms";
 export * from "./rotation";
 export * from "./world";

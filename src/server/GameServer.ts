@@ -4,6 +4,7 @@ import type { Context } from "nengi";
 import { SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
 import { GameSimulation } from "./GameSimulation";
 import { PersistenceService } from "./persistence/PersistenceService";
+import { OrchestratorPersistenceBridge } from "./persistence/OrchestratorPersistenceBridge";
 import { ServerNetworkHost } from "./net/ServerNetworkHost";
 import { ServerNetworkEventRouter } from "./net/ServerNetworkEventRouter";
 
@@ -16,6 +17,7 @@ export class GameServer {
   private readonly simulation: GameSimulation;
   private readonly persistence: PersistenceService;
   private readonly networkEventRouter: ServerNetworkEventRouter;
+  private readonly orchestratorPersistenceBridge: OrchestratorPersistenceBridge | null;
   private loopHandle: NodeJS.Timeout | null = null;
   private running = false;
   private nextTickAtMs = 0;
@@ -46,6 +48,7 @@ export class GameServer {
     this.persistFlushIntervalMs = this.resolvePersistFlushIntervalMs();
     this.healthLogIntervalMs = this.resolveHealthLogIntervalMs();
     this.persistence = new PersistenceService(process.env.SERVER_DATA_PATH ?? "./data/game.sqlite");
+    this.orchestratorPersistenceBridge = this.createOrchestratorPersistenceBridge();
     this.simulation = new GameSimulation(
       this.networkHost.getGlobalChannel(),
       this.networkHost.getSpatialChannel(),
@@ -66,10 +69,8 @@ export class GameServer {
         console.log(`[server] nengi listening on ws://localhost:${port}`);
       },
       onHandshake: async (handshake: unknown) => {
-        if (!handshake || typeof handshake !== "object") {
-          throw new Error("Handshake payload required.");
-        }
-        const authKey = (handshake as { authKey?: unknown }).authKey;
+        const resolved = await this.resolveHandshakeAuthKey(handshake);
+        const authKey = resolved.authKey;
         const allowGuestAuth = process.env.SERVER_ALLOW_GUEST_AUTH !== "0";
         if (typeof authKey !== "string" || authKey.length === 0) {
           if (allowGuestAuth) {
@@ -90,6 +91,66 @@ export class GameServer {
     this.nextPersistFlushAtMs = now + this.persistFlushIntervalMs;
     this.lastHealthLogMs = now;
     this.scheduleLoop(0);
+  }
+
+  private async resolveHandshakeAuthKey(handshake: unknown): Promise<{
+    authKey?: string;
+    accountId?: number;
+    playerSnapshot?: unknown;
+  }> {
+    if (!handshake || typeof handshake !== "object") {
+      throw new Error("Handshake payload required.");
+    }
+    const baseAuthKey = (handshake as { authKey?: unknown }).authKey;
+    const directAuthKey = typeof baseAuthKey === "string" ? baseAuthKey : undefined;
+    const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
+    const mapInstanceId = process.env.MAP_INSTANCE_ID;
+    const orchestratorSecret = process.env.ORCH_INTERNAL_RPC_SECRET;
+    if (!orchestratorUrl || !mapInstanceId || !orchestratorSecret) {
+      return directAuthKey ? { authKey: directAuthKey } : {};
+    }
+
+    const joinTicketRaw = (handshake as { joinTicket?: unknown }).joinTicket;
+    if (typeof joinTicketRaw !== "string" || joinTicketRaw.length === 0) {
+      throw new Error("joinTicket required.");
+    }
+
+    const response = await fetch(`${orchestratorUrl}/orch/validate-join-ticket`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-orch-secret": orchestratorSecret
+      },
+      body: JSON.stringify({
+        joinTicket: joinTicketRaw,
+        mapInstanceId
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`joinTicket denied (${response.status})`);
+    }
+    const json = (await response.json()) as {
+      ok?: boolean;
+      authKey?: unknown;
+      accountId?: unknown;
+      playerSnapshot?: unknown;
+      error?: unknown;
+    };
+    if (!json.ok) {
+      const reason = typeof json.error === "string" ? json.error : "unknown";
+      throw new Error(`joinTicket denied: ${reason}`);
+    }
+    const validatedAuthKey = typeof json.authKey === "string" ? json.authKey : undefined;
+    const accountId = typeof json.accountId === "number" && Number.isFinite(json.accountId)
+      ? Math.max(1, Math.floor(json.accountId))
+      : undefined;
+    const playerSnapshot =
+      json.playerSnapshot && typeof json.playerSnapshot === "object" ? json.playerSnapshot : undefined;
+    return {
+      ...(validatedAuthKey ? { authKey: validatedAuthKey } : {}),
+      ...(typeof accountId === "number" ? { accountId } : {}),
+      ...(playerSnapshot ? { playerSnapshot } : {})
+    };
   }
 
   public stop(): void {
@@ -222,10 +283,38 @@ export class GameServer {
 
   private flushPersistenceNow(): void {
     try {
+      if (this.orchestratorPersistenceBridge) {
+        this.simulation.flushDirtyPlayerState({
+          saveCharacterSnapshot: (snapshot) =>
+            this.orchestratorPersistenceBridge?.enqueue(snapshot, {
+              saveCharacter: true,
+              saveAbilityState: false
+            }),
+          saveAbilityStateSnapshot: (snapshot) =>
+            this.orchestratorPersistenceBridge?.enqueue(snapshot, {
+              saveCharacter: false,
+              saveAbilityState: true
+            })
+        });
+        void this.orchestratorPersistenceBridge.flushPending().catch((error) => {
+          console.error("[server] orchestrator persistence flush failed", error);
+        });
+        return;
+      }
+
       this.simulation.flushDirtyPlayerState();
     } catch (error) {
       console.error("[server] persistence flush failed", error);
     }
+  }
+
+  private createOrchestratorPersistenceBridge(): OrchestratorPersistenceBridge | null {
+    const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
+    const orchestratorSecret = process.env.ORCH_INTERNAL_RPC_SECRET;
+    if (!orchestratorUrl || !orchestratorSecret) {
+      return null;
+    }
+    return new OrchestratorPersistenceBridge(orchestratorUrl, orchestratorSecret);
   }
 
   private resolvePersistFlushIntervalMs(): number {

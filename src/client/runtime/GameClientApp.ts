@@ -6,7 +6,10 @@ import {
   DEFAULT_PRIMARY_MOUSE_SLOT,
   DEFAULT_SECONDARY_MOUSE_SLOT,
   getAbilityDefinitionById,
-  movementModeToLabel
+  movementModeToLabel,
+  type BootstrapRequest,
+  type BootstrapResponse,
+  type RuntimeMapConfig
 } from "../../shared/index";
 import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
@@ -61,6 +64,8 @@ export class GameClientApp {
   private queuedTestSecondaryActionCount = 0;
   private testPrimaryHeld = false;
   private testSecondaryHeld = false;
+  private activeAccessKey: string | null = null;
+  private transferInProgress = false;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -69,7 +74,8 @@ export class GameClientApp {
     cspEnabled: boolean,
     e2eSimulationOnly: boolean,
     private readonly serverUrl: string,
-    initialAccessKey: string
+    initialAccessKey: string,
+    private readonly joinTicket: string | null
   ) {
     this.statusNode = statusNode;
     this.physics = physics;
@@ -94,6 +100,7 @@ export class GameClientApp {
       serverUrl: this.serverUrl,
       initialAccessKey
     });
+    this.activeAccessKey = initialAccessKey.length > 0 ? initialAccessKey : null;
     this.connectedPlayersNode = document.createElement("div");
     this.connectedPlayersNode.id = "connected-players-indicator";
     this.connectedPlayersNode.textContent = "Connected Players: 0";
@@ -110,10 +117,11 @@ export class GameClientApp {
     statusNode: HTMLElement | null,
     onCreatePhase?: (phase: ClientCreatePhase) => void
   ): Promise<GameClientApp> {
+    const connectionTarget = await GameClientApp.resolveConnectionTarget();
     onCreatePhase?.("physics");
     const physics = await LocalPhysicsWorld.create();
-    const serverUrl = GameClientApp.resolveServerUrl();
-    const resolvedAccessKey = resolveAccessKey(serverUrl);
+    const serverUrl = connectionTarget.serverUrl;
+    const resolvedAccessKey = resolveAccessKey(connectionTarget.accessKeyScopeUrl ?? serverUrl);
     const accessKey = resolvedAccessKey.key.length > 0 ? resolvedAccessKey.key : null;
     const app = new GameClientApp(
       canvas,
@@ -122,10 +130,11 @@ export class GameClientApp {
       GameClientApp.resolveCspEnabled(),
       GameClientApp.resolveE2eSimulationOnly(),
       serverUrl,
-      accessKey ?? ""
+      accessKey ?? "",
+      connectionTarget.joinTicket
     );
     onCreatePhase?.("network");
-    await app.network.connect(serverUrl, accessKey);
+    await app.network.connect(serverUrl, accessKey, { joinTicket: app.joinTicket });
     onCreatePhase?.("ready");
     app.updateStatus();
     app.registerTestingHooks();
@@ -163,6 +172,7 @@ export class GameClientApp {
   };
 
   private advance(seconds: number): void {
+    this.maybeHandleMapTransferInstruction();
     this.trackFps(seconds);
 
     if (this.input.consumeMainMenuToggle()) {
@@ -504,6 +514,12 @@ export class GameClientApp {
       }
       this.input.setLookAngles(yaw, pitch);
     };
+    window.request_map_transfer = (targetMapInstanceId) => {
+      if (typeof targetMapInstanceId !== "string") {
+        return;
+      }
+      this.network.queueMapTransfer(targetMapInstanceId);
+    };
   }
 
   private getRenderPose() {
@@ -622,6 +638,54 @@ export class GameClientApp {
     return params.get("server") ?? "ws://localhost:9001";
   }
 
+  private static async resolveConnectionTarget(): Promise<{
+    serverUrl: string;
+    joinTicket: string | null;
+    accessKeyScopeUrl?: string;
+  }> {
+    const params = new URLSearchParams(window.location.search);
+    const directServerUrl = params.get("server");
+    if (typeof directServerUrl === "string" && directServerUrl.length > 0) {
+      return {
+        serverUrl: directServerUrl,
+        joinTicket: null,
+        accessKeyScopeUrl: directServerUrl
+      };
+    }
+
+    const orchestratorUrl = params.get("orchestrator") ?? "http://localhost:9000";
+    const accessKey = resolveAccessKey(orchestratorUrl).key;
+    const authKey = accessKey.length > 0 ? accessKey : null;
+    const response = await fetch(`${orchestratorUrl}/bootstrap`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        authKey
+      } satisfies BootstrapRequest)
+    });
+    if (!response.ok) {
+      throw new Error(`Bootstrap failed with status ${response.status}`);
+    }
+    const payload = (await response.json()) as BootstrapResponse;
+    if (!payload.ok || typeof payload.wsUrl !== "string" || typeof payload.joinTicket !== "string") {
+      throw new Error(payload.error ?? "Bootstrap response malformed.");
+    }
+    if (payload.mapConfig) {
+      GameClientApp.installRuntimeMapConfig(payload.mapConfig);
+    }
+
+    return {
+      serverUrl: payload.wsUrl,
+      joinTicket: payload.joinTicket,
+      accessKeyScopeUrl: orchestratorUrl
+    };
+  }
+
+  private static installRuntimeMapConfig(config: RuntimeMapConfig): void {
+    const globalObject = globalThis as unknown as { __runtimeMapConfig?: RuntimeMapConfig };
+    globalObject.__runtimeMapConfig = config;
+  }
+
   private static resolveCspEnabled(): boolean {
     const params = new URLSearchParams(window.location.search);
     const raw = params.get("csp");
@@ -639,5 +703,22 @@ export class GameClientApp {
 
   private isCspActive(): boolean {
     return this.cspEnabled;
+  }
+
+  private maybeHandleMapTransferInstruction(): void {
+    if (this.transferInProgress) {
+      return;
+    }
+    const transfer = this.network.consumeMapTransferInstruction();
+    if (!transfer) {
+      return;
+    }
+    this.transferInProgress = true;
+    GameClientApp.installRuntimeMapConfig(transfer.mapConfig);
+    void this.network
+      .connect(transfer.wsUrl, this.activeAccessKey, { joinTicket: transfer.joinTicket })
+      .finally(() => {
+        this.transferInProgress = false;
+      });
   }
 }

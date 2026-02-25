@@ -4,6 +4,7 @@ import type {
   AbilityUseMessage,
   IdentityMessage,
   InputAckMessage,
+  MapTransferMessage,
   ServerPopulationMessage
 } from "../../../shared/netcode";
 
@@ -11,6 +12,7 @@ export interface InboundMessageRouterHandlers {
   readonly onIdentityMessage: (message: IdentityMessage) => void;
   readonly onInputAckMessage: (message: InputAckMessage) => void;
   readonly onServerPopulationMessage: (message: ServerPopulationMessage) => void;
+  readonly onMapTransferMessage: (message: MapTransferMessage) => void;
   readonly onUnhandledMessage: (message: unknown) => void;
 }
 
@@ -22,6 +24,7 @@ export class InboundMessageRouter {
         | InputAckMessage
         | AbilityUseMessage
         | ServerPopulationMessage
+        | MapTransferMessage
         | undefined;
 
       if (typed?.ntype === NType.IdentityMessage) {
@@ -36,6 +39,11 @@ export class InboundMessageRouter {
 
       if (typed?.ntype === NType.ServerPopulationMessage) {
         handlers.onServerPopulationMessage(typed);
+        continue;
+      }
+
+      if (typed?.ntype === NType.MapTransferMessage) {
+        handlers.onMapTransferMessage(typed);
         continue;
       }
 

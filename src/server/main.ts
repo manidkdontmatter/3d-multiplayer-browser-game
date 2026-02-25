@@ -38,6 +38,7 @@ async function bootstrapServer(): Promise<void> {
   server = new GameServer(ncontext);
   const runtimePort = Number(process.env.SERVER_PORT ?? SERVER_PORT);
   await server.start(runtimePort);
+  await notifyOrchestratorMapReady(runtimePort);
 
   const shutdown = (): void => {
     console.log("[server] shutdown requested");
@@ -47,6 +48,44 @@ async function bootstrapServer(): Promise<void> {
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+}
+
+async function notifyOrchestratorMapReady(runtimePort: number): Promise<void> {
+  const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
+  const secret = process.env.ORCH_INTERNAL_RPC_SECRET;
+  if (!orchestratorUrl || !secret) {
+    return;
+  }
+  const mapId = process.env.MAP_ID ?? "sandbox-alpha";
+  const instanceId = process.env.MAP_INSTANCE_ID ?? "default-1";
+  const seed = Number(process.env.MAP_SEED ?? 1337);
+  const groundHalfExtent = Number(process.env.MAP_GROUND_HALF_EXTENT ?? 192);
+  const groundHalfThickness = Number(process.env.MAP_GROUND_HALF_THICKNESS ?? 0.5);
+  const cubeCount = Number(process.env.MAP_CUBE_COUNT ?? 280);
+  const response = await fetch(`${orchestratorUrl}/orch/map-ready`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-orch-secret": secret
+    },
+    body: JSON.stringify({
+      instanceId,
+      mapId,
+      wsUrl: `ws://localhost:${runtimePort}`,
+      pid: process.pid,
+      mapConfig: {
+        mapId,
+        instanceId,
+        seed,
+        groundHalfExtent,
+        groundHalfThickness,
+        cubeCount
+      }
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Failed map-ready registration (${response.status})`);
+  }
 }
 
 void bootstrapServer().catch((error) => {

@@ -13,6 +13,7 @@ export type ServerNetworkUser = {
     disconnect?: (user: unknown, reason: unknown) => void;
   };
   accountId?: number;
+  authKey?: string | null;
   view?: {
     x: number;
     y: number;

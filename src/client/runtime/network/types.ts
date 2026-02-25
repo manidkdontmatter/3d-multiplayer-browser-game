@@ -2,7 +2,8 @@
 import type {
   AbilityDefinition,
   AbilityCreatorType,
-  MovementMode
+  MovementMode,
+  RuntimeMapConfig
 } from "../../../shared/index";
 import type {
   MovementInput,
@@ -116,4 +117,10 @@ export interface QueuedAbilityCreatorCommand {
 export interface AbilityStateConsumeResult {
   abilityBatch: AbilityEventBatch | null;
   abilityUseEvents: AbilityUseEvent[];
+}
+
+export interface MapTransferInstruction {
+  wsUrl: string;
+  joinTicket: string;
+  mapConfig: RuntimeMapConfig;
 }

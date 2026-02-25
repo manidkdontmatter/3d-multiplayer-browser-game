@@ -26,7 +26,8 @@ import {
   type InputCommand as InputWireCommand
 } from "../shared/netcode";
 import {
-  PersistenceService
+  PersistenceService,
+  type PlayerSnapshot
 } from "./persistence/PersistenceService";
 import { PersistenceSyncSystem } from "./persistence/PersistenceSyncSystem";
 import {
@@ -540,13 +541,28 @@ export class GameSimulation {
     this.maybeBroadcastServerPopulation();
   }
 
-  public flushDirtyPlayerState(): void {
+  public flushDirtyPlayerState(overrides?: {
+    saveCharacterSnapshot?: (snapshot: PlayerSnapshot) => void;
+    saveAbilityStateSnapshot?: (snapshot: PlayerSnapshot) => void;
+  }): void {
     this.persistenceSyncSystem.flushDirtyPlayerState(
       (accountId) => {
         return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId);
       },
-      (snapshot) => this.persistence.saveCharacterSnapshot(snapshot),
-      (snapshot) => this.persistence.saveAbilityStateSnapshot(snapshot)
+      (snapshot) => {
+        if (overrides?.saveCharacterSnapshot) {
+          overrides.saveCharacterSnapshot(snapshot);
+          return;
+        }
+        this.persistence.saveCharacterSnapshot(snapshot);
+      },
+      (snapshot) => {
+        if (overrides?.saveAbilityStateSnapshot) {
+          overrides.saveAbilityStateSnapshot(snapshot);
+          return;
+        }
+        this.persistence.saveAbilityStateSnapshot(snapshot);
+      }
     );
   }
 
@@ -574,6 +590,18 @@ export class GameSimulation {
     }
 
     return this.resolveAbilityDefinitionById(abilityId);
+  }
+
+  public injectPendingLoginSnapshot(accountId: number, snapshot: PlayerSnapshot): void {
+    this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot);
+  }
+
+  public getPlayerSnapshotByUserId(userId: number): PlayerSnapshot | null {
+    const accountId = this.simulationEcs.getPlayerAccountIdByUserId(userId);
+    if (accountId === null) {
+      return null;
+    }
+    return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId);
   }
 
   private sanitizeHotbarSlot(rawSlot: unknown, fallbackSlot: number): number {

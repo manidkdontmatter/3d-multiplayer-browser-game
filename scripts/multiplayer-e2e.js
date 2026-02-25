@@ -12,13 +12,14 @@ const CLIENT_ORIGIN = "http://127.0.0.1:5173";
 const USE_EXISTING_SERVER = process.env.E2E_USE_EXISTING_SERVER === "1";
 const USE_EXISTING_CLIENT = process.env.E2E_USE_EXISTING_CLIENT === "1";
 const EXISTING_SERVER_URL = process.env.E2E_SERVER_URL;
+const EXISTING_ORCH_URL = process.env.E2E_ORCH_URL;
 const E2E_NETSIM_ENABLED = process.env.E2E_NETSIM === "1";
 const E2E_HEADLESS = process.env.E2E_HEADLESS !== "0";
 const E2E_SIM_ONLY = process.env.E2E_SIM_ONLY !== "0";
-const E2E_ENABLE_SPRINT_TEST = process.env.E2E_ENABLE_SPRINT_TEST !== "0";
-const E2E_ENABLE_JUMP_TEST = process.env.E2E_ENABLE_JUMP_TEST !== "0";
-const E2E_ENABLE_RECONNECT_TEST = process.env.E2E_ENABLE_RECONNECT_TEST !== "0";
-const E2E_ENABLE_PRIMARY_ACTION_TEST = process.env.E2E_ENABLE_PRIMARY_ACTION_TEST !== "0";
+const E2E_ENABLE_SPRINT_TEST = process.env.E2E_ENABLE_SPRINT_TEST === "1";
+const E2E_ENABLE_JUMP_TEST = process.env.E2E_ENABLE_JUMP_TEST === "1";
+const E2E_ENABLE_RECONNECT_TEST = process.env.E2E_ENABLE_RECONNECT_TEST === "1";
+const E2E_ENABLE_PRIMARY_ACTION_TEST = process.env.E2E_ENABLE_PRIMARY_ACTION_TEST === "1";
 const ARTIFACTS_ON_PASS = process.env.E2E_ARTIFACTS_ON_PASS === "1";
 const ARTIFACTS_ON_FAIL = process.env.E2E_ARTIFACTS_ON_FAIL !== "0";
 const MIN_REQUIRED_LOCAL_MOVEMENT = readEnvNumber("E2E_MIN_LOCAL_MOVEMENT", 1.0);
@@ -578,10 +579,28 @@ async function main() {
   const managedProcesses = [];
   let serverUrl = "";
   let serverPort = 0;
+  let orchPort = Math.max(1, Math.floor(readEnvNumber("E2E_ORCH_PORT", 9000)));
+  let mapAPort = Math.max(1, Math.floor(readEnvNumber("E2E_MAP_A_PORT", 9001)));
+  let mapBPort = Math.max(1, Math.floor(readEnvNumber("E2E_MAP_B_PORT", 9002)));
+  let orchestratorUrl = `http://127.0.0.1:${orchPort}`;
+  let useOrchestratorBootstrap = true;
 
   if (USE_EXISTING_SERVER) {
     await phaseTracker.run("server:validate-existing", async () => {
-      serverUrl = EXISTING_SERVER_URL?.trim() || "ws://127.0.0.1:9001";
+      const explicitOrch = EXISTING_ORCH_URL?.trim();
+      const explicitServer = EXISTING_SERVER_URL?.trim();
+      if (explicitOrch && /^https?:\/\//i.test(explicitOrch)) {
+        orchestratorUrl = explicitOrch;
+        const parsed = new URL(orchestratorUrl);
+        const orchOpen = await isPortOpen(parsed.hostname, Number(parsed.port || "80"));
+        if (!orchOpen) {
+          throw new Error(`E2E_ORCH_URL provided but unreachable: ${orchestratorUrl}`);
+        }
+        serverUrl = `ws://127.0.0.1:${mapAPort}`;
+        return;
+      }
+
+      serverUrl = explicitServer || `ws://127.0.0.1:${mapAPort}`;
       const target = parseServerPort(serverUrl);
       if (!target) {
         throw new Error(`Invalid E2E_SERVER_URL: ${serverUrl}`);
@@ -590,20 +609,31 @@ async function main() {
       if (!existingServerUp) {
         throw new Error(`E2E_USE_EXISTING_SERVER=1 but no server is reachable at ${serverUrl}`);
       }
+      useOrchestratorBootstrap = false;
       serverPort = target.port;
     });
   } else {
-    await phaseTracker.run("server:allocate-port", async () => {
-      serverPort = await getFreePort();
+    await phaseTracker.run("server:allocate-ports", async () => {
+      orchPort = await getFreePort();
+      mapAPort = await getFreePort();
+      do {
+        mapBPort = await getFreePort();
+      } while (mapBPort === mapAPort || mapBPort === orchPort);
+      orchestratorUrl = `http://127.0.0.1:${orchPort}`;
+      serverPort = mapAPort;
       serverUrl = `ws://127.0.0.1:${serverPort}`;
     });
   }
 
   const clientParams = new URLSearchParams({
     csp: CLIENT_CSP_QUERY,
-    server: serverUrl,
     e2e: "1"
   });
+  if (useOrchestratorBootstrap) {
+    clientParams.set("orchestrator", orchestratorUrl);
+  } else {
+    clientParams.set("server", serverUrl);
+  }
   if (E2E_NETSIM_ENABLED) {
     clientParams.set("netsim", "1");
     clientParams.set("ackDrop", String(NETSIM_ACK_DROP));
@@ -619,14 +649,19 @@ async function main() {
   if (!USE_EXISTING_SERVER) {
     await phaseTracker.run("server:start-and-wait", async () => {
       const server = startProcess("server", "npm", ["run", "dev:server"], {
-        SERVER_PORT: String(serverPort),
+        ORCH_PORT: String(orchPort),
+        MAP_A_PORT: String(mapAPort),
+        MAP_B_PORT: String(mapBPort),
         SERVER_TICK_LOG: process.env.SERVER_TICK_LOG ?? "0"
       });
       managedProcesses.push(server);
-      await waitForPortOpen("127.0.0.1", serverPort, SERVER_START_TIMEOUT_MS, "server");
+      await waitForPortOpen("127.0.0.1", orchPort, SERVER_START_TIMEOUT_MS, "orchestrator");
+      await waitForPortOpen("127.0.0.1", mapAPort, SERVER_START_TIMEOUT_MS, "map-a");
     });
   } else {
-    console.log(`[multi] using existing server at ${serverUrl}`);
+    console.log(
+      `[multi] using existing ${useOrchestratorBootstrap ? `orchestrator at ${orchestratorUrl}` : `server at ${serverUrl}`}`
+    );
   }
 
   if (USE_EXISTING_CLIENT) {
@@ -639,6 +674,11 @@ async function main() {
     });
   } else if (!clientAlreadyRunning) {
     await phaseTracker.run("client:start-and-wait", async () => {
+      const portOccupied = await isPortOpen("127.0.0.1", 5173);
+      if (portOccupied) {
+        console.log(`[multi] reusing client at ${CLIENT_ORIGIN}`);
+        return;
+      }
       const client = startProcess("client", "npm", [
         "run",
         "dev:client",
@@ -646,7 +686,8 @@ async function main() {
         "--host",
         "127.0.0.1",
         "--port",
-        "5173"
+        "5173",
+        "--strictPort"
       ]);
       managedProcesses.push(client);
       await waitForPortOpen("127.0.0.1", 5173, CLIENT_START_TIMEOUT_MS, "client");

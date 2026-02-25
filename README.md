@@ -10,7 +10,8 @@ Authoritative server/browser-client scaffold using:
 
 - `npm run dev` starts client (`http://localhost:5173`) and server (`ws://localhost:9001`) together.
 - `npm run dev:client` starts only the browser client.
-- `npm run dev:server` starts only the authoritative server.
+- `npm run dev:server` starts orchestrator + map processes (multi-map local runtime).
+- `npm run dev:server:single` starts only one legacy standalone server process.
 - `npm run typecheck` runs separate client/server TS checks.
 - `npm run typecheck:client` and `npm run typecheck:server` run targeted TS checks for faster iteration.
 - `npm run verify:quick` runs `typecheck:client` + `test:smoke:fast` (expects server/client already running).
@@ -36,8 +37,10 @@ Authoritative server/browser-client scaffold using:
   - client: `src/client/main.ts`
   - server: `src/server/main.ts`
 - Shared protocol/schemas live in `src/shared`.
-- Client defaults to connecting to `ws://localhost:9001`.
-- Override server URL in browser with `?server=ws://HOST:PORT`.
+- Client defaults to orchestrator bootstrap at `http://localhost:9000` and then connects to assigned map WS endpoint.
+- Override direct map server URL in browser with `?server=ws://HOST:PORT`.
+- Override orchestrator URL in browser with `?orchestrator=http://HOST:PORT`.
+- Local debug transfer trigger in browser console: `window.request_map_transfer?.('map-b')` (or `'map-a'`).
 - Server transport uses `uWebSockets` via `nengi-uws-instance-adapter` (Node 20.x in this project).
 
 ## Project Docs

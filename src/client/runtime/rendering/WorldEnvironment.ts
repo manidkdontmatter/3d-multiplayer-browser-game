@@ -1,3 +1,4 @@
+// Owns scene/camera/renderer setup and deterministic static world visualization for the local map.
 import {
   AmbientLight,
   BoxGeometry,
@@ -11,7 +12,7 @@ import {
   Vector3,
   WebGLRenderer
 } from "three";
-import { STATIC_WORLD_BLOCKS } from "../../../shared/index";
+import { getRuntimeMapLayout } from "../../../shared/index";
 import type { PlayerPose } from "../types";
 
 const LOCAL_FIRST_PERSON_ONLY_LAYER = 11;
@@ -69,6 +70,7 @@ export class WorldEnvironment {
   }
 
   private initializeScene(): void {
+    const layout = getRuntimeMapLayout();
     const ambient = new AmbientLight(0xffffff, 0.52);
     this.scene.add(ambient);
 
@@ -81,8 +83,11 @@ export class WorldEnvironment {
       roughness: 0.95,
       metalness: 0.02
     });
-    const ground = new Mesh(new BoxGeometry(256, 1, 256), groundMaterial);
-    ground.position.y = -0.5;
+    const ground = new Mesh(
+      new BoxGeometry(layout.config.groundHalfExtent * 2, layout.config.groundHalfThickness * 2, layout.config.groundHalfExtent * 2),
+      groundMaterial
+    );
+    ground.position.y = -layout.config.groundHalfThickness;
     ground.receiveShadow = false;
     this.scene.add(ground);
 
@@ -91,13 +96,13 @@ export class WorldEnvironment {
       roughness: 0.82,
       metalness: 0.05
     });
-    for (const worldBlock of STATIC_WORLD_BLOCKS) {
+    for (const worldBlock of layout.staticBlocks) {
       const block = new Mesh(
         new BoxGeometry(worldBlock.halfX * 2, worldBlock.halfY * 2, worldBlock.halfZ * 2),
         propMaterial
       );
       block.position.set(worldBlock.x, worldBlock.y, worldBlock.z);
-      block.rotation.z = worldBlock.rotationZ ?? 0;
+      block.rotation.y = worldBlock.rotationY ?? 0;
       this.scene.add(block);
     }
   }

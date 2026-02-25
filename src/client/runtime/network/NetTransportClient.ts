@@ -1,3 +1,4 @@
+// Thin wrapper around nengi client transport, handshake, and message draining behavior.
 import { Client, Interpolator, type Context } from "nengi";
 import { WebSocketClientAdapter } from "nengi-websocket-client-adapter";
 
@@ -26,11 +27,18 @@ export class NetTransportClient {
     });
   }
 
-  public async connect(serverUrl: string, authKey: string | null): Promise<void> {
+  public async connect(
+    serverUrl: string,
+    authKey: string | null,
+    options?: { joinTicket?: string | null }
+  ): Promise<void> {
     try {
-      const handshake: { authVersion: number; authKey?: string } = { authVersion: 1 };
+      const handshake: { authVersion: number; authKey?: string; joinTicket?: string } = { authVersion: 1 };
       if (typeof authKey === "string" && authKey.length > 0) {
         handshake.authKey = authKey;
+      }
+      if (typeof options?.joinTicket === "string" && options.joinTicket.length > 0) {
+        handshake.joinTicket = options.joinTicket;
       }
       await Promise.race([
         this.client.connect(serverUrl, handshake),
