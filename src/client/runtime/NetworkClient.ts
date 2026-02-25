@@ -159,6 +159,7 @@ export class NetworkClient {
       forward: movement.forward,
       strafe: movement.strafe,
       jump: movement.jump,
+      toggleFlyPressed: movement.toggleFlyPressed,
       sprint: movement.sprint,
       usePrimaryPressed: actions.usePrimaryPressed,
       usePrimaryHeld: actions.usePrimaryHeld,

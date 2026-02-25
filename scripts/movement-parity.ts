@@ -1,3 +1,4 @@
+// Deterministic parity harness validating client prediction and server authority movement alignment.
 import process from "node:process";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LocalPhysicsWorld } from "../src/client/runtime/LocalPhysicsWorld";
@@ -7,6 +8,8 @@ import { PlatformSystem } from "../src/server/platform/PlatformSystem";
 import { WorldBootstrapSystem } from "../src/server/world/WorldBootstrapSystem";
 import {
   GROUND_CONTACT_MIN_NORMAL_Y,
+  MOVEMENT_MODE_FLYING,
+  MOVEMENT_MODE_GROUNDED,
   PLATFORM_DEFINITIONS,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
@@ -16,7 +19,10 @@ import {
   normalizeYaw,
   quaternionFromYawPitchRoll,
   samplePlatformTransform,
-  stepHorizontalMovement
+  stepFlyingMovement,
+  toggleMovementMode,
+  stepHorizontalMovement,
+  type MovementMode
 } from "../src/shared/index";
 
 type MovementFrame = {
@@ -33,6 +39,7 @@ type ServerParityPlayer = {
   vy: number;
   vz: number;
   grounded: boolean;
+  movementMode: MovementMode;
   groundedPlatformPid: number | null;
   x: number;
   y: number;
@@ -59,6 +66,7 @@ function createTrace(): MovementFrame[] {
       yawDelta?: number;
       pitchDelta?: number;
       jumpAtStart?: boolean;
+      toggleFlyAtStart?: boolean;
     }
   ): void => {
     for (let i = 0; i < count; i += 1) {
@@ -67,7 +75,8 @@ function createTrace(): MovementFrame[] {
           forward: frame.forward,
           strafe: frame.strafe,
           sprint: frame.sprint,
-          jump: i === 0 && Boolean(frame.jumpAtStart)
+          jump: i === 0 && Boolean(frame.jumpAtStart),
+          toggleFlyPressed: i === 0 && Boolean(frame.toggleFlyAtStart)
         },
         yawDelta: frame.yawDelta ?? 0,
         pitchDelta: frame.pitchDelta ?? 0,
@@ -80,6 +89,10 @@ function createTrace(): MovementFrame[] {
   push(1, { forward: 0, strafe: 0, sprint: false, jumpAtStart: true });
   push(40, { forward: 1, strafe: 0, sprint: false, pitchDelta: 0.0015 });
   push(45, { forward: 1, strafe: 0, sprint: true, yawDelta: -0.01 });
+  push(1, { forward: 0, strafe: 0, sprint: false, toggleFlyAtStart: true });
+  push(50, { forward: 1, strafe: 0, sprint: false, pitchDelta: 0.014 });
+  push(35, { forward: 1, strafe: 0.6, sprint: true, yawDelta: -0.008, pitchDelta: -0.01 });
+  push(1, { forward: 0, strafe: 0, sprint: false, toggleFlyAtStart: true });
   push(35, { forward: 0, strafe: 1, sprint: true, yawDelta: 0.013 });
   push(25, { forward: -0.4, strafe: 0.65, sprint: false, pitchDelta: -0.002 });
   push(40, { forward: 0, strafe: 0, sprint: false });
@@ -147,6 +160,7 @@ async function runParityTest(): Promise<void> {
     vy: 0,
     vz: 0,
     grounded: true,
+    movementMode: MOVEMENT_MODE_GROUNDED,
     groundedPlatformPid: 1,
     x: platformOnePose.x,
     y: cameraY,
@@ -211,6 +225,7 @@ async function runParityTest(): Promise<void> {
     vz: 0,
     grounded: true,
     groundedPlatformPid: 1,
+    movementMode: MOVEMENT_MODE_GROUNDED,
     serverTimeSeconds: 0
   });
 
@@ -227,24 +242,49 @@ async function runParityTest(): Promise<void> {
     yaw = normalizeYaw(yaw + frame.yawDelta);
     pitch = Math.max(-1.45, Math.min(1.45, pitch + frame.pitchDelta));
 
-    if (frame.movement.jump && serverPlayer.grounded) {
-      serverPlayer.vy = PLAYER_JUMP_VELOCITY;
+    if (frame.movement.toggleFlyPressed) {
+      serverPlayer.movementMode = toggleMovementMode(serverPlayer.movementMode);
       serverPlayer.grounded = false;
       serverPlayer.groundedPlatformPid = null;
+      serverPlayer.vy = 0;
     }
-    const horizontal = stepHorizontalMovement(
-      { vx: serverPlayer.vx, vz: serverPlayer.vz },
-      {
-        forward: frame.movement.forward,
-        strafe: frame.movement.strafe,
-        sprint: frame.movement.sprint,
-        yaw
-      },
-      serverPlayer.grounded,
-      frame.delta
-    );
-    serverPlayer.vx = horizontal.vx;
-    serverPlayer.vz = horizontal.vz;
+    if (serverPlayer.movementMode === MOVEMENT_MODE_GROUNDED) {
+      if (frame.movement.jump && serverPlayer.grounded) {
+        serverPlayer.vy = PLAYER_JUMP_VELOCITY;
+        serverPlayer.grounded = false;
+        serverPlayer.groundedPlatformPid = null;
+      }
+      const horizontal = stepHorizontalMovement(
+        { vx: serverPlayer.vx, vz: serverPlayer.vz },
+        {
+          forward: frame.movement.forward,
+          strafe: frame.movement.strafe,
+          sprint: frame.movement.sprint,
+          yaw
+        },
+        serverPlayer.grounded,
+        frame.delta
+      );
+      serverPlayer.vx = horizontal.vx;
+      serverPlayer.vz = horizontal.vz;
+    } else if (serverPlayer.movementMode === MOVEMENT_MODE_FLYING) {
+      serverPlayer.grounded = false;
+      serverPlayer.groundedPlatformPid = null;
+      const directional = stepFlyingMovement(
+        { vx: serverPlayer.vx, vy: serverPlayer.vy, vz: serverPlayer.vz },
+        {
+          forward: frame.movement.forward,
+          strafe: frame.movement.strafe,
+          sprint: frame.movement.sprint,
+          yaw,
+          pitch
+        },
+        frame.delta
+      );
+      serverPlayer.vx = directional.vx;
+      serverPlayer.vy = directional.vy;
+      serverPlayer.vz = directional.vz;
+    }
     serverPlayer.yaw = yaw;
     serverPlayer.pitch = pitch;
 
@@ -273,6 +313,11 @@ async function runParityTest(): Promise<void> {
     if (serverPlayer.grounded !== localKinematic.grounded) {
       throw new Error(
         `Frame ${i}: grounded mismatch expected=${serverPlayer.grounded} actual=${localKinematic.grounded}`
+      );
+    }
+    if (serverPlayer.movementMode !== localKinematic.movementMode) {
+      throw new Error(
+        `Frame ${i}: movementMode mismatch expected=${serverPlayer.movementMode} actual=${localKinematic.movementMode}`
       );
     }
     if (serverPlayer.groundedPlatformPid !== localKinematic.groundedPlatformPid) {

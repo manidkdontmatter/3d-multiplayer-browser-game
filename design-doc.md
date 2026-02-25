@@ -58,8 +58,8 @@
 - Open world PVP
 - Any object can potentially take damage so long as it is allowed to take damage
 - There are NPCs, you can fight them and they can fight you and they use pathfinding.
-- When you reach 0% health you become knocked out, which means you enter an animation where you lay on the ground unable to move, 30 seconds later you recover and are put at 1% health
-- While knocked out, if an enemy keeps attacking you until you are at -100% health, you will die
+- When you reach 0% health you become knocked out, which means you enter an animation where you lay on the ground unable to move, 30 seconds later you recover and are put at 1% health. when you are first knocked out, health goes back to 100% but you are still knocked out
+- While knocked out, if an enemy keeps attacking you until you are at 0% health again, you will die
 - When you die you simply respawn fully healed
 
 # World

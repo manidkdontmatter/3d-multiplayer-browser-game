@@ -104,6 +104,7 @@ class LoadClient {
       forward,
       strafe,
       jump: false,
+      toggleFlyPressed: false,
       sprint: (this.id + Math.floor(elapsedSeconds)) % 9 === 0,
       usePrimaryPressed: false,
       usePrimaryHeld: false,

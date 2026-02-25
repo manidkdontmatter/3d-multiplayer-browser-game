@@ -1,5 +1,15 @@
 // Applies client input commands to server-authoritative player input state and action triggers.
-import { normalizeYaw, PLAYER_JUMP_VELOCITY, SERVER_TICK_SECONDS, stepHorizontalMovement } from "../../shared/index";
+import {
+  MOVEMENT_MODE_FLYING,
+  MOVEMENT_MODE_GROUNDED,
+  normalizeYaw,
+  PLAYER_JUMP_VELOCITY,
+  SERVER_TICK_SECONDS,
+  stepFlyingMovement,
+  stepHorizontalMovement,
+  toggleMovementMode,
+  type MovementMode
+} from "../../shared/index";
 import type { InputCommand as InputWireCommand } from "../../shared/netcode";
 import { NType } from "../../shared/netcode";
 
@@ -15,6 +25,7 @@ export interface InputCommandActor {
   secondaryHeld: boolean;
   yaw: number;
   grounded: boolean;
+  movementMode: MovementMode;
   vy: number;
   groundedPlatformPid: number | null;
   vx: number;
@@ -43,6 +54,7 @@ export class InputSystem<TPlayer extends InputCommandActor> {
     let mergedUseSecondaryHeld = player.secondaryHeld;
     let queuedCastSlot: number | null = null;
     let queuedJump = false;
+    let queuedToggleFly = false;
     let mergedYaw = player.yaw;
 
     for (const command of commands) {
@@ -92,6 +104,7 @@ export class InputSystem<TPlayer extends InputCommandActor> {
       queuedUseSecondaryPressed = queuedUseSecondaryPressed || Boolean(command.useSecondaryPressed);
       mergedUseSecondaryHeld = Boolean(command.useSecondaryHeld);
       queuedJump = queuedJump || Boolean(command.jump);
+      queuedToggleFly = queuedToggleFly || Boolean(command.toggleFlyPressed);
       if (Boolean(command.castSlotPressed)) {
         queuedCastSlot =
           typeof command.castSlotIndex === "number" && Number.isFinite(command.castSlotIndex)
@@ -104,22 +117,49 @@ export class InputSystem<TPlayer extends InputCommandActor> {
       return;
     }
 
-    if (queuedJump && player.grounded) {
+    if (queuedToggleFly) {
+      player.movementMode = toggleMovementMode(player.movementMode);
+      player.grounded = false;
+      player.groundedPlatformPid = null;
+      player.vy = 0;
+    }
+
+    if (player.movementMode === MOVEMENT_MODE_GROUNDED && queuedJump && player.grounded) {
       player.vy = PLAYER_JUMP_VELOCITY;
       player.grounded = false;
       player.groundedPlatformPid = null;
     }
 
     player.yaw = mergedYaw;
-    const horizontal = stepHorizontalMovement(
-      { vx: player.vx, vz: player.vz },
-      { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw },
-      player.grounded,
-      SERVER_TICK_SECONDS
-    );
-    player.vx = horizontal.vx;
-    player.vz = horizontal.vz;
-    player.pitch = Math.max(LOOK_PITCH_MIN, Math.min(LOOK_PITCH_MAX, mergedPitch));
+    const clampedPitch = Math.max(LOOK_PITCH_MIN, Math.min(LOOK_PITCH_MAX, mergedPitch));
+    if (player.movementMode === MOVEMENT_MODE_FLYING) {
+      player.grounded = false;
+      player.groundedPlatformPid = null;
+      const directional = stepFlyingMovement(
+        { vx: player.vx, vy: player.vy, vz: player.vz },
+        {
+          forward: mergedForward,
+          strafe: mergedStrafe,
+          sprint: mergedSprint,
+          yaw: player.yaw,
+          pitch: clampedPitch
+        },
+        SERVER_TICK_SECONDS
+      );
+      player.vx = directional.vx;
+      player.vy = directional.vy;
+      player.vz = directional.vz;
+    } else {
+      const horizontal = stepHorizontalMovement(
+        { vx: player.vx, vz: player.vz },
+        { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw },
+        player.grounded,
+        SERVER_TICK_SECONDS
+      );
+      player.vx = horizontal.vx;
+      player.vz = horizontal.vz;
+    }
+    player.pitch = clampedPitch;
     player.primaryHeld = mergedUsePrimaryHeld;
     player.secondaryHeld = mergedUseSecondaryHeld;
     if (queuedUsePrimaryPressed) {

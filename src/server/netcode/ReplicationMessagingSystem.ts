@@ -2,11 +2,12 @@
 import {
   ABILITY_ID_NONE,
   HOTBAR_SLOT_COUNT,
+  MOVEMENT_MODE_GROUNDED,
   abilityCategoryToWireValue,
   encodeAbilityAttributeMask,
   NType
 } from "../../shared/index";
-import type { AbilityDefinition } from "../../shared/index";
+import type { AbilityDefinition, MovementMode } from "../../shared/index";
 import type { AbilityCreatorSessionSnapshot } from "../../shared/index";
 
 export interface ReplicationUser {
@@ -27,6 +28,7 @@ export interface ReplicationPlayer {
   vy: number;
   vz: number;
   grounded: boolean;
+  movementMode: MovementMode;
   groundedPlatformPid: number | null;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
@@ -45,6 +47,7 @@ export interface InputAckStateSnapshot {
   vy: number;
   vz: number;
   grounded: boolean;
+  movementMode: MovementMode;
   groundedPlatformPid: number | null;
 }
 
@@ -106,7 +109,8 @@ export class ReplicationMessagingSystem<
       vy: state.vy,
       vz: state.vz,
       grounded: state.grounded,
-      groundedPlatformPid: state.groundedPlatformPid ?? -1
+      groundedPlatformPid: state.groundedPlatformPid ?? -1,
+      movementMode: state.movementMode ?? MOVEMENT_MODE_GROUNDED
     });
   }
 

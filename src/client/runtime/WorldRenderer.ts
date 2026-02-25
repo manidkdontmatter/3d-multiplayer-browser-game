@@ -1,3 +1,4 @@
+// Renderer facade that applies frame snapshots to world visuals and audio systems.
 import { Vector3 } from "three";
 import { AudioEngine } from "./audio/AudioEngine";
 import type { RenderFrameSnapshot } from "./types";
@@ -47,7 +48,8 @@ export class WorldRenderer {
     this.localPlayerNid = typeof snapshot.localPlayerNid === "number" ? snapshot.localPlayerNid : null;
     this.localCharacter.syncLocalPlayer(snapshot.localPose, {
       frameDeltaSeconds: snapshot.frameDeltaSeconds,
-      grounded: snapshot.localGrounded
+      grounded: snapshot.localGrounded,
+      movementMode: snapshot.localMovementMode
     });
     this.remoteCharacters.syncRemotePlayers(snapshot.remotePlayers, snapshot.frameDeltaSeconds);
     this.audioEventBridge.applyAbilityUseEvents(snapshot.abilityUseEvents);

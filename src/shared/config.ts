@@ -1,3 +1,4 @@
+// Shared simulation/network constants consumed by both server authority and client prediction.
 export const SERVER_PORT = 9001;
 export const SERVER_TICK_RATE = 30;
 // Keep the target interval exact; rounding to 33ms makes 30hz run at ~30.3hz.
@@ -10,6 +11,10 @@ export const PLAYER_SPRINT_SPEED = 9;
 export const PLAYER_GROUND_ACCEL = 60;
 export const PLAYER_AIR_ACCEL = 20;
 export const PLAYER_GROUND_FRICTION = 10;
+export const PLAYER_FLY_SPEED = 10;
+export const PLAYER_FLY_SPRINT_SPEED = 14;
+export const PLAYER_FLY_ACCEL = 40;
+export const PLAYER_FLY_DRAG = 6;
 export const MAX_COMMAND_DELTA_SECONDS = 0.1;
 export const PLAYER_EYE_HEIGHT = 1.8;
 export const PLAYER_CAPSULE_HALF_HEIGHT = 0.45;

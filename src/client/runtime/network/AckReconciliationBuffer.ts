@@ -1,4 +1,5 @@
-import { normalizeYaw } from "../../../shared/index";
+// Client-side reconciliation buffer for pending input replay and authoritative ack ingestion.
+import { normalizeYaw, sanitizeMovementMode } from "../../../shared/index";
 import type { InputAckMessage } from "../../../shared/netcode";
 import type { MovementInput } from "../types";
 import type { NetSimulationConfig, PendingInput, ReconciliationAck, ReconciliationFrame } from "./types";
@@ -158,7 +159,8 @@ export class AckReconciliationBuffer {
       vy: message.vy,
       vz: message.vz,
       grounded: message.grounded,
-      groundedPlatformPid: message.groundedPlatformPid
+      groundedPlatformPid: message.groundedPlatformPid,
+      movementMode: sanitizeMovementMode(message.movementMode)
     };
 
     this.serverGroundedPlatformPid = message.groundedPlatformPid;

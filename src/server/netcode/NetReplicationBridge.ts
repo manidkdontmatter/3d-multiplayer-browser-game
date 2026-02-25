@@ -1,4 +1,6 @@
+// Bridges ECS replication snapshots into nengi entity create/update/despawn operations.
 import { NType } from "../../shared/netcode";
+import type { MovementMode } from "../../shared/index";
 
 export interface ReplicatedSnapshot {
   nid: number;
@@ -6,6 +8,7 @@ export interface ReplicatedSnapshot {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
+  movementMode: MovementMode;
   health: number;
   maxHealth: number;
 }
@@ -20,6 +23,7 @@ type NetEntity = {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
+  movementMode: MovementMode;
   health: number;
   maxHealth: number;
 };
@@ -54,6 +58,7 @@ export class NetReplicationBridge {
         w: snapshot.rotation.w
       },
       grounded: snapshot.grounded,
+      movementMode: snapshot.movementMode,
       health: snapshot.health,
       maxHealth: snapshot.maxHealth
     };
@@ -73,6 +78,7 @@ export class NetReplicationBridge {
       rz: snapshot.rotation.z,
       rw: snapshot.rotation.w,
       grounded: snapshot.grounded,
+      movementMode: snapshot.movementMode,
       health: snapshot.health,
       maxHealth: snapshot.maxHealth
     });
@@ -90,6 +96,7 @@ export class NetReplicationBridge {
       rz: number;
       rw: number;
       grounded: boolean;
+      movementMode: MovementMode;
       health: number;
       maxHealth: number;
     }
@@ -105,6 +112,7 @@ export class NetReplicationBridge {
       state.rz,
       state.rw,
       state.grounded,
+      state.movementMode,
       state.health,
       state.maxHealth
     );
@@ -121,6 +129,7 @@ export class NetReplicationBridge {
     rz: number,
     rw: number,
     grounded: boolean,
+    movementMode: MovementMode,
     health: number,
     maxHealth: number
   ): void {
@@ -140,6 +149,7 @@ export class NetReplicationBridge {
     netEntity.rotation.z = rz;
     netEntity.rotation.w = rw;
     netEntity.grounded = grounded;
+    netEntity.movementMode = movementMode;
     netEntity.health = health;
     netEntity.maxHealth = maxHealth;
   }

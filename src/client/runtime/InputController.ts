@@ -12,6 +12,7 @@ export class InputController {
   private readonly heldKeys = new Set<string>();
   private readonly queuedBindingIntents: MouseBindingIntent[] = [];
   private jumpQueued = false;
+  private toggleFlyQueued = false;
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
   private mainMenuToggleQueued = false;
@@ -73,10 +74,12 @@ export class InputController {
       forward: normForward,
       strafe: normStrafe,
       jump: this.jumpQueued,
+      toggleFlyPressed: this.toggleFlyQueued,
       sprint: this.heldKeys.has("ShiftLeft") || this.heldKeys.has("ShiftRight")
     };
 
     this.jumpQueued = false;
+    this.toggleFlyQueued = false;
     return movement;
   }
 
@@ -183,6 +186,10 @@ export class InputController {
       this.cspToggleQueued = true;
       return;
     }
+    if (event.code === "KeyF" && !event.repeat) {
+      this.toggleFlyQueued = true;
+      return;
+    }
     if (event.repeat) {
       return;
     }
@@ -264,6 +271,7 @@ export class InputController {
     this.secondaryActionHeld = false;
     this.secondaryActionQueued = false;
     this.queuedCastSlot = null;
+    this.toggleFlyQueued = false;
     this.heldKeys.clear();
   };
 

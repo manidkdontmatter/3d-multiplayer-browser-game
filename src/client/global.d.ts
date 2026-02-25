@@ -6,6 +6,7 @@ declare global {
     yaw: number;
     pitch: number;
     nid: number | null;
+    movementMode?: "grounded" | "flying";
   }
 
   interface RenderGameStateRemotePlayer {
@@ -14,6 +15,7 @@ declare global {
     y: number;
     z: number;
     grounded: boolean;
+    movementMode?: "grounded" | "flying";
     health: number;
   }
 
@@ -36,6 +38,7 @@ declare global {
     forward: number;
     strafe: number;
     jump: boolean;
+    toggleFlyPressed?: boolean;
     sprint: boolean;
   }
 

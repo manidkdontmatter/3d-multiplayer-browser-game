@@ -1,9 +1,12 @@
+// Shared client runtime types for movement input, snapshots, and render handoff.
+import type { MovementMode } from "../../shared/index";
 import type { AbilityCategory } from "../../shared/index";
 
 export interface MovementInput {
   forward: number;
   strafe: number;
   jump: boolean;
+  toggleFlyPressed: boolean;
   sprint: boolean;
 }
 
@@ -23,6 +26,7 @@ export interface RemotePlayerState {
   z: number;
   rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
+  movementMode: MovementMode;
   health: number;
   maxHealth: number;
 }
@@ -66,6 +70,7 @@ export interface RenderFrameSnapshot {
   frameDeltaSeconds: number;
   localPose: PlayerPose;
   localGrounded: boolean;
+  localMovementMode: MovementMode;
   localPlayerNid: number | null;
   remotePlayers: RemotePlayerState[];
   abilityUseEvents: AbilityUseEvent[];

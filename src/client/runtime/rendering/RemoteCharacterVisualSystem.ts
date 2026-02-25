@@ -1,7 +1,8 @@
+// Remote player visual/animation presenter used for replicated character rendering.
 import { Group, Mesh, MeshStandardMaterial, BoxGeometry, CapsuleGeometry, type Object3D, type Scene } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type VRM, type VRMHumanoid } from "@pixiv/three-vrm";
-import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED } from "../../../shared/index";
+import { MOVEMENT_MODE_GROUNDED, PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED } from "../../../shared/index";
 import { CHARACTER_MALE_ASSET_ID } from "../../assets/assetManifest";
 import { getLoadedAsset } from "../../assets/assetLoader";
 import {
@@ -36,6 +37,7 @@ interface RemotePlayerVisual {
   horizontalSpeed: number;
   verticalSpeed: number;
   grounded: boolean;
+  movementMode: RemotePlayerState["movementMode"];
   sprinting: boolean;
   initialized: boolean;
 }
@@ -87,6 +89,7 @@ export class RemoteCharacterVisualSystem {
 
       visual.horizontalSpeed = Math.min(Math.max(0, visual.horizontalSpeed), REMOTE_ANIMATION_SPEED_CAP);
       visual.grounded = remotePlayer.grounded;
+      visual.movementMode = remotePlayer.movementMode;
       visual.sprinting = visual.horizontalSpeed >= PLAYER_SPRINT_SPEED * 0.92;
       visual.root.position.set(remotePlayer.x, renderY, remotePlayer.z);
       visual.root.quaternion.set(
@@ -102,7 +105,8 @@ export class RemoteCharacterVisualSystem {
         horizontalSpeed: visual.horizontalSpeed,
         verticalSpeed: visual.verticalSpeed,
         grounded: visual.grounded,
-        sprinting: visual.sprinting
+        sprinting: visual.sprinting,
+        movementMode: visual.movementMode
       });
       visual.humanoid?.update();
     }
@@ -217,6 +221,7 @@ export class RemoteCharacterVisualSystem {
       horizontalSpeed: 0,
       verticalSpeed: 0,
       grounded: true,
+      movementMode: MOVEMENT_MODE_GROUNDED,
       sprinting: false,
       initialized: false
     };

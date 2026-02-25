@@ -21,6 +21,7 @@ export const inputCommandSchema = defineSchema({
   forward: Binary.Float32,
   strafe: Binary.Float32,
   jump: Binary.Boolean,
+  toggleFlyPressed: Binary.Boolean,
   sprint: Binary.Boolean,
   usePrimaryPressed: Binary.Boolean,
   usePrimaryHeld: Binary.Boolean,
@@ -70,6 +71,7 @@ export const baseEntitySchema = defineSchema({
   position: { type: Binary.Vector3, interp: true },
   rotation: { type: Binary.Quaternion, interp: true },
   grounded: Binary.Boolean,
+  movementMode: Binary.UInt8,
   health: Binary.UInt8,
   maxHealth: Binary.UInt8
 });
@@ -88,7 +90,8 @@ export const inputAckMessageSchema = defineSchema({
   vy: Binary.Float32,
   vz: Binary.Float32,
   grounded: Binary.Boolean,
-  groundedPlatformPid: Binary.Int16
+  groundedPlatformPid: Binary.Int16,
+  movementMode: Binary.UInt8
 });
 
 export const abilityDefinitionMessageSchema = defineSchema({
@@ -195,6 +198,7 @@ export interface InputCommand {
   forward: number;
   strafe: number;
   jump: boolean;
+  toggleFlyPressed: boolean;
   sprint: boolean;
   usePrimaryPressed: boolean;
   usePrimaryHeld: boolean;
@@ -248,6 +252,7 @@ export interface BaseEntity {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
+  movementMode: number;
   health: number;
   maxHealth: number;
 }
@@ -269,6 +274,7 @@ export interface InputAckMessage {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
+  movementMode: number;
 }
 
 export interface AbilityDefinitionMessage {

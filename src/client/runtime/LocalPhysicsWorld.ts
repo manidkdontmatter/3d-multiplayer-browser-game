@@ -1,9 +1,12 @@
+// Client-side deterministic physics world used for local prediction and reconciliation replay.
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
   configurePlayerCharacterController,
   createStaticWorldColliders,
   GROUND_CONTACT_MIN_NORMAL_Y,
+  MOVEMENT_MODE_FLYING,
+  MOVEMENT_MODE_GROUNDED,
   normalizeYaw,
   PLATFORM_DEFINITIONS,
   PLAYER_CHARACTER_CONTROLLER_OFFSET,
@@ -14,9 +17,12 @@ import {
   PLAYER_JUMP_VELOCITY,
   resolveGroundSupportColliderHandle,
   samplePlatformTransform,
+  stepFlyingMovement,
   stepKinematicCharacterController,
   stepHorizontalMovement,
+  toggleMovementMode,
 } from "../../shared/index";
+import type { MovementMode } from "../../shared/index";
 import type { MovementInput, PlayerPose } from "./types";
 
 export interface ReconciliationState {
@@ -30,6 +36,7 @@ export interface ReconciliationState {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
+  movementMode: MovementMode;
   serverTimeSeconds?: number;
 }
 
@@ -51,6 +58,7 @@ export class LocalPhysicsWorld {
   private readonly platformPidByColliderHandle = new Map<number, number>();
   private grounded = false;
   private groundedPlatformPid: number | null = null;
+  private movementMode: MovementMode = MOVEMENT_MODE_GROUNDED;
   private verticalVelocity = 0;
   private horizontalVelocity = { vx: 0, vz: 0 };
   private readonly pose: PlayerPose = { x: 0, y: 1.8, z: 0, yaw: 0, pitch: 0 };
@@ -124,27 +132,58 @@ export class LocalPhysicsWorld {
     this.simulationSeconds += dt;
     this.syncPlatformBodies(this.simulationSeconds);
 
-    this.horizontalVelocity = stepHorizontalMovement(
-      this.horizontalVelocity,
-      {
-        forward: movement.forward,
-        strafe: movement.strafe,
-        sprint: movement.sprint,
-        yaw
-      },
-      this.grounded,
-      dt
-    );
-
-    if (movement.jump && this.grounded) {
-      this.verticalVelocity = PLAYER_JUMP_VELOCITY;
+    if (movement.toggleFlyPressed) {
+      this.movementMode = toggleMovementMode(this.movementMode);
       this.grounded = false;
       this.groundedPlatformPid = null;
+      this.verticalVelocity = 0;
+    }
+
+    if (this.movementMode === MOVEMENT_MODE_FLYING) {
+      this.grounded = false;
+      this.groundedPlatformPid = null;
+      const nextDirectionalVelocity = stepFlyingMovement(
+        {
+          vx: this.horizontalVelocity.vx,
+          vy: this.verticalVelocity,
+          vz: this.horizontalVelocity.vz
+        },
+        {
+          forward: movement.forward,
+          strafe: movement.strafe,
+          sprint: movement.sprint,
+          yaw,
+          pitch
+        },
+        dt
+      );
+      this.horizontalVelocity.vx = nextDirectionalVelocity.vx;
+      this.horizontalVelocity.vz = nextDirectionalVelocity.vz;
+      this.verticalVelocity = nextDirectionalVelocity.vy;
+    } else {
+      this.horizontalVelocity = stepHorizontalMovement(
+        this.horizontalVelocity,
+        {
+          forward: movement.forward,
+          strafe: movement.strafe,
+          sprint: movement.sprint,
+          yaw
+        },
+        this.grounded,
+        dt
+      );
+
+      if (movement.jump && this.grounded) {
+        this.verticalVelocity = PLAYER_JUMP_VELOCITY;
+        this.grounded = false;
+        this.groundedPlatformPid = null;
+      }
     }
 
     const carry = this.samplePlatformCarry(previousSimulationSeconds, this.simulationSeconds);
     const next = stepKinematicCharacterController({
       state: {
+        movementMode: this.movementMode,
         yaw,
         vx: this.horizontalVelocity.vx,
         vy: this.verticalVelocity,
@@ -185,6 +224,9 @@ export class LocalPhysicsWorld {
   }
 
   public predictAttachedPlatformYawDelta(delta: number): number {
+    if (this.movementMode === MOVEMENT_MODE_FLYING) {
+      return 0;
+    }
     if (!this.grounded || this.groundedPlatformPid === null) {
       return 0;
     }
@@ -225,13 +267,15 @@ export class LocalPhysicsWorld {
     vz: number;
     grounded: boolean;
     groundedPlatformPid: number | null;
+    movementMode: MovementMode;
   } {
     return {
       vx: this.horizontalVelocity.vx,
       vy: this.verticalVelocity,
       vz: this.horizontalVelocity.vz,
       grounded: this.grounded,
-      groundedPlatformPid: this.groundedPlatformPid
+      groundedPlatformPid: this.groundedPlatformPid,
+      movementMode: this.movementMode
     };
   }
 
@@ -247,6 +291,7 @@ export class LocalPhysicsWorld {
     this.pose.pitch = state.pitch;
     this.grounded = state.grounded;
     this.groundedPlatformPid = state.groundedPlatformPid >= 0 ? state.groundedPlatformPid : null;
+    this.movementMode = state.movementMode;
     this.verticalVelocity = state.vy;
     this.horizontalVelocity.vx = state.vx;
     this.horizontalVelocity.vz = state.vz;
@@ -279,6 +324,9 @@ export class LocalPhysicsWorld {
   }
 
   private samplePlatformCarry(previousSeconds: number, currentSeconds: number): { x: number; y: number; z: number } {
+    if (this.movementMode === MOVEMENT_MODE_FLYING) {
+      return { x: 0, y: 0, z: 0 };
+    }
     if (!this.grounded || this.groundedPlatformPid === null) {
       return { x: 0, y: 0, z: 0 };
     }

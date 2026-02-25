@@ -9,11 +9,13 @@ import {
   DEFAULT_UNLOCKED_ABILITY_IDS,
   HOTBAR_SLOT_COUNT,
   PLAYER_BODY_CENTER_HEIGHT,
+  MOVEMENT_MODE_GROUNDED,
   PLAYER_CHARACTER_CONTROLLER_OFFSET,
   PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   quaternionFromYawPitchRoll,
+  type MovementMode,
   SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
@@ -96,6 +98,7 @@ type PlayerEntity = {
   vx: number;
   vz: number;
   grounded: boolean;
+  movementMode: MovementMode;
   groundedPlatformPid: number | null;
   health: number;
   maxHealth: number;
@@ -123,6 +126,7 @@ type RuntimePlayerState = {
   vy: number;
   vz: number;
   grounded: boolean;
+  movementMode: MovementMode;
   groundedPlatformPid: number | null;
   lastProcessedSequence: number;
   lastPrimaryFireAtSeconds: number;
@@ -514,7 +518,7 @@ export class GameSimulation {
 
     this.projectileSystem.step(delta);
     this.simulationEcs.forEachReplicatedState(
-      (eid, _nid, modelId, x, y, z, rx, ry, rz, rw, grounded, health, maxHealth) => {
+      (eid, _nid, modelId, x, y, z, rx, ry, rz, rw, grounded, movementMode, health, maxHealth) => {
         this.replication.syncEntityFromValues(
           eid,
           modelId,
@@ -526,6 +530,7 @@ export class GameSimulation {
           rz,
           rw,
           grounded,
+          movementMode,
           health,
           maxHealth
         );
@@ -648,6 +653,7 @@ export class GameSimulation {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number; w: number };
     grounded: boolean;
+    movementMode?: MovementMode;
     health: number;
     maxHealth: number;
   }): {
@@ -656,6 +662,7 @@ export class GameSimulation {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number; w: number };
     grounded: boolean;
+    movementMode: MovementMode;
     health: number;
     maxHealth: number;
   } {
@@ -665,6 +672,7 @@ export class GameSimulation {
       position: entity.position,
       rotation: entity.rotation,
       grounded: entity.grounded,
+      movementMode: entity.movementMode ?? MOVEMENT_MODE_GROUNDED,
       health: entity.health,
       maxHealth: entity.maxHealth
     };
@@ -838,6 +846,7 @@ export class GameSimulation {
         vx: options.loaded?.vx ?? 0,
         vz: options.loaded?.vz ?? 0,
         grounded: false,
+        movementMode: MOVEMENT_MODE_GROUNDED,
         groundedPlatformPid: null,
         health: options.health,
         maxHealth: this.archetypes.player.maxHealth,

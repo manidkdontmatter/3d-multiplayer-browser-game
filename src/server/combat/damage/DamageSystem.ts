@@ -1,4 +1,6 @@
+// Authoritative damage application and player respawn handling for combat targets.
 import RAPIER from "@dimforge/rapier3d-compat";
+import { MOVEMENT_MODE_GROUNDED, type MovementMode } from "../../../shared/index";
 
 export interface DamageablePlayerState {
   accountId: number;
@@ -12,6 +14,7 @@ export interface DamageablePlayerState {
   vy: number;
   vz: number;
   grounded: boolean;
+  movementMode: MovementMode;
   groundedPlatformPid: number | null;
   body: RAPIER.RigidBody;
 }
@@ -111,6 +114,7 @@ export class DamageSystem {
     player.vy = 0;
     player.vz = 0;
     player.grounded = true;
+    player.movementMode = MOVEMENT_MODE_GROUNDED;
     player.groundedPlatformPid = null;
     player.health = this.options.maxPlayerHealth;
     player.maxHealth = this.options.maxPlayerHealth;

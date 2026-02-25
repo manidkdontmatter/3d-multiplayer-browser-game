@@ -1,7 +1,8 @@
+// Local player character visual/animation presenter for first-person runtime rendering.
 import { Group, type Object3D, type Scene } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type VRM } from "@pixiv/three-vrm";
-import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED } from "../../../shared/index";
+import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED, type MovementMode } from "../../../shared/index";
 import { CHARACTER_MALE_ASSET_ID } from "../../assets/assetManifest";
 import { getLoadedAsset } from "../../assets/assetLoader";
 import {
@@ -43,7 +44,10 @@ export class LocalCharacterVisualSystem {
     }
   }
 
-  public syncLocalPlayer(localPose: PlayerPose, options: { frameDeltaSeconds: number; grounded: boolean }): void {
+  public syncLocalPlayer(
+    localPose: PlayerPose,
+    options: { frameDeltaSeconds: number; grounded: boolean; movementMode: MovementMode }
+  ): void {
     if (!this.localPlayerVisual) {
       return;
     }
@@ -77,7 +81,8 @@ export class LocalCharacterVisualSystem {
       horizontalSpeed: visual.horizontalSpeed,
       verticalSpeed: visual.verticalSpeed,
       grounded: visual.grounded,
-      sprinting: visual.sprinting
+      sprinting: visual.sprinting,
+      movementMode: options.movementMode
     });
     visual.vrm?.update(dt);
   }

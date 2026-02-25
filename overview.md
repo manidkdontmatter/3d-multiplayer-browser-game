@@ -51,6 +51,7 @@ Canonical ingestion intent:
 - Core content definitions are data-driven via JSON archetype catalogs in `data/archetypes/` (world/platform/projectile/server defaults and base ability definitions/default unlock/loadout).
 - Data Oriented Design preferred where appropriate
 - abuse of Object Oriented Design discouraged
+- There is a "server list" app which is separate from this workspace/app and is a website that lists all servers that can be joined. Each server is player hosted on their own VPS, possibly modded with its own code and assets that will need to be downloaded because this game is open source so they can mod it. On their vps this game has multiple maps each being their own process, upon joining a server a client loads onto the default map with either their saved character or a new default character which they will then customize later in-game because we don't use a character creator we just load them a default one that they customize later, afterward the player can switch to various maps using whatever method is provided in game to travel to different maps, which means the client connects to a different process representing the map they are going to. There is probably some sort of orchestrator that they initially connect to which sends them to the default map and to other maps when they switch. The orchestrator I suppose oversees the various processes of the game, each process runs its own map, nengi, ecs, physics, etc.
 
 Runtime entry points:
 - Client: `src/client/main.ts`

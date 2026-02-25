@@ -1,5 +1,11 @@
+// Regression checks for client networking helpers including reconciliation, interpolation, and ability message state.
 import process from "node:process";
-import { NType, type InputAckMessage, type AbilityDefinitionMessage, type LoadoutStateMessage } from "../src/shared/netcode";
+import {
+  NType,
+  type InputAckMessage,
+  type AbilityDefinitionMessage,
+  type AbilityStateMessage
+} from "../src/shared/netcode";
 import { AckReconciliationBuffer } from "../src/client/runtime/network/AckReconciliationBuffer";
 import { InterpolationController } from "../src/client/runtime/network/InterpolationController";
 import { AbilityStateStore } from "../src/client/runtime/network/AbilityStateStore";
@@ -22,8 +28,16 @@ function runAckBufferRegression(): void {
     () => now
   );
 
-  buffer.enqueueInput(1 / 60, { forward: 1, strafe: 0, sprint: false, jump: false }, { yaw: 0, pitch: 0 });
-  buffer.enqueueInput(1 / 60, { forward: 1, strafe: 0, sprint: false, jump: false }, { yaw: 0.1, pitch: 0 });
+  buffer.enqueueInput(
+    1 / 60,
+    { forward: 1, strafe: 0, sprint: false, jump: false, toggleFlyPressed: false },
+    { yaw: 0, pitch: 0 }
+  );
+  buffer.enqueueInput(
+    1 / 60,
+    { forward: 1, strafe: 0, sprint: false, jump: false, toggleFlyPressed: false },
+    { yaw: 0.1, pitch: 0 }
+  );
 
   const ack1: InputAckMessage = {
     ntype: NType.InputAckMessage,
@@ -36,7 +50,8 @@ function runAckBufferRegression(): void {
     vy: 0,
     vz: 0,
     grounded: true,
-    groundedPlatformPid: -1
+    groundedPlatformPid: -1,
+    movementMode: 0
   };
   buffer.enqueueAckMessage(ack1, { enabled: false, ackDropRate: 0, ackDelayMs: 0, ackJitterMs: 0 });
 
@@ -54,7 +69,8 @@ function runAckBufferRegression(): void {
     ...ack1,
     sequence: 2,
     serverTick: 12,
-    groundedPlatformPid: 2
+    groundedPlatformPid: 2,
+    movementMode: 1
   };
   buffer.enqueueAckMessage(delayedAck, { enabled: true, ackDropRate: 0, ackDelayMs: 100, ackJitterMs: 0 });
   now = 50;
@@ -95,6 +111,9 @@ function runAbilityStateRegression(): void {
     abilityId: 4000,
     name: "Test Bolt",
     category: 1,
+    creatorTier: 1,
+    creatorCoreExampleStat: 0,
+    creatorFlags: 0,
     pointsPower: 4,
     pointsVelocity: 4,
     pointsEfficiency: 4,
@@ -112,14 +131,20 @@ function runAbilityStateRegression(): void {
     meleeArcDegrees: 0
   };
 
-  const loadoutMsg: LoadoutStateMessage = {
-    ntype: NType.LoadoutStateMessage,
-    selectedHotbarSlot: 2,
+  const loadoutMsg: AbilityStateMessage = {
+    ntype: NType.AbilityStateMessage,
+    primaryMouseSlot: 2,
+    secondaryMouseSlot: 1,
     slot0AbilityId: 4000,
     slot1AbilityId: 0,
     slot2AbilityId: 0,
     slot3AbilityId: 0,
-    slot4AbilityId: 0
+    slot4AbilityId: 0,
+    slot5AbilityId: 0,
+    slot6AbilityId: 0,
+    slot7AbilityId: 0,
+    slot8AbilityId: 0,
+    slot9AbilityId: 0
   };
 
   abilities.processMessage(abilityMsg);
@@ -135,7 +160,7 @@ function runAbilityStateRegression(): void {
   const batch = abilities.consumeAbilityEvents();
   assert(batch !== null, "Expected ability event batch");
   assert(batch?.definitions.length === 1, "Expected one definition in batch");
-  assert(batch?.loadout?.selectedHotbarSlot === 2, "Expected loadout selection to round-trip");
+  assert(batch?.abilityState?.primaryMouseSlot === 2, "Expected ability state selection to round-trip");
 
   const useEvents = abilities.consumeAbilityUseEvents();
   assert(useEvents.length === 1, "Expected one ability-use event");

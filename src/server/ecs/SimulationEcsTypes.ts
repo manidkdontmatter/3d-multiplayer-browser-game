@@ -1,5 +1,6 @@
 // Type contracts for simulation ECS objects and component layout.
 import type RAPIER from "@dimforge/rapier3d-compat";
+import type { MovementMode } from "../../shared/index";
 
 export type SimObject = {
   nid: number;
@@ -9,9 +10,11 @@ export type SimObject = {
   health: number;
   maxHealth: number;
   grounded: boolean;
+  movementMode?: MovementMode;
 };
 
 export type PlayerObject = SimObject & {
+  movementMode: MovementMode;
   accountId: number;
   yaw: number;
   pitch: number;
@@ -68,6 +71,7 @@ export type WorldWithComponents = {
     Velocity: { x: number[]; y: number[]; z: number[] };
     Health: { value: number[]; max: number[] };
     Grounded: { value: number[] };
+    MovementMode: { value: number[] };
     GroundedPlatformPid: { value: number[] };
     AccountId: { value: number[] };
     Yaw: { value: number[] };

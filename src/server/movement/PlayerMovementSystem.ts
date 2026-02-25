@@ -3,6 +3,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   GROUND_CONTACT_MIN_NORMAL_Y,
   type GroundSupportHit,
+  type MovementMode,
   PLAYER_CAMERA_OFFSET_Y,
   quaternionFromYawPitchRoll,
   resolveGroundSupportColliderHandle as queryGroundSupportColliderHandle,
@@ -12,6 +13,7 @@ import {
 type PlatformCarry = { x: number; y: number; z: number; yaw: number };
 
 export interface PlayerMovementActor {
+  movementMode: MovementMode;
   yaw: number;
   vx: number;
   vy: number;

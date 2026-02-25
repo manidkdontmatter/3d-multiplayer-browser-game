@@ -1,5 +1,7 @@
+// Shared deterministic kinematic character motor used by server authority and client prediction.
 import RAPIER from "@dimforge/rapier3d-compat";
 import { GRAVITY } from "../config";
+import { MOVEMENT_MODE_FLYING, type MovementMode } from "../movementMode";
 import { normalizeYaw } from "../platforms";
 
 export interface PlatformCarryDelta {
@@ -15,6 +17,7 @@ export interface GroundSupportHit {
 }
 
 export interface KinematicSolveState {
+  movementMode: MovementMode;
   grounded: boolean;
   groundedPlatformPid: number | null;
   vy: number;
@@ -43,6 +46,9 @@ export function applyPlatformCarryYaw(yaw: number, carryYaw: number): number {
 }
 
 export function resolveVerticalVelocityForSolve(state: KinematicSolveState): number {
+  if (state.movementMode === MOVEMENT_MODE_FLYING) {
+    return state.vy;
+  }
   if (state.groundedPlatformPid !== null) {
     return 0;
   }
@@ -97,6 +103,17 @@ export function resolveKinematicPostStepState(options: {
   deltaSeconds: number;
   playerCameraOffsetY: number;
 }): KinematicPostStepResult {
+  if (options.previous.movementMode === MOVEMENT_MODE_FLYING) {
+    return {
+      grounded: false,
+      groundedPlatformPid: null,
+      vy: options.previous.vy,
+      x: options.movedBody.x,
+      y: options.movedBody.y + options.playerCameraOffsetY,
+      z: options.movedBody.z
+    };
+  }
+
   const grounded = options.groundedByQuery;
   const attachedPlatformPid = grounded ? options.groundedPlatformPid : null;
 
@@ -252,16 +269,21 @@ export function stepKinematicCharacterController(options: {
   );
 
   const moved = options.body.translation();
-  const groundedByQuery = options.characterController.computedGrounded();
-  const supportHit = options.resolveGroundSupportColliderHandle(groundedByQuery);
-  const groundedPlatformPid = resolveGroundedPlatformPidFromComputedCollisions({
-    groundedByQuery,
-    previousGroundedPlatformPid: options.state.groundedPlatformPid,
-    supportHit,
-    characterController: options.characterController,
-    resolvePlatformPidByColliderHandle: options.resolvePlatformPidByColliderHandle,
-    groundContactMinNormalY: options.groundContactMinNormalY
-  });
+  const isFlying = options.state.movementMode === MOVEMENT_MODE_FLYING;
+  const groundedByQuery = isFlying ? false : options.characterController.computedGrounded();
+  const supportHit = isFlying
+    ? { hit: false, colliderHandle: null }
+    : options.resolveGroundSupportColliderHandle(groundedByQuery);
+  const groundedPlatformPid = isFlying
+    ? null
+    : resolveGroundedPlatformPidFromComputedCollisions({
+        groundedByQuery,
+        previousGroundedPlatformPid: options.state.groundedPlatformPid,
+        supportHit,
+        characterController: options.characterController,
+        resolvePlatformPidByColliderHandle: options.resolvePlatformPidByColliderHandle,
+        groundContactMinNormalY: options.groundContactMinNormalY
+      });
   const next = resolveKinematicPostStepState({
     previous: options.state,
     movedBody: moved,

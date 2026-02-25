@@ -1,6 +1,7 @@
 // Bridges simulation state changes into nengi replication entities and server messages.
 import type { AbilityDefinition } from "../../shared/index";
 import type { AbilityCreatorSessionSnapshot } from "../../shared/index";
+import type { MovementMode } from "../../shared/index";
 import { NType } from "../../shared/netcode";
 import { NetReplicationBridge, type ReplicatedSnapshot } from "../netcode/NetReplicationBridge";
 import {
@@ -63,6 +64,7 @@ export class ServerReplicationCoordinator<
     rz: number,
     rw: number,
     grounded: boolean,
+    movementMode: MovementMode,
     health: number,
     maxHealth: number
   ): void {
@@ -77,6 +79,7 @@ export class ServerReplicationCoordinator<
       rz,
       rw,
       grounded,
+      movementMode,
       health,
       maxHealth
     );

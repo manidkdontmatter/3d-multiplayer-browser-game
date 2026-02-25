@@ -1,6 +1,11 @@
 // ECS storage layer owning component arrays and low-level mutation helpers.
 import { addComponent, addEntity, createWorld, query, removeEntity } from "bitecs";
-import { HOTBAR_SLOT_COUNT, clampHotbarSlotIndex } from "../../shared/index";
+import {
+  HOTBAR_SLOT_COUNT,
+  MOVEMENT_MODE_GROUNDED,
+  clampHotbarSlotIndex,
+  sanitizeMovementMode
+} from "../../shared/index";
 import type {
   DummyObject,
   PlayerObject,
@@ -19,6 +24,7 @@ export class SimulationEcsStore {
       Velocity: { x: [] as number[], y: [] as number[], z: [] as number[] },
       Health: { value: [] as number[], max: [] as number[] },
       Grounded: { value: [] as number[] },
+      MovementMode: { value: [] as number[] },
       GroundedPlatformPid: { value: [] as number[] },
       AccountId: { value: [] as number[] },
       Yaw: { value: [] as number[] },
@@ -131,6 +137,7 @@ export class SimulationEcsStore {
     this.world.components.Rotation.z[eid] = 0;
     this.world.components.Rotation.w[eid] = 1;
     this.world.components.Grounded.value[eid] = 0;
+    this.world.components.MovementMode.value[eid] = MOVEMENT_MODE_GROUNDED;
     this.world.components.Health.value[eid] = 0;
     this.world.components.Health.max[eid] = 0;
     this.world.components.Velocity.x[eid] = request.vx;
@@ -163,6 +170,10 @@ export class SimulationEcsStore {
     this.world.components.Rotation.z[eid] = entity.rotation.z;
     this.world.components.Rotation.w[eid] = entity.rotation.w;
     this.world.components.Grounded.value[eid] = entity.grounded ? 1 : 0;
+    this.world.components.MovementMode.value[eid] = sanitizeMovementMode(
+      entity.movementMode,
+      MOVEMENT_MODE_GROUNDED
+    );
     this.world.components.Health.value[eid] = Math.max(0, Math.floor(entity.health));
     this.world.components.Health.max[eid] = Math.max(0, Math.floor(entity.maxHealth));
   }
@@ -354,6 +365,7 @@ export class SimulationEcsStore {
     addComponent(this.world, eid, this.world.components.Position);
     addComponent(this.world, eid, this.world.components.Rotation);
     addComponent(this.world, eid, this.world.components.Grounded);
+    addComponent(this.world, eid, this.world.components.MovementMode);
     addComponent(this.world, eid, this.world.components.Health);
   }
 }

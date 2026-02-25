@@ -1,3 +1,4 @@
+// Character animation state blender for locomotion and upper-body action overlays.
 import {
   AdditiveAnimationBlendMode,
   AnimationAction,
@@ -7,6 +8,7 @@ import {
   LoopRepeat,
   Object3D
 } from "three";
+import { MOVEMENT_MODE_FLYING, type MovementMode } from "../../../shared/index";
 
 export interface CharacterAnimationClips {
   idle: AnimationClip;
@@ -21,6 +23,7 @@ export interface CharacterAnimationParams {
   verticalSpeed: number;
   grounded: boolean;
   sprinting: boolean;
+  movementMode: MovementMode;
 }
 
 const WALK_ENTER_SPEED = 0.22;
@@ -31,7 +34,7 @@ const LOCOMOTION_FADE_SECONDS = 0.16;
 const MIN_UPDATE_STEP = 1 / 240;
 const MAX_UPDATE_STEP = 1 / 20;
 
-type LocomotionState = "idle" | "walk" | "run" | "jump" | "fall";
+type LocomotionState = "idle" | "walk" | "run" | "jump" | "fall" | "fly";
 
 export class CharacterAnimationController {
   private readonly mixer: AnimationMixer;
@@ -95,6 +98,9 @@ export class CharacterAnimationController {
   }
 
   private resolveLocomotionState(params: CharacterAnimationParams): LocomotionState {
+    if (params.movementMode === MOVEMENT_MODE_FLYING) {
+      return "fly";
+    }
     const airborne = !params.grounded;
     if (airborne) {
       return params.verticalSpeed >= 0 ? "jump" : "fall";
@@ -141,6 +147,9 @@ export class CharacterAnimationController {
   }
 
   private actionForState(state: LocomotionState): AnimationAction {
+    if (state === "fly") {
+      return this.actions.idle;
+    }
     if (state === "jump" || state === "fall") {
       return this.actions.jump;
     }

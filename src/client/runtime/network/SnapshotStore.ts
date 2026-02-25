@@ -1,5 +1,8 @@
+// Client interpolated snapshot cache and projection into runtime render entity slices.
 import { NType } from "../../../shared/netcode";
 import {
+  MOVEMENT_MODE_GROUNDED,
+  sanitizeMovementMode,
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
   MODEL_ID_PLAYER,
@@ -171,6 +174,7 @@ export class SnapshotStore {
       z: position.z,
       rotation,
       grounded: typeof grounded === "boolean" ? grounded : true,
+      movementMode: sanitizeMovementMode(raw.movementMode, MOVEMENT_MODE_GROUNDED),
       health: typeof health === "number" ? health : 100,
       maxHealth: typeof maxHealth === "number" ? maxHealth : 100
     };

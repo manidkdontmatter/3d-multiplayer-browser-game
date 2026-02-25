@@ -2,6 +2,7 @@
 import type RAPIER from "@dimforge/rapier3d-compat";
 import { query } from "bitecs";
 import { HOTBAR_SLOT_COUNT, clampHotbarSlotIndex } from "../../shared/index";
+import type { MovementMode } from "../../shared/index";
 import { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
 import { SimulationEcsProjectors } from "./SimulationEcsProjectors";
 import { SimulationEcsStore } from "./SimulationEcsStore";
@@ -166,6 +167,7 @@ export class SimulationEcs {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number; w: number };
     grounded: boolean;
+    movementMode: MovementMode;
     health: number;
     maxHealth: number;
   } {
@@ -239,6 +241,7 @@ export class SimulationEcs {
     vy: number;
     vz: number;
     grounded: boolean;
+    movementMode: MovementMode;
     groundedPlatformPid: number | null;
     lastProcessedSequence: number;
     lastPrimaryFireAtSeconds: number;
@@ -268,6 +271,7 @@ export class SimulationEcs {
     vy: number;
     vz: number;
     grounded: boolean;
+    movementMode: MovementMode;
     groundedPlatformPid: number | null;
     body: RAPIER.RigidBody;
   } | null {
@@ -286,6 +290,7 @@ export class SimulationEcs {
       vy: number;
       vz: number;
       grounded: boolean;
+      movementMode: MovementMode;
       groundedPlatformPid: number | null;
     }
   ): void {
@@ -299,6 +304,7 @@ export class SimulationEcs {
     c.Velocity.y[eid] = state.vy;
     c.Velocity.z[eid] = state.vz;
     c.Grounded.value[eid] = state.grounded ? 1 : 0;
+    c.MovementMode.value[eid] = state.movementMode;
     c.GroundedPlatformPid.value[eid] =
       state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
   }
@@ -333,6 +339,7 @@ export class SimulationEcs {
       vy: number;
       vz: number;
       grounded: boolean;
+      movementMode: MovementMode;
       groundedPlatformPid: number | null;
       lastProcessedSequence: number;
       lastPrimaryFireAtSeconds: number;
@@ -357,6 +364,7 @@ export class SimulationEcs {
     c.Velocity.y[eid] = state.vy;
     c.Velocity.z[eid] = state.vz;
     c.Grounded.value[eid] = state.grounded ? 1 : 0;
+    c.MovementMode.value[eid] = state.movementMode;
     c.GroundedPlatformPid.value[eid] =
       state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
     c.LastProcessedSequence.value[eid] = Math.max(0, Math.floor(state.lastProcessedSequence));
@@ -383,6 +391,7 @@ export class SimulationEcs {
     vy: number;
     vz: number;
     grounded: boolean;
+    movementMode: MovementMode;
     groundedPlatformPid: number | null;
   } | null {
     return this.projectors.getPlayerInputAckStateByUserId(userId);
@@ -543,6 +552,7 @@ export class SimulationEcs {
         position: { x: number; y: number; z: number };
         rotation: { x: number; y: number; z: number; w: number };
         grounded: boolean;
+        movementMode: MovementMode;
         health: number;
         maxHealth: number;
       }
@@ -567,6 +577,7 @@ export class SimulationEcs {
       rz: number,
       rw: number,
       grounded: boolean,
+      movementMode: MovementMode,
       health: number,
       maxHealth: number
     ) => void
@@ -586,6 +597,7 @@ export class SimulationEcs {
         c.Rotation.z[eid] ?? 0,
         c.Rotation.w[eid] ?? 1,
         (c.Grounded.value[eid] ?? 0) !== 0,
+        (c.MovementMode.value[eid] ?? 0) as MovementMode,
         c.Health.value[eid] ?? 0,
         c.Health.max[eid] ?? 0
       );

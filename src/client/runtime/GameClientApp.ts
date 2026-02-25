@@ -5,7 +5,8 @@ import {
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_PRIMARY_MOUSE_SLOT,
   DEFAULT_SECONDARY_MOUSE_SLOT,
-  getAbilityDefinitionById
+  getAbilityDefinitionById,
+  movementModeToLabel
 } from "../../shared/index";
 import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
@@ -204,10 +205,14 @@ export class GameClientApp {
 
   private stepFixed(delta: number): void {
     const mainUiOpen = this.abilityHud.isMainMenuOpen();
-    const movement =
+    let movement =
       mainUiOpen
-        ? { forward: 0, strafe: 0, jump: false, sprint: false }
+        ? { forward: 0, strafe: 0, jump: false, toggleFlyPressed: false, sprint: false }
         : (this.testMovementOverride ?? this.input.sampleMovement());
+    if (!mainUiOpen && this.testMovementOverride?.toggleFlyPressed) {
+      movement = { ...movement, toggleFlyPressed: true };
+      this.testMovementOverride = { ...this.testMovementOverride, toggleFlyPressed: false };
+    }
     const yaw = this.input.getYaw();
     const pitch = this.input.getPitch();
 
@@ -299,8 +304,9 @@ export class GameClientApp {
     const projectileCount = this.network.getProjectiles().length;
     const lmbAbilityName = this.resolveAbilityName(this.hotbarAbilityIds[this.primaryMouseSlot] ?? ABILITY_ID_NONE);
     const rmbAbilityName = this.resolveAbilityName(this.hotbarAbilityIds[this.secondaryMouseSlot] ?? ABILITY_ID_NONE);
+    const localMovementModeLabel = movementModeToLabel(this.resolveLocalMovementMode());
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | menu=${this.abilityHud.isMainMenuOpen() ? "open" : "closed"} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | lmb=${this.primaryMouseSlot + 1}:${lmbAbilityName} | rmb=${this.secondaryMouseSlot + 1}:${rmbAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${reconDiagnostics.lastPositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${reconDiagnostics.lastReplayCount} | hs=${reconDiagnostics.hardSnapCorrections}/${reconDiagnostics.totalCorrections} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | move=${localMovementModeLabel} | menu=${this.abilityHud.isMainMenuOpen() ? "open" : "closed"} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | lmb=${this.primaryMouseSlot + 1}:${lmbAbilityName} | rmb=${this.secondaryMouseSlot + 1}:${rmbAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${reconDiagnostics.lastPositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${reconDiagnostics.lastReplayCount} | hs=${reconDiagnostics.hardSnapCorrections}/${reconDiagnostics.totalCorrections} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
   }
 
   private updateConnectedPlayersIndicator(): void {
@@ -339,7 +345,8 @@ export class GameClientApp {
       coordinateSystem: "right-handed; +x right, +y up, -z forward",
       player: {
         ...pose,
-        nid: this.network.getLocalPlayerNid()
+        nid: this.network.getLocalPlayerNid(),
+        movementMode: movementModeToLabel(this.resolveLocalMovementMode())
       },
       remotePlayers: remotePlayers.map((p) => ({
         nid: p.nid,
@@ -347,6 +354,7 @@ export class GameClientApp {
         y: p.y,
         z: p.z,
         grounded: p.grounded,
+        movementMode: movementModeToLabel(p.movementMode),
         health: p.health
       })),
       perf: {
@@ -466,6 +474,7 @@ export class GameClientApp {
         forward: movement.forward,
         strafe: movement.strafe,
         jump: movement.jump,
+        toggleFlyPressed: Boolean(movement.toggleFlyPressed),
         sprint: movement.sprint
       };
     };
@@ -517,6 +526,7 @@ export class GameClientApp {
       frameDeltaSeconds,
       localPose: this.getRenderPose(),
       localGrounded: this.resolveLocalGroundedState(),
+      localMovementMode: this.resolveLocalMovementMode(),
       localPlayerNid: this.network.getLocalPlayerNid(),
       remotePlayers: this.network.getRemotePlayers(),
       abilityUseEvents: this.network.consumeAbilityUseEvents(),
@@ -566,6 +576,13 @@ export class GameClientApp {
       return this.physics.isGrounded();
     }
     return this.network.getLocalPlayerPose()?.grounded ?? this.physics.isGrounded();
+  }
+
+  private resolveLocalMovementMode() {
+    if (this.isCspActive()) {
+      return this.physics.getKinematicState().movementMode;
+    }
+    return this.network.getLocalPlayerPose()?.movementMode ?? this.physics.getKinematicState().movementMode;
   }
 
   private consumeTestPrimaryActionTrigger(): boolean {

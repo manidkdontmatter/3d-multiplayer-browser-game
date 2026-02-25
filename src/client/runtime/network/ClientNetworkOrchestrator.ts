@@ -80,6 +80,7 @@ export class ClientNetworkOrchestrator {
         vz: recon.ack.vz,
         grounded: recon.ack.grounded,
         groundedPlatformPid: recon.ack.groundedPlatformPid,
+        movementMode: recon.ack.movementMode,
         serverTimeSeconds: recon.ack.serverTick * SERVER_TICK_SECONDS
       });
 

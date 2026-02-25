@@ -1,5 +1,6 @@
 // Handles player connect/disconnect flow and runtime entity spawn/teardown wiring.
 import RAPIER from "@dimforge/rapier3d-compat";
+import type { MovementMode } from "../../shared/index";
 import type { PlayerSnapshot } from "../persistence/PersistenceService";
 
 export interface BroadcastSubscriptionChannel<TUser> {
@@ -39,6 +40,7 @@ export interface LifecyclePlayer {
   vx: number;
   vz: number;
   grounded: boolean;
+  movementMode: MovementMode;
   groundedPlatformPid: number | null;
   health: number;
   maxHealth: number;

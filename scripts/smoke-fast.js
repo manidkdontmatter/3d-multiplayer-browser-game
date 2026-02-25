@@ -1,11 +1,17 @@
+// Fast headless smoke test that self-manages server/client startup and verifies basic connectivity.
 import process from "node:process";
 import net from "node:net";
+import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { chromium } from "playwright";
 
 const CLIENT_URL = "http://127.0.0.1:5173";
 const SERVER_PORT = 9001;
 const CLIENT_PORT = 5173;
+const SERVER_START_TIMEOUT_MS = 18000;
+const CLIENT_START_TIMEOUT_MS = 22000;
 const CONNECT_TIMEOUT_MS = 9000;
+const ROOT = process.cwd();
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,6 +29,56 @@ function isPortOpen(host, port, timeoutMs = 500) {
     socket.once("timeout", () => finish(false));
     socket.once("error", () => finish(false));
     socket.connect(port, host);
+  });
+}
+
+async function waitForPortOpen(host, port, timeoutMs, label) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isPortOpen(host, port, 500)) {
+      return;
+    }
+    await delay(120);
+  }
+  throw new Error(`Timed out waiting for ${label} on ${host}:${port}`);
+}
+
+function startProcess(name, command, args) {
+  const spawnConfig = {
+    cwd: ROOT,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: false
+  };
+
+  const child =
+    process.platform === "win32"
+      ? spawn("cmd.exe", ["/d", "/s", "/c", `${command} ${args.join(" ")}`], spawnConfig)
+      : spawn(command, args, spawnConfig);
+
+  child.stdout.on("data", (chunk) => {
+    process.stdout.write(`[${name}] ${chunk}`);
+  });
+  child.stderr.on("data", (chunk) => {
+    process.stderr.write(`[${name}:err] ${chunk}`);
+  });
+
+  return child;
+}
+
+function stopProcessTree(child) {
+  return new Promise((resolve) => {
+    if (!child || child.killed) {
+      resolve();
+      return;
+    }
+
+    if (process.platform === "win32") {
+      execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => resolve());
+    } else {
+      child.kill("SIGTERM");
+      resolve();
+    }
   });
 }
 
@@ -53,16 +109,32 @@ async function waitForConnectedState(page, timeoutMs) {
 }
 
 async function main() {
-  const serverUp = await isPortOpen("127.0.0.1", SERVER_PORT);
-  const clientUp = await isPortOpen("127.0.0.1", CLIENT_PORT);
-  if (!serverUp || !clientUp) {
-    console.error(
-      `[smoke-fast] FAIL expected running services on ws://127.0.0.1:${SERVER_PORT} and http://127.0.0.1:${CLIENT_PORT}`
-    );
-    process.exit(1);
+  const managedProcesses = [];
+
+  const serverAlreadyRunning = await isPortOpen("127.0.0.1", SERVER_PORT);
+  if (!serverAlreadyRunning) {
+    const server = startProcess("server", "npm", ["run", "dev:server"]);
+    managedProcesses.push(server);
+    await waitForPortOpen("127.0.0.1", SERVER_PORT, SERVER_START_TIMEOUT_MS, "server");
+  }
+
+  const clientAlreadyRunning = await isPortOpen("127.0.0.1", CLIENT_PORT);
+  if (!clientAlreadyRunning) {
+    const client = startProcess("client", "npm", [
+      "run",
+      "dev:client",
+      "--",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(CLIENT_PORT)
+    ]);
+    managedProcesses.push(client);
+    await waitForPortOpen("127.0.0.1", CLIENT_PORT, CLIENT_START_TIMEOUT_MS, "client");
   }
 
   let browser;
+  let exitCode = 0;
   try {
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
@@ -88,11 +160,16 @@ async function main() {
     console.log("[smoke-fast] PASS");
   } catch (error) {
     console.error("[smoke-fast] FAIL", error);
-    process.exit(1);
+    exitCode = 1;
   } finally {
     if (browser) {
       await browser.close();
     }
+    for (const child of managedProcesses) {
+      await stopProcessTree(child);
+    }
+    await delay(200);
+    process.exit(exitCode);
   }
 }
 

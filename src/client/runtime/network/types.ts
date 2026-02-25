@@ -1,7 +1,8 @@
 // Client network-layer types used by reconciliation and ability-state message handling.
 import type {
   AbilityDefinition,
-  AbilityCreatorType
+  AbilityCreatorType,
+  MovementMode
 } from "../../../shared/index";
 import type {
   MovementInput,
@@ -26,6 +27,7 @@ export interface ReconciliationAck {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
+  movementMode: MovementMode;
 }
 
 export interface ReconciliationFrame {

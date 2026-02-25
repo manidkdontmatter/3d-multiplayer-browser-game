@@ -1,5 +1,10 @@
 // Read-side projection helpers from ECS component arrays into typed runtime snapshots.
-import { HOTBAR_SLOT_COUNT } from "../../shared/index";
+import {
+  HOTBAR_SLOT_COUNT,
+  MOVEMENT_MODE_GROUNDED,
+  sanitizeMovementMode,
+  type MovementMode
+} from "../../shared/index";
 import type RAPIER from "@dimforge/rapier3d-compat";
 import type { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
 import type { SimulationEcsStore } from "./SimulationEcsStore";
@@ -52,9 +57,10 @@ export class SimulationEcsProjectors {
     modelId: number;
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number; w: number };
-    grounded: boolean;
-    health: number;
-    maxHealth: number;
+      grounded: boolean;
+      movementMode: MovementMode;
+      health: number;
+      maxHealth: number;
   } {
     const c = this.store.world.components;
     return {
@@ -72,6 +78,7 @@ export class SimulationEcsProjectors {
         w: c.Rotation.w[eid] ?? 1
       },
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       health: c.Health.value[eid] ?? 0,
       maxHealth: c.Health.max[eid] ?? 0
     };
@@ -138,6 +145,7 @@ export class SimulationEcsProjectors {
     vy: number;
     vz: number;
     grounded: boolean;
+    movementMode: MovementMode;
     groundedPlatformPid: number | null;
     lastProcessedSequence: number;
     lastPrimaryFireAtSeconds: number;
@@ -179,6 +187,7 @@ export class SimulationEcsProjectors {
       vy: c.Velocity.y[eid] ?? 0,
       vz: c.Velocity.z[eid] ?? 0,
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw,
       lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
       lastPrimaryFireAtSeconds: c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY,
@@ -212,6 +221,7 @@ export class SimulationEcsProjectors {
     vy: number;
     vz: number;
     grounded: boolean;
+    movementMode: MovementMode;
     groundedPlatformPid: number | null;
     body: RAPIER.RigidBody;
   } | null {
@@ -233,6 +243,7 @@ export class SimulationEcsProjectors {
       vy: c.Velocity.y[eid] ?? 0,
       vz: c.Velocity.z[eid] ?? 0,
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw,
       body
     };
@@ -292,6 +303,7 @@ export class SimulationEcsProjectors {
     vy: number;
     vz: number;
     grounded: boolean;
+    movementMode: MovementMode;
     groundedPlatformPid: number | null;
   } | null {
     const eid = this.indexes.getPlayerEidByUserId(userId);
@@ -312,6 +324,7 @@ export class SimulationEcsProjectors {
       vy: c.Velocity.y[eid] ?? 0,
       vz: c.Velocity.z[eid] ?? 0,
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw
     };
   }

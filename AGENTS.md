@@ -9,11 +9,8 @@
 
 ## Session Bootstrap
 
-- At session start, read in this order:
-  1. `AGENTS.md`
-  2. `overview.md` (if present)
-  3. `design-doc.md`
-  4. Curated indexes: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md` (when present)
+- At session start, read all md files in the workspace root
+- Read Curated indexes to know where documentation is: `docs/nengi2-index.md`, `docs/threejs-index.md`, `docs/rapier-index.md`
 - `design-doc.md` is the canonical game-design source.
 - Then load only task-relevant files in `docs/` as needed. They are the documentation of libraries/etc used in this project
 
@@ -51,6 +48,7 @@
 - Heavily favor composition over inheritance where applicable.
 - Always put at the top of every script a comment explaining what it is, if an existing script doesn't have that yet, add it. This is to help humans understand the script's purpose, make the comment easy for them to understand.
 - Prefer Data Oriented Design where applicable
+- Netcode must be optimized for supporting the most amount of players on a single VPS, we are scaling entirely vertically, there will be no sharding/etc. We must support the most amount of players at once on the same map on one vps because these servers are player hosted and they can't be asked to host on more than one vps.
 
 ## Decision and Quality Heuristics
 
