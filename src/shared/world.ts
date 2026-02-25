@@ -88,16 +88,6 @@ export function generateRuntimeMapLayout(config: RuntimeMapConfig): RuntimeMapLa
     });
   }
 
-  blocks.push({
-    x: 0,
-    y: 1,
-    z: 0,
-    halfX: 6,
-    halfY: 1,
-    halfZ: 6,
-    rotationY: 0
-  });
-
   return {
     config,
     staticBlocks: blocks
