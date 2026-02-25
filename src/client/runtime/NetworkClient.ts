@@ -1,9 +1,11 @@
+// Client network facade handling commands, snapshots, interpolation, and ability-state sync.
 import {
   type AbilityDefinition
 } from "../../shared/index";
 import {
   NType,
-  type LoadoutCommand,
+  type AbilityCommand,
+  type AbilityCreatorCommand,
   ncontext
 } from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
@@ -16,6 +18,7 @@ import type {
   AbilityUseEvent
 } from "./types";
 import { AbilityStateStore } from "./network/AbilityStateStore";
+import { AbilityCreatorStateStore } from "./network/AbilityCreatorStateStore";
 import { AckReconciliationBuffer } from "./network/AckReconciliationBuffer";
 import { InterpolationController } from "./network/InterpolationController";
 import { InboundMessageRouter } from "./network/InboundMessageRouter";
@@ -24,26 +27,32 @@ import { ServerTimeSync } from "./network/ServerTimeSync";
 import { SnapshotStore } from "./network/SnapshotStore";
 import type {
   AbilityEventBatch,
-  LoadoutState,
+  AbilityCreatorState,
+  QueuedAbilityCreatorCommand,
+  AbilityState,
   NetSimulationConfig,
-  QueuedLoadoutCommand,
+  QueuedAbilityCommand,
   ReconciliationFrame,
   PendingInput
 } from "./network/types";
 
-export type { PendingInput, ReconciliationFrame, LoadoutState, AbilityEventBatch };
+export type { PendingInput, ReconciliationFrame, AbilityState, AbilityEventBatch };
 
 export class NetworkClient {
   private readonly transport: NetTransportClient;
   private readonly snapshots = new SnapshotStore();
   private readonly abilities = new AbilityStateStore();
+  private readonly abilityCreator = new AbilityCreatorStateStore();
   private readonly interpolation = new InterpolationController();
   private readonly serverTimeSync = new ServerTimeSync();
   private readonly ackBuffer: AckReconciliationBuffer;
   private readonly inboundMessageRouter = new InboundMessageRouter();
   private readonly netSimulation = this.resolveNetSimulationConfig();
-  private queuedLoadoutCommand: QueuedLoadoutCommand | null = null;
+  private queuedAbilityCommand: QueuedAbilityCommand | null = null;
+  private readonly queuedAbilityCreatorCommands: QueuedAbilityCreatorCommand[] = [];
+  private nextAbilityCreatorSequence = 1;
   private localPlayerNid: number | null = null;
+  private serverPlayerCount: number | null = null;
 
   public constructor() {
     this.ackBuffer = new AckReconciliationBuffer((acceptedAtMs, serverTick) => {
@@ -57,10 +66,14 @@ export class NetworkClient {
       () => {
         this.snapshots.reset();
         this.abilities.reset();
+        this.abilityCreator.reset();
         this.interpolation.reset();
         this.serverTimeSync.reset();
         this.ackBuffer.reset();
-        this.queuedLoadoutCommand = null;
+        this.queuedAbilityCommand = null;
+        this.queuedAbilityCreatorCommands.length = 0;
+        this.nextAbilityCreatorSequence = 1;
+        this.serverPlayerCount = null;
       },
       () => {
         // Errors are expected when server is unavailable during local-only workflows.
@@ -68,7 +81,7 @@ export class NetworkClient {
     );
   }
 
-  public async connect(serverUrl: string, authKey: string): Promise<void> {
+  public async connect(serverUrl: string, authKey: string | null): Promise<void> {
     await this.transport.connect(serverUrl, authKey);
   }
 
@@ -76,7 +89,14 @@ export class NetworkClient {
     delta: number,
     movement: MovementInput,
     orientation: { yaw: number; pitch: number },
-    actions: { usePrimaryPressed: boolean; usePrimaryHeld: boolean }
+    actions: {
+      usePrimaryPressed: boolean;
+      usePrimaryHeld: boolean;
+      useSecondaryPressed: boolean;
+      useSecondaryHeld: boolean;
+      castSlotPressed: boolean;
+      castSlotIndex: number;
+    }
   ): void {
     if (!this.transport.isConnected()) {
       return;
@@ -90,17 +110,47 @@ export class NetworkClient {
 
     const { sequence, yawDelta } = this.ackBuffer.enqueueInput(delta, movement, orientation);
 
-    const loadoutCommand = this.queuedLoadoutCommand;
-    if (loadoutCommand) {
+    const abilityCommand = this.queuedAbilityCommand;
+    if (abilityCommand) {
       this.transport.addCommand({
-        ntype: NType.LoadoutCommand,
-        applySelectedHotbarSlot: loadoutCommand.applySelectedHotbarSlot,
-        selectedHotbarSlot: this.clampUnsignedInt(loadoutCommand.selectedHotbarSlot, 0xff),
-        applyAssignment: loadoutCommand.applyAssignment,
-        assignTargetSlot: this.clampUnsignedInt(loadoutCommand.assignTargetSlot, 0xff),
-        assignAbilityId: this.clampUnsignedInt(loadoutCommand.assignAbilityId, 0xffff)
-      } satisfies LoadoutCommand);
-      this.queuedLoadoutCommand = null;
+        ntype: NType.AbilityCommand,
+        applyAssignment: abilityCommand.applyAssignment,
+        assignTargetSlot: this.clampUnsignedInt(abilityCommand.assignTargetSlot, 0xff),
+        assignAbilityId: this.clampUnsignedInt(abilityCommand.assignAbilityId, 0xffff),
+        applyPrimaryMouseSlot: abilityCommand.applyPrimaryMouseSlot,
+        primaryMouseSlot: this.clampUnsignedInt(abilityCommand.primaryMouseSlot, 0xff),
+        applySecondaryMouseSlot: abilityCommand.applySecondaryMouseSlot,
+        secondaryMouseSlot: this.clampUnsignedInt(abilityCommand.secondaryMouseSlot, 0xff),
+        applyForgetAbility: abilityCommand.applyForgetAbility,
+        forgetAbilityId: this.clampUnsignedInt(abilityCommand.forgetAbilityId, 0xffff)
+      } satisfies AbilityCommand);
+      this.queuedAbilityCommand = null;
+    }
+
+    if (this.queuedAbilityCreatorCommands.length > 0) {
+      const drained = this.queuedAbilityCreatorCommands.splice(0, this.queuedAbilityCreatorCommands.length);
+      for (const creatorCommand of drained) {
+        this.transport.addCommand({
+          ntype: NType.AbilityCreatorCommand,
+          sessionId: this.clampUnsignedInt(creatorCommand.sessionId, 0xffff),
+          sequence: this.clampUnsignedInt(creatorCommand.sequence, 0xffff),
+          applyName: creatorCommand.applyName,
+          abilityName: creatorCommand.abilityName,
+          applyType: creatorCommand.applyType,
+          abilityType: this.clampUnsignedInt(creatorCommand.abilityType, 0xff),
+          applyTier: creatorCommand.applyTier,
+          tier: this.clampUnsignedInt(creatorCommand.tier, 0xff),
+          incrementExampleStat: creatorCommand.incrementExampleStat,
+          decrementExampleStat: creatorCommand.decrementExampleStat,
+          applyExampleUpsideEnabled: creatorCommand.applyExampleUpsideEnabled,
+          exampleUpsideEnabled: creatorCommand.exampleUpsideEnabled,
+          applyExampleDownsideEnabled: creatorCommand.applyExampleDownsideEnabled,
+          exampleDownsideEnabled: creatorCommand.exampleDownsideEnabled,
+          applyTemplateAbilityId: creatorCommand.applyTemplateAbilityId,
+          templateAbilityId: this.clampUnsignedInt(creatorCommand.templateAbilityId, 0xffff),
+          submitCreate: creatorCommand.submitCreate
+        } satisfies AbilityCreatorCommand);
+      }
     }
 
     this.transport.addCommand({
@@ -112,6 +162,10 @@ export class NetworkClient {
       sprint: movement.sprint,
       usePrimaryPressed: actions.usePrimaryPressed,
       usePrimaryHeld: actions.usePrimaryHeld,
+      useSecondaryPressed: actions.useSecondaryPressed,
+      useSecondaryHeld: actions.useSecondaryHeld,
+      castSlotPressed: actions.castSlotPressed,
+      castSlotIndex: this.clampUnsignedInt(actions.castSlotIndex, 0xff),
       yaw: orientation.yaw,
       yawDelta,
       pitch: orientation.pitch
@@ -120,31 +174,76 @@ export class NetworkClient {
     this.transport.flush();
   }
 
-  public queueLoadoutSelection(slot: number): void {
-    const queued = this.queuedLoadoutCommand ?? {
-      applySelectedHotbarSlot: false,
-      selectedHotbarSlot: 0,
-      applyAssignment: false,
-      assignTargetSlot: 0,
-      assignAbilityId: 0
-    };
-    queued.applySelectedHotbarSlot = true;
-    queued.selectedHotbarSlot = slot;
-    this.queuedLoadoutCommand = queued;
-  }
-
-  public queueLoadoutAssignment(slot: number, abilityId: number): void {
-    const queued = this.queuedLoadoutCommand ?? {
-      applySelectedHotbarSlot: false,
-      selectedHotbarSlot: 0,
-      applyAssignment: false,
-      assignTargetSlot: 0,
-      assignAbilityId: 0
-    };
+  public queueHotbarAssignment(slot: number, abilityId: number): void {
+    const queued = this.getOrCreateQueuedAbilityCommand();
     queued.applyAssignment = true;
     queued.assignTargetSlot = slot;
     queued.assignAbilityId = abilityId;
-    this.queuedLoadoutCommand = queued;
+    this.queuedAbilityCommand = queued;
+  }
+
+  public queuePrimaryMouseSlot(slot: number): void {
+    const queued = this.getOrCreateQueuedAbilityCommand();
+    queued.applyPrimaryMouseSlot = true;
+    queued.primaryMouseSlot = slot;
+    this.queuedAbilityCommand = queued;
+  }
+
+  public queueSecondaryMouseSlot(slot: number): void {
+    const queued = this.getOrCreateQueuedAbilityCommand();
+    queued.applySecondaryMouseSlot = true;
+    queued.secondaryMouseSlot = slot;
+    this.queuedAbilityCommand = queued;
+  }
+
+  public queueForgetAbility(abilityId: number): void {
+    const queued = this.getOrCreateQueuedAbilityCommand();
+    queued.applyForgetAbility = true;
+    queued.forgetAbilityId = abilityId;
+    this.queuedAbilityCommand = queued;
+  }
+
+  public queueAbilityCreatorCommand(command: {
+    applyName?: boolean;
+    abilityName?: string;
+    applyType?: boolean;
+    abilityType?: number;
+    applyTier?: boolean;
+    tier?: number;
+    incrementExampleStat?: boolean;
+    decrementExampleStat?: boolean;
+    applyExampleUpsideEnabled?: boolean;
+    exampleUpsideEnabled?: boolean;
+    applyExampleDownsideEnabled?: boolean;
+    exampleDownsideEnabled?: boolean;
+    applyTemplateAbilityId?: boolean;
+    templateAbilityId?: number;
+    submitCreate?: boolean;
+  }): void {
+    if (!this.transport.isConnected()) {
+      return;
+    }
+    const nextSequence = this.nextAbilityCreatorSequence;
+    this.nextAbilityCreatorSequence = (this.nextAbilityCreatorSequence % 0xffff) + 1;
+    this.queuedAbilityCreatorCommands.push({
+      sessionId: this.abilityCreator.getCurrentSessionId(),
+      sequence: nextSequence,
+      applyName: Boolean(command.applyName),
+      abilityName: typeof command.abilityName === "string" ? command.abilityName : "",
+      applyType: Boolean(command.applyType),
+      abilityType: Number.isFinite(command.abilityType) ? Number(command.abilityType) : 0,
+      applyTier: Boolean(command.applyTier),
+      tier: Number.isFinite(command.tier) ? Number(command.tier) : 0,
+      incrementExampleStat: Boolean(command.incrementExampleStat),
+      decrementExampleStat: Boolean(command.decrementExampleStat),
+      applyExampleUpsideEnabled: Boolean(command.applyExampleUpsideEnabled),
+      exampleUpsideEnabled: Boolean(command.exampleUpsideEnabled),
+      applyExampleDownsideEnabled: Boolean(command.applyExampleDownsideEnabled),
+      exampleDownsideEnabled: Boolean(command.exampleDownsideEnabled),
+      applyTemplateAbilityId: Boolean(command.applyTemplateAbilityId),
+      templateAbilityId: Number.isFinite(command.templateAbilityId) ? Number(command.templateAbilityId) : 0,
+      submitCreate: Boolean(command.submitCreate)
+    });
   }
 
   public consumeAbilityEvents(): AbilityEventBatch | null {
@@ -161,6 +260,14 @@ export class NetworkClient {
 
   public getAbilityById(abilityId: number): AbilityDefinition | null {
     return this.abilities.getAbilityById(abilityId);
+  }
+
+  public getOwnedAbilityIds(): number[] {
+    return this.abilities.getOwnedAbilityIds();
+  }
+
+  public consumeAbilityCreatorState(): AbilityCreatorState | null {
+    return this.abilityCreator.consumeState();
   }
 
   public getRemotePlayers(): RemotePlayerState[] {
@@ -189,6 +296,10 @@ export class NetworkClient {
 
   public getLocalPlayerNid(): number | null {
     return this.localPlayerNid;
+  }
+
+  public getServerPlayerCount(): number | null {
+    return this.serverPlayerCount;
   }
 
   public isServerGroundedOnPlatform(): boolean {
@@ -237,8 +348,15 @@ export class NetworkClient {
       onInputAckMessage: (message) => {
         this.ackBuffer.enqueueAckMessage(message, this.netSimulation);
       },
+      onServerPopulationMessage: (message) => {
+        const raw = Number(message.onlinePlayers);
+        this.serverPlayerCount = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : null;
+      },
       onUnhandledMessage: (message) => {
-        this.abilities.processMessage(message);
+        if (this.abilities.processMessage(message)) {
+          return;
+        }
+        this.abilityCreator.processMessage(message);
       }
     });
 
@@ -263,6 +381,22 @@ export class NetworkClient {
       ackDelayMs,
       ackJitterMs
     };
+  }
+
+  private getOrCreateQueuedAbilityCommand(): QueuedAbilityCommand {
+    return (
+      this.queuedAbilityCommand ?? {
+        applyAssignment: false,
+        assignTargetSlot: 0,
+        assignAbilityId: 0,
+        applyPrimaryMouseSlot: false,
+        primaryMouseSlot: 0,
+        applySecondaryMouseSlot: false,
+        secondaryMouseSlot: 1,
+        applyForgetAbility: false,
+        forgetAbilityId: 0
+      }
+    );
   }
 
   private readQueryNumber(params: URLSearchParams, key: string, fallback: number): number {

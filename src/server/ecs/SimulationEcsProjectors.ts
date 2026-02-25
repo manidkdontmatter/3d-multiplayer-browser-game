@@ -1,3 +1,4 @@
+// Read-side projection helpers from ECS component arrays into typed runtime snapshots.
 import { HOTBAR_SLOT_COUNT } from "../../shared/index";
 import type RAPIER from "@dimforge/rapier3d-compat";
 import type { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
@@ -20,7 +21,8 @@ export class SimulationEcsProjectors {
     vy: number;
     vz: number;
     health: number;
-    activeHotbarSlot: number;
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
   } | null {
     const entity = this.indexes.getObjectByEid(eid);
@@ -39,7 +41,8 @@ export class SimulationEcsProjectors {
       vy: components.Velocity.y[eid] ?? 0,
       vz: components.Velocity.z[eid] ?? 0,
       health: Math.max(0, Math.floor(components.Health.value[eid] ?? 0)),
-      activeHotbarSlot: Math.max(0, Math.floor(components.ActiveHotbarSlot.value[eid] ?? 0)),
+      primaryMouseSlot: Math.max(0, Math.floor(components.PrimaryMouseSlot.value[eid] ?? 0)),
+      secondaryMouseSlot: Math.max(0, Math.floor(components.SecondaryMouseSlot.value[eid] ?? 1)),
       hotbarAbilityIds: this.getHotbarArray(eid)
     };
   }
@@ -139,7 +142,9 @@ export class SimulationEcsProjectors {
     lastProcessedSequence: number;
     lastPrimaryFireAtSeconds: number;
     primaryHeld: boolean;
-    activeHotbarSlot: number;
+    secondaryHeld: boolean;
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
     unlockedAbilityIds: Set<number>;
     position: { x: number; y: number; z: number };
@@ -178,7 +183,9 @@ export class SimulationEcsProjectors {
       lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
       lastPrimaryFireAtSeconds: c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY,
       primaryHeld: (c.PrimaryHeld.value[eid] ?? 0) !== 0,
-      activeHotbarSlot: Math.max(0, Math.floor(c.ActiveHotbarSlot.value[eid] ?? 0)),
+      secondaryHeld: (c.SecondaryHeld.value[eid] ?? 0) !== 0,
+      primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
+      secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
       hotbarAbilityIds: this.getHotbarArray(eid),
       unlockedAbilityIds: this.store.getUnlockedAbilities(eid),
       position: { x, y, z },
@@ -309,8 +316,9 @@ export class SimulationEcsProjectors {
     };
   }
 
-  public getPlayerLoadoutStateByUserId(userId: number): {
-    activeHotbarSlot: number;
+  public getPlayerAbilityStateByUserId(userId: number): {
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
     unlockedAbilityIds: number[];
   } | null {
@@ -320,7 +328,8 @@ export class SimulationEcsProjectors {
     }
 
     return {
-      activeHotbarSlot: Math.max(0, Math.floor(this.store.world.components.ActiveHotbarSlot.value[eid] ?? 0)),
+      primaryMouseSlot: Math.max(0, Math.floor(this.store.world.components.PrimaryMouseSlot.value[eid] ?? 0)),
+      secondaryMouseSlot: Math.max(0, Math.floor(this.store.world.components.SecondaryMouseSlot.value[eid] ?? 1)),
       hotbarAbilityIds: this.getHotbarArray(eid),
       unlockedAbilityIds: this.store.getUnlockedAbilitiesArray(eid)
     };

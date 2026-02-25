@@ -1,3 +1,4 @@
+// Executes authoritative ability usage, cooldown checks, and spawned combat effects.
 import { clampHotbarSlotIndex } from "../../../shared/index";
 import type { AbilityDefinition } from "../../../shared/index";
 import { resolveProjectileProfile } from "../../../shared/index";
@@ -9,14 +10,15 @@ export interface AbilityExecutionPlayer {
   z: number;
   yaw: number;
   pitch: number;
-  activeHotbarSlot: number;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
   hotbarAbilityIds: number[];
   lastPrimaryFireAtSeconds: number;
 }
 
 export interface AbilityExecutionSystemOptions<TPlayer extends AbilityExecutionPlayer> {
   readonly getElapsedSeconds: () => number;
-  readonly resolveSelectedAbility: (player: TPlayer) => AbilityDefinition | null;
+  readonly resolveAbilityById: (player: TPlayer, abilityId: number) => AbilityDefinition | null;
   readonly broadcastAbilityUse: (player: TPlayer, ability: AbilityDefinition) => void;
   readonly spawnProjectile: (request: {
     ownerNid: number;
@@ -45,11 +47,22 @@ export interface AbilityExecutionSystemOptions<TPlayer extends AbilityExecutionP
 export class AbilityExecutionSystem<TPlayer extends AbilityExecutionPlayer> {
   public constructor(private readonly options: AbilityExecutionSystemOptions<TPlayer>) {}
 
-  public tryUsePrimaryAbility(player: TPlayer): void {
-    const ability = this.options.resolveSelectedAbility(player);
+  public tryUsePrimaryMouseAbility(player: TPlayer): void {
+    this.tryUseAbilityBySlot(player, player.primaryMouseSlot);
+  }
+
+  public tryUseSecondaryMouseAbility(player: TPlayer): void {
+    this.tryUseAbilityBySlot(player, player.secondaryMouseSlot);
+  }
+
+  public tryUseAbilityBySlot(player: TPlayer, rawSlot: number): void {
+    const slot = clampHotbarSlotIndex(rawSlot);
+    const abilityId = player.hotbarAbilityIds[slot] ?? 0;
+    const ability = this.options.resolveAbilityById(player, abilityId);
     if (!ability) {
       return;
     }
+
     const projectileProfile = ability.projectile;
     const meleeProfile = ability.melee;
     const activeCooldownSeconds = projectileProfile?.cooldownSeconds ?? meleeProfile?.cooldownSeconds;
@@ -71,10 +84,6 @@ export class AbilityExecutionSystem<TPlayer extends AbilityExecutionPlayer> {
     if (meleeProfile) {
       this.options.applyMeleeHit(player, meleeProfile);
     }
-  }
-
-  public resolveActiveHotbarSlot(player: TPlayer): number {
-    return clampHotbarSlotIndex(player.activeHotbarSlot);
   }
 
   private spawnProjectileFromAbility(

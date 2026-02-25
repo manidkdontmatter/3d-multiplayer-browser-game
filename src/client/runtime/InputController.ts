@@ -1,18 +1,29 @@
+// Collects keyboard/mouse input and exposes deterministic sampled actions for the game loop.
 import type { MovementInput } from "./types";
-import { clampHotbarSlotIndex } from "../../shared/abilities";
+
+export type MouseBindingTarget = "primary" | "secondary";
+
+export interface MouseBindingIntent {
+  slot: number;
+  target: MouseBindingTarget;
+}
 
 export class InputController {
   private readonly heldKeys = new Set<string>();
+  private readonly queuedBindingIntents: MouseBindingIntent[] = [];
   private jumpQueued = false;
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
-  private abilityLoadoutToggleQueued = false;
+  private mainMenuToggleQueued = false;
   private primaryActionHeld = false;
   private primaryActionQueued = false;
-  private selectedHotbarSlot = 0;
+  private secondaryActionHeld = false;
+  private secondaryActionQueued = false;
+  private queuedCastSlot: number | null = null;
   private yaw = 0;
   private pitch = 0;
   private readonly sensitivity = 0.0025;
+  private mainUiOpen = false;
 
   public constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -24,6 +35,7 @@ export class InputController {
     window.addEventListener("mouseup", this.onMouseUp);
     window.addEventListener("blur", this.onWindowBlur);
     window.addEventListener("mousemove", this.onMouseMove);
+    window.addEventListener("contextmenu", this.onContextMenu);
   }
 
   public detach(): void {
@@ -34,6 +46,15 @@ export class InputController {
     window.removeEventListener("mouseup", this.onMouseUp);
     window.removeEventListener("blur", this.onWindowBlur);
     window.removeEventListener("mousemove", this.onMouseMove);
+    window.removeEventListener("contextmenu", this.onContextMenu);
+  }
+
+  public setMainUiOpen(open: boolean): void {
+    this.mainUiOpen = open;
+    if (open) {
+      this.primaryActionHeld = false;
+      this.secondaryActionHeld = false;
+    }
   }
 
   public sampleMovement(): MovementInput {
@@ -71,10 +92,35 @@ export class InputController {
     return this.primaryActionHeld;
   }
 
+  public isSecondaryActionHeld(): boolean {
+    return this.secondaryActionHeld;
+  }
+
   public consumePrimaryActionTrigger(): boolean {
     const queued = this.primaryActionQueued;
     this.primaryActionQueued = false;
     return queued;
+  }
+
+  public consumeSecondaryActionTrigger(): boolean {
+    const queued = this.secondaryActionQueued;
+    this.secondaryActionQueued = false;
+    return queued;
+  }
+
+  public consumeDirectCastSlotTrigger(): number | null {
+    const queued = this.queuedCastSlot;
+    this.queuedCastSlot = null;
+    return queued;
+  }
+
+  public consumeBindingIntents(): MouseBindingIntent[] {
+    if (this.queuedBindingIntents.length === 0) {
+      return [];
+    }
+    const intents = this.queuedBindingIntents.slice();
+    this.queuedBindingIntents.length = 0;
+    return intents;
   }
 
   public setLookAngles(yaw: number, pitch: number): void {
@@ -98,47 +144,67 @@ export class InputController {
     return queued;
   }
 
-  public consumeAbilityLoadoutToggle(): boolean {
-    const queued = this.abilityLoadoutToggleQueued;
-    this.abilityLoadoutToggleQueued = false;
+  public consumeMainMenuToggle(): boolean {
+    const queued = this.mainMenuToggleQueued;
+    this.mainMenuToggleQueued = false;
     return queued;
   }
 
-  public getSelectedHotbarSlot(): number {
-    return this.selectedHotbarSlot;
-  }
-
-  public setSelectedHotbarSlot(slot: number): void {
-    this.selectedHotbarSlot = clampHotbarSlotIndex(slot);
-  }
-
   private readonly onCanvasClick = (): void => {
+    if (this.mainUiOpen) {
+      return;
+    }
     if (document.pointerLockElement !== this.canvas) {
       void this.canvas.requestPointerLock();
     }
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (!event.repeat && event.code === "KeyB") {
-      this.abilityLoadoutToggleQueued = true;
+    if (event.code === "Backquote" && !event.repeat) {
+      this.mainMenuToggleQueued = true;
+      event.preventDefault();
       return;
     }
+
     if (this.isTypingTarget(event.target)) {
       return;
     }
+
     this.heldKeys.add(event.code);
     if (event.code === "Space") {
       this.jumpQueued = true;
-    } else if (event.code === "KeyZ" && !event.repeat) {
-      this.cameraFreezeToggleQueued = true;
-    } else if (event.code === "KeyC" && !event.repeat) {
-      this.cspToggleQueued = true;
-    } else if (!event.repeat) {
-      const slot = this.mapDigitCodeToHotbarSlot(event.code);
-      if (slot !== null) {
-        this.selectedHotbarSlot = slot;
-      }
+      return;
     }
+    if (event.code === "KeyZ" && !event.repeat) {
+      this.cameraFreezeToggleQueued = true;
+      return;
+    }
+    if (event.code === "KeyC" && !event.repeat) {
+      this.cspToggleQueued = true;
+      return;
+    }
+    if (event.repeat) {
+      return;
+    }
+
+    const slot = this.mapDigitCodeToHotbarSlot(event.code);
+    if (slot === null) {
+      return;
+    }
+
+    if (event.shiftKey) {
+      this.queuedBindingIntents.push({ slot, target: "primary" });
+      event.preventDefault();
+      return;
+    }
+
+    if (event.altKey) {
+      this.queuedBindingIntents.push({ slot, target: "secondary" });
+      event.preventDefault();
+      return;
+    }
+
+    this.queuedCastSlot = slot;
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -146,7 +212,7 @@ export class InputController {
   };
 
   private readonly onMouseMove = (event: MouseEvent): void => {
-    if (document.pointerLockElement !== this.canvas) {
+    if (document.pointerLockElement !== this.canvas || this.mainUiOpen) {
       return;
     }
 
@@ -156,27 +222,49 @@ export class InputController {
   };
 
   private readonly onMouseDown = (event: MouseEvent): void => {
-    if (event.button !== 0) {
+    if (this.mainUiOpen) {
       return;
     }
     if (document.pointerLockElement !== this.canvas) {
       this.primaryActionHeld = false;
+      this.secondaryActionHeld = false;
       return;
     }
-    this.primaryActionHeld = true;
-    this.primaryActionQueued = true;
+
+    if (event.button === 0) {
+      this.primaryActionHeld = true;
+      this.primaryActionQueued = true;
+      return;
+    }
+
+    if (event.button === 2) {
+      this.secondaryActionHeld = true;
+      this.secondaryActionQueued = true;
+      event.preventDefault();
+    }
   };
 
   private readonly onMouseUp = (event: MouseEvent): void => {
-    if (event.button !== 0) {
+    if (event.button === 0) {
+      this.primaryActionHeld = false;
       return;
     }
-    this.primaryActionHeld = false;
+    if (event.button === 2) {
+      this.secondaryActionHeld = false;
+    }
+  };
+
+  private readonly onContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
   };
 
   private readonly onWindowBlur = (): void => {
     this.primaryActionHeld = false;
     this.primaryActionQueued = false;
+    this.secondaryActionHeld = false;
+    this.secondaryActionQueued = false;
+    this.queuedCastSlot = null;
+    this.heldKeys.clear();
   };
 
   private mapDigitCodeToHotbarSlot(code: string): number | null {
@@ -191,6 +279,16 @@ export class InputController {
         return 3;
       case "Digit5":
         return 4;
+      case "Digit6":
+        return 5;
+      case "Digit7":
+        return 6;
+      case "Digit8":
+        return 7;
+      case "Digit9":
+        return 8;
+      case "Digit0":
+        return 9;
       default:
         return null;
     }

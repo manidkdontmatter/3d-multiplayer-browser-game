@@ -1,4 +1,5 @@
 export * from "./abilities";
+export * from "./abilityCreator";
 export * from "./config";
 export * from "./controller/characterControllerConfig";
 export * from "./controller/characterMotor";

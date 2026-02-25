@@ -26,13 +26,14 @@ export class NetTransportClient {
     });
   }
 
-  public async connect(serverUrl: string, authKey: string): Promise<void> {
+  public async connect(serverUrl: string, authKey: string | null): Promise<void> {
     try {
+      const handshake: { authVersion: number; authKey?: string } = { authVersion: 1 };
+      if (typeof authKey === "string" && authKey.length > 0) {
+        handshake.authKey = authKey;
+      }
       await Promise.race([
-        this.client.connect(serverUrl, {
-          authVersion: 1,
-          authKey
-        }),
+        this.client.connect(serverUrl, handshake),
         new Promise<never>((_resolve, reject) => {
           setTimeout(
             () => reject(new Error(`connect timeout after ${CONNECT_TIMEOUT_MS}ms`)),

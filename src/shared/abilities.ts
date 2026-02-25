@@ -1,12 +1,39 @@
+// Shared ability catalogs and helpers used by both client and server runtime code.
 import {
   MAGIC_BOLT_KIND_PRIMARY,
   MAGIC_BOLT_SPAWN_FORWARD_OFFSET,
   MAGIC_BOLT_SPAWN_VERTICAL_OFFSET
 } from "./config";
+import {
+  ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY,
+  ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY,
+  type AbilityCreatorType
+} from "./abilityCreator";
 import abilityArchetypesRaw from "../../data/archetypes/ability-archetypes.json";
 
-export type AbilityCategory = "projectile" | "melee" | "passive";
-export type AbilityAttributeKey = "homing-lite" | "wide-impact" | "quick-cast" | "long-reach";
+export type AbilityCategory =
+  | "projectile"
+  | "melee"
+  | "passive"
+  | "beam"
+  | "aoe"
+  | "buff"
+  | "movement";
+export type AbilityAttributeKey =
+  | "homing-lite"
+  | "wide-impact"
+  | "quick-cast"
+  | "long-reach"
+  | "example-upside"
+  | "example-downside";
+
+export interface AbilityCreatorMetadata {
+  type: AbilityCreatorType;
+  tier: number;
+  coreExampleStat: number;
+  exampleUpsideEnabled: boolean;
+  exampleDownsideEnabled: boolean;
+}
 
 export interface AbilityStatPoints {
   power: number;
@@ -52,6 +79,7 @@ export interface AbilityDefinition {
   attributes: AbilityAttributeKey[];
   projectile?: ProjectileAbilityProfile;
   melee?: MeleeAbilityProfile;
+  creator?: AbilityCreatorMetadata;
 }
 
 export interface AbilityCreationDraft {
@@ -77,7 +105,11 @@ export interface AbilityAttributeDefinition {
 const ABILITY_CATEGORY_WIRE_VALUE: Readonly<Record<AbilityCategory, number>> = Object.freeze({
   projectile: 1,
   melee: 2,
-  passive: 3
+  passive: 3,
+  beam: 4,
+  aoe: 5,
+  buff: 6,
+  movement: 7
 });
 
 const WIRE_VALUE_TO_ABILITY_CATEGORY = new Map<number, AbilityCategory>(
@@ -88,7 +120,7 @@ export const ABILITY_ID_NONE = 0;
 export const ABILITY_ID_ARC_BOLT = 1;
 export const ABILITY_ID_PUNCH = 2;
 export const ABILITY_DYNAMIC_ID_START = 1024;
-export const HOTBAR_SLOT_COUNT = 5;
+export const HOTBAR_SLOT_COUNT = 10;
 export const ABILITY_CREATOR_TOTAL_POINTS = 20;
 export const ABILITY_CREATOR_MAX_POINTS_PER_STAT = 10;
 export const ABILITY_CREATOR_MAX_ATTRIBUTES = 2;
@@ -118,6 +150,18 @@ export const ABILITY_ATTRIBUTE_DEFINITIONS: ReadonlyArray<AbilityAttributeDefini
     bit: 1 << 3,
     name: "Long Reach",
     description: "Longer lifetime/range with lighter impact."
+  },
+  {
+    key: "example-upside",
+    bit: 1 << 4,
+    name: "Example Upside",
+    description: "Placeholder creator upside attribute used for authoring flow tests."
+  },
+  {
+    key: "example-downside",
+    bit: 1 << 5,
+    name: "Example Downside",
+    description: "Placeholder creator downside attribute used for authoring flow tests."
   }
 ]);
 
@@ -131,6 +175,8 @@ type AbilityArchetypeCatalogRaw = {
   defaults: {
     hotbarAbilityIds: unknown;
     unlockedAbilityIds: unknown;
+    primaryMouseSlot?: unknown;
+    secondaryMouseSlot?: unknown;
   };
 };
 
@@ -147,6 +193,14 @@ export const DEFAULT_HOTBAR_ABILITY_IDS: ReadonlyArray<number> = Object.freeze(
 
 export const DEFAULT_UNLOCKED_ABILITY_IDS: ReadonlyArray<number> = Object.freeze(
   parsedAbilityArchetypes.defaults.unlockedAbilityIds
+);
+
+export const DEFAULT_PRIMARY_MOUSE_SLOT = clampHotbarSlotIndex(
+  parsedAbilityArchetypes.defaults.primaryMouseSlot
+);
+
+export const DEFAULT_SECONDARY_MOUSE_SLOT = clampHotbarSlotIndex(
+  parsedAbilityArchetypes.defaults.secondaryMouseSlot
 );
 
 export function getAllAbilityDefinitions(): ReadonlyArray<AbilityDefinition> {
@@ -169,7 +223,7 @@ export function clampHotbarSlotIndex(slot: number): number {
 }
 
 export function getAbilityCategoryOptions(): ReadonlyArray<AbilityCategory> {
-  return ["projectile", "melee", "passive"];
+  return ["projectile", "melee", "passive", "beam", "aoe", "buff", "movement"];
 }
 
 export function getAbilityAttributeDefinitions(): ReadonlyArray<AbilityAttributeDefinition> {
@@ -498,6 +552,8 @@ function parseAbilityArchetypes(raw: AbilityArchetypeCatalogRaw): {
   defaults: {
     hotbarAbilityIds: number[];
     unlockedAbilityIds: number[];
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
   };
 } {
   if (!raw || typeof raw !== "object") {
@@ -540,9 +596,18 @@ function parseAbilityArchetypes(raw: AbilityArchetypeCatalogRaw): {
     baseAbilities,
     defaults: {
       hotbarAbilityIds,
-      unlockedAbilityIds
+      unlockedAbilityIds,
+      primaryMouseSlot: parseOptionalHotbarSlot(raw.defaults.primaryMouseSlot, 0),
+      secondaryMouseSlot: parseOptionalHotbarSlot(raw.defaults.secondaryMouseSlot, 1)
     }
   };
+}
+
+function parseOptionalHotbarSlot(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return clampHotbarSlotIndex(fallback);
+  }
+  return clampHotbarSlotIndex(value);
 }
 
 function parseAbilityDefinition(value: unknown, label: string): AbilityDefinition {
@@ -559,6 +624,7 @@ function parseAbilityDefinition(value: unknown, label: string): AbilityDefinitio
   const attributes = parseAbilityAttributes(entry.attributes, `${label}.attributes`);
   const projectile = parseProjectileProfile(entry.projectile, category, `${label}.projectile`);
   const melee = parseMeleeProfile(entry.melee, category, `${label}.melee`);
+  const creator = parseAbilityCreatorMetadata(entry.creator, category, points, attributes, `${label}.creator`);
   return {
     id,
     key,
@@ -568,7 +634,60 @@ function parseAbilityDefinition(value: unknown, label: string): AbilityDefinitio
     points,
     attributes,
     projectile,
-    melee
+    melee,
+    creator
+  };
+}
+
+function parseAbilityCreatorMetadata(
+  value: unknown,
+  category: AbilityCategory,
+  points: AbilityStatPoints,
+  attributes: AbilityAttributeKey[],
+  label: string
+): AbilityCreatorMetadata | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const entry = value as Record<string, unknown>;
+  const rawType = entry.type;
+  if (
+    rawType !== "melee" &&
+    rawType !== "projectile" &&
+    rawType !== "beam" &&
+    rawType !== "aoe" &&
+    rawType !== "buff" &&
+    rawType !== "movement"
+  ) {
+    throw new Error(`${label}.type must be one of melee|projectile|beam|aoe|buff|movement.`);
+  }
+  const tier = Math.max(1, Math.floor(parseFiniteNumber(entry.tier, `${label}.tier`)));
+  const coreExampleStat = Math.max(
+    0,
+    Math.floor(parseFiniteNumber(entry.coreExampleStat, `${label}.coreExampleStat`))
+  );
+  const exampleUpsideEnabled =
+    typeof entry.exampleUpsideEnabled === "boolean"
+      ? entry.exampleUpsideEnabled
+      : typeof entry.exampleAttributeEnabled === "boolean"
+        ? entry.exampleAttributeEnabled
+        : attributes.includes(ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY);
+  const exampleDownsideEnabled =
+    typeof entry.exampleDownsideEnabled === "boolean"
+      ? entry.exampleDownsideEnabled
+      : attributes.includes(ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY);
+  return {
+    type: rawType,
+    tier,
+    coreExampleStat:
+      Number.isFinite(coreExampleStat) && coreExampleStat > 0
+        ? coreExampleStat
+        : Math.max(0, Math.floor(points.power)),
+    exampleUpsideEnabled,
+    exampleDownsideEnabled
   };
 }
 
@@ -659,10 +778,18 @@ function parseAbilityIdList(value: unknown, label: string): number[] {
 }
 
 function parseAbilityCategory(value: unknown, label: string): AbilityCategory {
-  if (value === "projectile" || value === "melee" || value === "passive") {
+  if (
+    value === "projectile" ||
+    value === "melee" ||
+    value === "passive" ||
+    value === "beam" ||
+    value === "aoe" ||
+    value === "buff" ||
+    value === "movement"
+  ) {
     return value;
   }
-  throw new Error(`${label} must be one of projectile|melee|passive.`);
+  throw new Error(`${label} must be one of projectile|melee|passive|beam|aoe|buff|movement.`);
 }
 
 function parseString(value: unknown, label: string): string {

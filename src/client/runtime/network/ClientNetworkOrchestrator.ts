@@ -1,3 +1,4 @@
+// Coordinates client prediction, reconciliation, and net-step ordering in the render loop.
 import { normalizeYaw, PLATFORM_DEFINITIONS, SERVER_TICK_SECONDS } from "../../../shared/index";
 import { samplePlatformTransform } from "../../../shared/platforms";
 import { LocalPhysicsWorld } from "../LocalPhysicsWorld";
@@ -10,7 +11,14 @@ export interface ClientNetworkStepParams {
   movement: MovementInput;
   isCspActive: boolean;
   orientation: { yaw: number; pitch: number };
-  actions: { usePrimaryPressed: boolean; usePrimaryHeld: boolean };
+  actions: {
+    usePrimaryPressed: boolean;
+    usePrimaryHeld: boolean;
+    useSecondaryPressed: boolean;
+    useSecondaryHeld: boolean;
+    castSlotPressed: boolean;
+    castSlotIndex: number;
+  };
   look: {
     getYaw: () => number;
     getPitch: () => number;

@@ -1,5 +1,6 @@
+// ECS storage layer owning component arrays and low-level mutation helpers.
 import { addComponent, addEntity, createWorld, query, removeEntity } from "bitecs";
-import { HOTBAR_SLOT_COUNT } from "../../shared/index";
+import { HOTBAR_SLOT_COUNT, clampHotbarSlotIndex } from "../../shared/index";
 import type {
   DummyObject,
   PlayerObject,
@@ -25,6 +26,9 @@ export class SimulationEcsStore {
       LastProcessedSequence: { value: [] as number[] },
       LastPrimaryFireAtSeconds: { value: [] as number[] },
       PrimaryHeld: { value: [] as number[] },
+      SecondaryHeld: { value: [] as number[] },
+      PrimaryMouseSlot: { value: [] as number[] },
+      SecondaryMouseSlot: { value: [] as number[] },
       ProjectileOwnerNid: { value: [] as number[] },
       ProjectileKind: { value: [] as number[] },
       ProjectileRadius: { value: [] as number[] },
@@ -38,13 +42,17 @@ export class SimulationEcsStore {
       ProjectileRemainingPierces: { value: [] as number[] },
       ProjectileDespawnOnDamageableHit: { value: [] as number[] },
       ProjectileDespawnOnWorldHit: { value: [] as number[] },
-      ActiveHotbarSlot: { value: [] as number[] },
       Hotbar: {
         slot0: [] as number[],
         slot1: [] as number[],
         slot2: [] as number[],
         slot3: [] as number[],
-        slot4: [] as number[]
+        slot4: [] as number[],
+        slot5: [] as number[],
+        slot6: [] as number[],
+        slot7: [] as number[],
+        slot8: [] as number[],
+        slot9: [] as number[]
       },
       UnlockedAbilityCsv: { value: [] as string[] },
       ReplicatedTag: [] as number[],
@@ -75,7 +83,9 @@ export class SimulationEcsStore {
     addComponent(this.world, eid, this.world.components.LastProcessedSequence);
     addComponent(this.world, eid, this.world.components.LastPrimaryFireAtSeconds);
     addComponent(this.world, eid, this.world.components.PrimaryHeld);
-    addComponent(this.world, eid, this.world.components.ActiveHotbarSlot);
+    addComponent(this.world, eid, this.world.components.SecondaryHeld);
+    addComponent(this.world, eid, this.world.components.PrimaryMouseSlot);
+    addComponent(this.world, eid, this.world.components.SecondaryMouseSlot);
     addComponent(this.world, eid, this.world.components.Hotbar);
     addComponent(this.world, eid, this.world.components.UnlockedAbilityCsv);
   }
@@ -173,20 +183,37 @@ export class SimulationEcsStore {
     );
     this.world.components.LastPrimaryFireAtSeconds.value[eid] = player.lastPrimaryFireAtSeconds;
     this.world.components.PrimaryHeld.value[eid] = player.primaryHeld ? 1 : 0;
-    this.world.components.ActiveHotbarSlot.value[eid] = Math.max(0, Math.floor(player.activeHotbarSlot));
-    this.setHotbarAbilityBySlot(eid, 0, player.hotbarAbilityIds[0] ?? 0);
-    this.setHotbarAbilityBySlot(eid, 1, player.hotbarAbilityIds[1] ?? 0);
-    this.setHotbarAbilityBySlot(eid, 2, player.hotbarAbilityIds[2] ?? 0);
-    this.setHotbarAbilityBySlot(eid, 3, player.hotbarAbilityIds[3] ?? 0);
-    this.setHotbarAbilityBySlot(eid, 4, player.hotbarAbilityIds[4] ?? 0);
+    this.world.components.SecondaryHeld.value[eid] = player.secondaryHeld ? 1 : 0;
+    this.world.components.PrimaryMouseSlot.value[eid] = clampHotbarSlotIndex(player.primaryMouseSlot);
+    this.world.components.SecondaryMouseSlot.value[eid] = clampHotbarSlotIndex(player.secondaryMouseSlot);
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+      this.setHotbarAbilityBySlot(eid, slot, player.hotbarAbilityIds[slot] ?? 0);
+    }
     this.setUnlockedAbilities(eid, player.unlockedAbilityIds);
   }
 
-  public setUnlockedAbilities(eid: number, unlocked: Set<number>): void {
+  public setUnlockedAbilities(eid: number, unlocked: Set<number>): boolean {
     const ids = Array.from(unlocked)
       .map((abilityId) => Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0)))
       .sort((a, b) => a - b);
-    this.world.components.UnlockedAbilityCsv.value[eid] = ids.join(",");
+    const nextCsv = ids.join(",");
+    const previousCsv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
+    this.world.components.UnlockedAbilityCsv.value[eid] = nextCsv;
+    return previousCsv !== nextCsv;
+  }
+
+  public setUnlockedAbilitiesFromList(eid: number, unlocked: ReadonlyArray<number>): boolean {
+    const ids = Array.from(
+      new Set(
+        unlocked.map((abilityId) =>
+          Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0))
+        )
+      )
+    ).sort((a, b) => a - b);
+    const nextCsv = ids.join(",");
+    const previousCsv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
+    this.world.components.UnlockedAbilityCsv.value[eid] = nextCsv;
+    return previousCsv !== nextCsv;
   }
 
   public getUnlockedAbilities(eid: number): Set<number> {
@@ -251,20 +278,23 @@ export class SimulationEcsStore {
   }
 
   public getHotbarSlot(eid: number, slot: number): number {
-    if (slot === 0) return this.world.components.Hotbar.slot0[eid] ?? 0;
-    if (slot === 1) return this.world.components.Hotbar.slot1[eid] ?? 0;
-    if (slot === 2) return this.world.components.Hotbar.slot2[eid] ?? 0;
-    if (slot === 3) return this.world.components.Hotbar.slot3[eid] ?? 0;
-    if (slot === 4) return this.world.components.Hotbar.slot4[eid] ?? 0;
-    return 0;
+    const normalizedSlot = clampHotbarSlotIndex(slot);
+    const hotbar = this.world.components.Hotbar;
+    if (normalizedSlot === 0) return hotbar.slot0[eid] ?? 0;
+    if (normalizedSlot === 1) return hotbar.slot1[eid] ?? 0;
+    if (normalizedSlot === 2) return hotbar.slot2[eid] ?? 0;
+    if (normalizedSlot === 3) return hotbar.slot3[eid] ?? 0;
+    if (normalizedSlot === 4) return hotbar.slot4[eid] ?? 0;
+    if (normalizedSlot === 5) return hotbar.slot5[eid] ?? 0;
+    if (normalizedSlot === 6) return hotbar.slot6[eid] ?? 0;
+    if (normalizedSlot === 7) return hotbar.slot7[eid] ?? 0;
+    if (normalizedSlot === 8) return hotbar.slot8[eid] ?? 0;
+    return hotbar.slot9[eid] ?? 0;
   }
 
   public setHotbarAbilityBySlot(eid: number, slot: number, abilityId: number): boolean {
     const normalizedAbilityId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
-    const normalizedSlot = Math.max(0, Math.floor(Number.isFinite(slot) ? slot : 0));
-    if (normalizedSlot >= HOTBAR_SLOT_COUNT) {
-      return false;
-    }
+    const normalizedSlot = clampHotbarSlotIndex(slot);
 
     const hotbar = this.world.components.Hotbar;
     if (normalizedSlot === 0) {
@@ -287,9 +317,34 @@ export class SimulationEcsStore {
       hotbar.slot3[eid] = normalizedAbilityId;
       return previous !== normalizedAbilityId;
     }
+    if (normalizedSlot === 4) {
+      const previous = hotbar.slot4[eid] ?? 0;
+      hotbar.slot4[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 5) {
+      const previous = hotbar.slot5[eid] ?? 0;
+      hotbar.slot5[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 6) {
+      const previous = hotbar.slot6[eid] ?? 0;
+      hotbar.slot6[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 7) {
+      const previous = hotbar.slot7[eid] ?? 0;
+      hotbar.slot7[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
+    if (normalizedSlot === 8) {
+      const previous = hotbar.slot8[eid] ?? 0;
+      hotbar.slot8[eid] = normalizedAbilityId;
+      return previous !== normalizedAbilityId;
+    }
 
-    const previous = hotbar.slot4[eid] ?? 0;
-    hotbar.slot4[eid] = normalizedAbilityId;
+    const previous = hotbar.slot9[eid] ?? 0;
+    hotbar.slot9[eid] = normalizedAbilityId;
     return previous !== normalizedAbilityId;
   }
 

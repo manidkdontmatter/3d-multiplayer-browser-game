@@ -1,3 +1,4 @@
+// Applies client input commands to server-authoritative player input state and action triggers.
 import { normalizeYaw, PLAYER_JUMP_VELOCITY, SERVER_TICK_SECONDS, stepHorizontalMovement } from "../../shared/index";
 import type { InputCommand as InputWireCommand } from "../../shared/netcode";
 import { NType } from "../../shared/netcode";
@@ -11,6 +12,7 @@ export interface InputCommandActor {
   lastProcessedSequence: number;
   pitch: number;
   primaryHeld: boolean;
+  secondaryHeld: boolean;
   yaw: number;
   grounded: boolean;
   vy: number;
@@ -21,6 +23,8 @@ export interface InputCommandActor {
 
 export interface InputSystemOptions<TPlayer extends InputCommandActor> {
   readonly onPrimaryPressed: (player: TPlayer) => void;
+  readonly onSecondaryPressed: (player: TPlayer) => void;
+  readonly onCastSlotPressed: (player: TPlayer, slot: number) => void;
 }
 
 export class InputSystem<TPlayer extends InputCommandActor> {
@@ -35,6 +39,9 @@ export class InputSystem<TPlayer extends InputCommandActor> {
     let mergedSprint = false;
     let queuedUsePrimaryPressed = false;
     let mergedUsePrimaryHeld = player.primaryHeld;
+    let queuedUseSecondaryPressed = false;
+    let mergedUseSecondaryHeld = player.secondaryHeld;
+    let queuedCastSlot: number | null = null;
     let queuedJump = false;
     let mergedYaw = player.yaw;
 
@@ -82,7 +89,15 @@ export class InputSystem<TPlayer extends InputCommandActor> {
       mergedSprint = sprint;
       queuedUsePrimaryPressed = queuedUsePrimaryPressed || Boolean(command.usePrimaryPressed);
       mergedUsePrimaryHeld = Boolean(command.usePrimaryHeld);
+      queuedUseSecondaryPressed = queuedUseSecondaryPressed || Boolean(command.useSecondaryPressed);
+      mergedUseSecondaryHeld = Boolean(command.useSecondaryHeld);
       queuedJump = queuedJump || Boolean(command.jump);
+      if (Boolean(command.castSlotPressed)) {
+        queuedCastSlot =
+          typeof command.castSlotIndex === "number" && Number.isFinite(command.castSlotIndex)
+            ? Math.max(0, Math.floor(command.castSlotIndex))
+            : 0;
+      }
     }
 
     if (!hasAcceptedCommand) {
@@ -106,8 +121,15 @@ export class InputSystem<TPlayer extends InputCommandActor> {
     player.vz = horizontal.vz;
     player.pitch = Math.max(LOOK_PITCH_MIN, Math.min(LOOK_PITCH_MAX, mergedPitch));
     player.primaryHeld = mergedUsePrimaryHeld;
+    player.secondaryHeld = mergedUseSecondaryHeld;
     if (queuedUsePrimaryPressed) {
       this.options.onPrimaryPressed(player);
+    }
+    if (queuedUseSecondaryPressed) {
+      this.options.onSecondaryPressed(player);
+    }
+    if (queuedCastSlot !== null) {
+      this.options.onCastSlotPressed(player, queuedCastSlot);
     }
     player.lastProcessedSequence = latestSequence;
   }

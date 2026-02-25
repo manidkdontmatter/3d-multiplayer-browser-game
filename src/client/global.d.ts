@@ -45,7 +45,9 @@ declare global {
     advanceTime?: (ms: number) => void;
     set_test_movement?: (movement: TestMovementInput | null) => void;
     trigger_test_primary_action?: (count?: number) => void;
+    trigger_test_secondary_action?: (count?: number) => void;
     set_test_primary_hold?: (held: boolean) => void;
+    set_test_secondary_hold?: (held: boolean) => void;
     set_test_look_angles?: (yaw: number, pitch: number) => void;
   }
 }

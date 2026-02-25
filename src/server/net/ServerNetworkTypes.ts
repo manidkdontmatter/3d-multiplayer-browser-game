@@ -13,7 +13,14 @@ export type ServerNetworkUser = {
     disconnect?: (user: unknown, reason: unknown) => void;
   };
   accountId?: number;
-  view?: { x: number; y: number; z: number };
+  view?: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  };
 };
 
 export type ServerNetworkQueueEvent = {

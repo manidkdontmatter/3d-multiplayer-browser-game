@@ -1,3 +1,5 @@
+import type { AbilityCategory } from "../../shared/index";
+
 export interface MovementInput {
   forward: number;
   strafe: number;
@@ -56,7 +58,7 @@ export interface TrainingDummyState {
 export interface AbilityUseEvent {
   ownerNid: number;
   abilityId: number;
-  category: "projectile" | "melee" | "passive";
+  category: AbilityCategory;
   serverTick: number;
 }
 

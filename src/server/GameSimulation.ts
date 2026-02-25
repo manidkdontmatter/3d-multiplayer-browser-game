@@ -1,3 +1,4 @@
+// Authoritative server simulation orchestrator for movement, combat, replication, and persistence.
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   ABILITY_ID_NONE,
@@ -6,7 +7,6 @@ import {
   configurePlayerCharacterController,
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_UNLOCKED_ABILITY_IDS,
-  getAbilityDefinitionById,
   HOTBAR_SLOT_COUNT,
   PLAYER_BODY_CENTER_HEIGHT,
   PLAYER_CHARACTER_CONTROLLER_OFFSET,
@@ -17,9 +17,11 @@ import {
   SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
-import type {
-  InputCommand as InputWireCommand,
-  LoadoutCommand as LoadoutWireCommand
+import {
+  NType,
+  type AbilityCommand as AbilityWireCommand,
+  type AbilityCreatorCommand as AbilityCreatorWireCommand,
+  type InputCommand as InputWireCommand
 } from "../shared/netcode";
 import {
   PersistenceService
@@ -34,7 +36,8 @@ import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 import { InputSystem } from "./input/InputSystem";
 import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
-import { LoadoutCommandHandler } from "./net/LoadoutCommandHandler";
+import { AbilityCommandHandler } from "./net/AbilityCommandHandler";
+import { AbilityCreatorSystem } from "./abilityCreator/AbilityCreatorSystem";
 import { ServerReplicationCoordinator } from "./net/ServerReplicationCoordinator";
 import { PlatformSystem } from "./platform/PlatformSystem";
 import { WorldContentCoordinator } from "./world/WorldContentCoordinator";
@@ -48,7 +51,14 @@ type UserLike = {
   id: number;
   queueMessage: (message: unknown) => void;
   accountId?: number;
-  view?: { x: number; y: number; z: number };
+  view?: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  };
 };
 
 type GlobalChannelLike = {
@@ -57,8 +67,8 @@ type GlobalChannelLike = {
 
 type SpatialChannelLike = {
   subscribe: (user: UserLike, view: NonNullable<UserLike["view"]>) => void;
-  addEntity: (entity: unknown) => void;
-  removeEntity: (entity: unknown) => void;
+  addEntity: (entity: any) => any;
+  removeEntity: (entity: any) => any;
   addMessage: (message: unknown) => void;
 };
 
@@ -89,11 +99,13 @@ type PlayerEntity = {
   groundedPlatformPid: number | null;
   health: number;
   maxHealth: number;
-  activeHotbarSlot: number;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
   hotbarAbilityIds: number[];
   lastPrimaryFireAtSeconds: number;
   lastProcessedSequence: number;
   primaryHeld: boolean;
+  secondaryHeld: boolean;
   unlockedAbilityIds: Set<number>;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
@@ -115,7 +127,9 @@ type RuntimePlayerState = {
   lastProcessedSequence: number;
   lastPrimaryFireAtSeconds: number;
   primaryHeld: boolean;
-  activeHotbarSlot: number;
+  secondaryHeld: boolean;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
   hotbarAbilityIds: number[];
   unlockedAbilityIds: Set<number>;
   position: { x: number; y: number; z: number };
@@ -138,10 +152,16 @@ export class GameSimulation {
   private readonly abilityExecutionSystem: AbilityExecutionSystem<RuntimePlayerState>;
   private readonly projectileSystem: ProjectileSystem;
   private readonly inputSystem: InputSystem<RuntimePlayerState>;
-  private readonly loadoutCommandHandler: LoadoutCommandHandler<UserLike>;
+  private readonly abilityCommandHandler: AbilityCommandHandler<UserLike>;
+  private readonly abilityCreatorSystem: AbilityCreatorSystem;
   private readonly platformSystem: PlatformSystem;
   private readonly playerMovementSystem: PlayerMovementSystem<RuntimePlayerState>;
   private readonly archetypes: ServerArchetypeCatalog;
+  private readonly loadTestSpawnMode: "default" | "grid";
+  private readonly loadTestGridSpacing: number;
+  private readonly loadTestGridColumns: number;
+  private readonly loadTestGridRows: number;
+  private readonly populationBroadcastIntervalTicks = 10;
   private elapsedSeconds = 0;
   private tickNumber = 0;
 
@@ -152,12 +172,17 @@ export class GameSimulation {
     private readonly createUserView: CreateUserView
   ) {
     this.archetypes = this.resolveServerArchetypes();
+    this.loadTestSpawnMode = this.resolveLoadTestSpawnMode();
+    this.loadTestGridSpacing = this.resolveLoadTestGridSpacing();
+    this.loadTestGridColumns = this.resolveLoadTestGridColumns();
+    this.loadTestGridRows = this.resolveLoadTestGridRows();
+    this.abilityCreatorSystem = new AbilityCreatorSystem(this.persistence);
     this.replication = new ServerReplicationCoordinator<UserLike, RuntimePlayerState>({
       spatialChannel: this.spatialChannel,
       getTickNumber: () => this.tickNumber,
       getUserById: (userId) => this.usersById.get(userId),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
-      getAbilityDefinitionById: (abilityId) => getAbilityDefinitionById(abilityId)
+      getAbilityDefinitionById: (abilityId) => this.resolveAbilityDefinitionById(abilityId)
     });
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
@@ -245,7 +270,8 @@ export class GameSimulation {
     });
     this.abilityExecutionSystem = new AbilityExecutionSystem<RuntimePlayerState>({
       getElapsedSeconds: () => this.elapsedSeconds,
-      resolveSelectedAbility: (player) => this.resolveSelectedAbility(player),
+      resolveAbilityById: (player, abilityId) =>
+        this.getAbilityDefinitionForUnlockedSet(player.unlockedAbilityIds, abilityId),
       broadcastAbilityUse: (player, ability) =>
         this.replication.broadcastAbilityUseMessage(player, ability),
       spawnProjectile: (request) => this.projectileSystem.spawn(request),
@@ -253,7 +279,9 @@ export class GameSimulation {
         this.meleeCombatSystem.tryApplyMeleeHit(player, meleeProfile)
     });
     this.inputSystem = new InputSystem<RuntimePlayerState>({
-      onPrimaryPressed: (player) => this.abilityExecutionSystem.tryUsePrimaryAbility(player)
+      onPrimaryPressed: (player) => this.abilityExecutionSystem.tryUsePrimaryMouseAbility(player),
+      onSecondaryPressed: (player) => this.abilityExecutionSystem.tryUseSecondaryMouseAbility(player),
+      onCastSlotPressed: (player, slot) => this.abilityExecutionSystem.tryUseAbilityBySlot(player, slot)
     });
     this.platformSystem = new PlatformSystem({
       world: this.world,
@@ -265,20 +293,22 @@ export class GameSimulation {
         this.simulationEcs.syncPlatform(platform);
       }
     });
-    this.loadoutCommandHandler = new LoadoutCommandHandler<UserLike>({
-      getLoadoutStateByUserId: (userId) => this.simulationEcs.getPlayerLoadoutStateByUserId(userId),
-      setPlayerActiveHotbarSlotByUserId: (userId, slot) =>
-        this.simulationEcs.setPlayerActiveHotbarSlotByUserId(userId, slot),
+    this.abilityCommandHandler = new AbilityCommandHandler<UserLike>({
+      getAbilityStateByUserId: (userId) => this.simulationEcs.getPlayerAbilityStateByUserId(userId),
       setPlayerHotbarAbilityByUserId: (userId, slot, abilityId) =>
         this.simulationEcs.setPlayerHotbarAbilityByUserId(userId, slot, abilityId),
+      setPlayerPrimaryMouseSlotByUserId: (userId, slot) =>
+        this.simulationEcs.setPlayerPrimaryMouseSlotByUserId(userId, slot),
+      setPlayerSecondaryMouseSlotByUserId: (userId, slot) =>
+        this.simulationEcs.setPlayerSecondaryMouseSlotByUserId(userId, slot),
       getPlayerAccountIdByUserId: (userId) => this.simulationEcs.getPlayerAccountIdByUserId(userId),
       markAccountAbilityStateDirty: (accountId) =>
         this.persistenceSyncSystem.markAccountDirty(accountId, {
           dirtyCharacter: false,
           dirtyAbilityState: true
         }),
-      queueLoadoutStateMessageFromSnapshot: (user, snapshot) =>
-        this.replication.queueLoadoutStateMessageFromSnapshot(user, snapshot),
+      queueAbilityStateMessageFromSnapshot: (user, snapshot) =>
+        this.replication.queueAbilityStateMessageFromSnapshot(user, snapshot),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       sanitizeSelectedAbilityId: (rawAbilityId, fallbackAbilityId, unlockedAbilityIds) =>
         this.sanitizeSelectedAbilityId(rawAbilityId, fallbackAbilityId, unlockedAbilityIds)
@@ -290,7 +320,10 @@ export class GameSimulation {
       playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
       beforePlayerMove: (player) => {
         if (player.primaryHeld) {
-          this.abilityExecutionSystem.tryUsePrimaryAbility(player);
+          this.abilityExecutionSystem.tryUsePrimaryMouseAbility(player);
+        }
+        if (player.secondaryHeld) {
+          this.abilityExecutionSystem.tryUseSecondaryMouseAbility(player);
         }
       },
       samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
@@ -343,13 +376,132 @@ export class GameSimulation {
     this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, runtimePlayer);
   }
 
-  public applyLoadoutCommand(user: UserLike, command: Partial<LoadoutWireCommand>): void {
-    const runtimePlayer = this.simulationEcs.getPlayerRuntimeStateByUserId(user.id);
-    if (!runtimePlayer) {
+  public applyAbilityCommand(user: UserLike, command: Partial<AbilityWireCommand>): void {
+    if (!this.simulationEcs.getPlayerRuntimeStateByUserId(user.id)) {
       return;
     }
-    this.loadoutCommandHandler.apply(user, command);
-    this.simulationEcs.applyPlayerRuntimeStateByUserId(user.id, runtimePlayer);
+    this.applyForgetAbilityIntent(user, command);
+    this.abilityCommandHandler.apply(user, command);
+  }
+
+  public applyAbilityCreatorCommand(user: UserLike, command: Partial<AbilityCreatorWireCommand>): void {
+    const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+    const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
+    if (!abilityState || accountId === null) {
+      return;
+    }
+    const result = this.abilityCreatorSystem.applyCommand({
+      userId: user.id,
+      accountId,
+      ownedAbilityIds: abilityState.unlockedAbilityIds,
+      command
+    });
+
+    if (result.createdAbility && result.nextOwnedAbilityIds) {
+      const ownedChanged = this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(
+        user.id,
+        result.nextOwnedAbilityIds
+      );
+      let hotbarChanged = false;
+      if (typeof result.replacedAbilityId === "number" && result.replacedAbilityId > 0) {
+        hotbarChanged = this.simulationEcs.replacePlayerAbilityOnHotbarByUserId(
+          user.id,
+          result.replacedAbilityId,
+          result.createdAbility.id
+        );
+      }
+
+      this.replication.queueAbilityDefinitionMessage(user, result.createdAbility);
+
+      const refreshed = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+      if (refreshed) {
+        this.replication.queueAbilityOwnershipMessage(user, refreshed.unlockedAbilityIds);
+        this.replication.queueAbilityStateMessageFromSnapshot(user, refreshed);
+      }
+
+      if (ownedChanged || hotbarChanged) {
+        this.persistenceSyncSystem.markAccountDirty(accountId, {
+          dirtyCharacter: false,
+          dirtyAbilityState: true
+        });
+      }
+    }
+
+    this.replication.queueAbilityCreatorStateMessage(user, result.snapshot);
+  }
+
+  private applyForgetAbilityIntent(user: UserLike, command: Partial<AbilityWireCommand>): void {
+    if (!command.applyForgetAbility) {
+      return;
+    }
+    const abilityStateBefore = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+    const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
+    if (!abilityStateBefore || accountId === null) {
+      return;
+    }
+
+    const targetAbilityId = this.normalizeAbilityId(command.forgetAbilityId);
+    if (targetAbilityId <= ABILITY_ID_NONE) {
+      this.replication.queueAbilityOwnershipMessage(user, abilityStateBefore.unlockedAbilityIds);
+      this.replication.queueAbilityStateMessageFromSnapshot(user, abilityStateBefore);
+      const creatorSnapshot = this.abilityCreatorSystem.synchronizeSessionOwnedAbilities(
+        user.id,
+        abilityStateBefore.unlockedAbilityIds
+      );
+      if (creatorSnapshot) {
+        this.replication.queueAbilityCreatorStateMessage(user, creatorSnapshot);
+      }
+      return;
+    }
+
+    const forgetResult = this.abilityCreatorSystem.forgetOwnedAbility({
+      accountId,
+      ownedAbilityIds: abilityStateBefore.unlockedAbilityIds,
+      abilityId: targetAbilityId
+    });
+    if (!forgetResult.ok) {
+      this.replication.queueAbilityOwnershipMessage(user, abilityStateBefore.unlockedAbilityIds);
+      this.replication.queueAbilityStateMessageFromSnapshot(user, abilityStateBefore);
+      const creatorSnapshot = this.abilityCreatorSystem.synchronizeSessionOwnedAbilities(
+        user.id,
+        abilityStateBefore.unlockedAbilityIds
+      );
+      if (creatorSnapshot) {
+        this.replication.queueAbilityCreatorStateMessage(user, creatorSnapshot);
+      }
+      return;
+    }
+
+    const ownedChanged = this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(
+      user.id,
+      forgetResult.nextOwnedAbilityIds
+    );
+    const hotbarChanged = this.simulationEcs.clearPlayerAbilityOnHotbarByUserId(
+      user.id,
+      forgetResult.forgottenAbilityId
+    );
+
+    const abilityStateAfter = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+    if (!abilityStateAfter) {
+      return;
+    }
+
+    this.replication.queueAbilityOwnershipMessage(user, abilityStateAfter.unlockedAbilityIds);
+    this.replication.queueAbilityStateMessageFromSnapshot(user, abilityStateAfter);
+    const creatorSnapshot = this.abilityCreatorSystem.synchronizeSessionOwnedAbilities(
+      user.id,
+      abilityStateAfter.unlockedAbilityIds
+    );
+    if (creatorSnapshot) {
+      this.replication.queueAbilityCreatorStateMessage(user, creatorSnapshot);
+    }
+
+    if (ownedChanged || hotbarChanged) {
+      this.persistenceSyncSystem.markAccountDirty(accountId, {
+        dirtyCharacter: false,
+        dirtyAbilityState: true
+      });
+    }
   }
 
   public step(delta: number): void {
@@ -380,6 +532,7 @@ export class GameSimulation {
       }
     );
     this.world.step();
+    this.maybeBroadcastServerPopulation();
   }
 
   public flushDirtyPlayerState(): void {
@@ -415,8 +568,7 @@ export class GameSimulation {
       return null;
     }
 
-    const staticAbility = getAbilityDefinitionById(abilityId);
-    return staticAbility ?? null;
+    return this.resolveAbilityDefinitionById(abilityId);
   }
 
   private sanitizeHotbarSlot(rawSlot: unknown, fallbackSlot: number): number {
@@ -424,6 +576,13 @@ export class GameSimulation {
       return fallbackSlot;
     }
     return clampHotbarSlotIndex(rawSlot);
+  }
+
+  private normalizeAbilityId(rawAbilityId: unknown): number {
+    if (typeof rawAbilityId !== "number" || !Number.isFinite(rawAbilityId)) {
+      return ABILITY_ID_NONE;
+    }
+    return Math.max(ABILITY_ID_NONE, Math.min(0xffff, Math.floor(rawAbilityId)));
   }
 
   private sanitizeSelectedAbilityId(
@@ -442,7 +601,11 @@ export class GameSimulation {
     if (!unlockedAbilityIds.has(normalized)) {
       return fallbackAbilityId;
     }
-    return getAbilityDefinitionById(normalized) ? normalized : fallbackAbilityId;
+    return this.resolveAbilityDefinitionById(normalized) ? normalized : fallbackAbilityId;
+  }
+
+  private resolveAbilityDefinitionById(abilityId: number): AbilityDefinition | null {
+    return this.abilityCreatorSystem.resolveAbilityDefinitionById(abilityId);
   }
 
   private createInitialHotbar(savedHotbar?: number[]): number[] {
@@ -479,16 +642,6 @@ export class GameSimulation {
     return Math.max(0, Math.min(this.archetypes.player.maxHealth, Math.floor(value)));
   }
 
-  private resolveSelectedAbility(player: RuntimePlayerState): AbilityDefinition | null {
-    const slot = this.abilityExecutionSystem.resolveActiveHotbarSlot(player);
-    const abilityId = this.sanitizeSelectedAbilityId(
-      player.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE,
-      ABILITY_ID_NONE,
-      player.unlockedAbilityIds
-    );
-    return this.getAbilityDefinitionForUnlockedSet(player.unlockedAbilityIds, abilityId);
-  }
-
   private toReplicationSnapshot(entity: {
     nid: number;
     modelId: number;
@@ -519,6 +672,9 @@ export class GameSimulation {
 
   private getSpawnPosition(): { x: number; z: number } {
     const occupied = this.simulationEcs.getOnlinePlayerPositionsXZ();
+    if (this.loadTestSpawnMode === "grid") {
+      return this.getLoadTestGridSpawnPosition(occupied.length);
+    }
 
     const minSeparation = PLAYER_CAPSULE_RADIUS * 4;
     const minSeparationSq = minSeparation * minSeparation;
@@ -556,6 +712,49 @@ export class GameSimulation {
     return { x: baseRadius + (maxRings + 1) * ringStep, z: 0 };
   }
 
+  private getLoadTestGridSpawnPosition(index: number): { x: number; z: number } {
+    const safeIndex = Math.max(0, Math.floor(index));
+    const columns = this.loadTestGridColumns;
+    const rows = this.loadTestGridRows;
+    const spacing = this.loadTestGridSpacing;
+    const col = safeIndex % columns;
+    const row = Math.floor(safeIndex / columns);
+    const centerCol = (columns - 1) / 2;
+    const centerRow = (rows - 1) / 2;
+    const x = (col - centerCol) * spacing;
+    const z = (row - centerRow) * spacing;
+    return { x, z };
+  }
+
+  private resolveLoadTestSpawnMode(): "default" | "grid" {
+    const raw = String(process.env.SERVER_LOAD_TEST_SPAWN_MODE ?? "").trim().toLowerCase();
+    return raw === "grid" ? "grid" : "default";
+  }
+
+  private resolveLoadTestGridSpacing(): number {
+    const parsed = Number(process.env.SERVER_LOAD_TEST_GRID_SPACING ?? 320);
+    if (!Number.isFinite(parsed) || parsed < 8) {
+      return 320;
+    }
+    return parsed;
+  }
+
+  private resolveLoadTestGridColumns(): number {
+    const parsed = Number(process.env.SERVER_LOAD_TEST_GRID_COLUMNS ?? 10);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      return 10;
+    }
+    return Math.max(1, Math.floor(parsed));
+  }
+
+  private resolveLoadTestGridRows(): number {
+    const parsed = Number(process.env.SERVER_LOAD_TEST_GRID_ROWS ?? this.loadTestGridColumns);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      return this.loadTestGridColumns;
+    }
+    return Math.max(1, Math.floor(parsed));
+  }
+
   private getMovementPlayerEntries(): Array<readonly [number, RuntimePlayerState]> {
     const entries: Array<readonly [number, RuntimePlayerState]> = [];
     for (const userId of this.simulationEcs.getOnlinePlayerUserIds()) {
@@ -581,6 +780,20 @@ export class GameSimulation {
     return loadServerArchetypeCatalog();
   }
 
+  private maybeBroadcastServerPopulation(): void {
+    if (this.tickNumber % this.populationBroadcastIntervalTicks !== 0) {
+      return;
+    }
+    const onlinePlayers = this.simulationEcs.getOnlinePlayerCount();
+    const safeCount = Math.max(0, Math.min(0xffff, Math.floor(onlinePlayers)));
+    for (const user of this.usersById.values()) {
+      user.queueMessage({
+        ntype: NType.ServerPopulationMessage,
+        onlinePlayers: safeCount
+      });
+    }
+  }
+
   private createPlayerLifecycleSystem(): PlayerLifecycleSystem<UserLike, PlayerEntity> {
     return new PlayerLifecycleSystem<UserLike, PlayerEntity>({
       world: this.world,
@@ -600,6 +813,8 @@ export class GameSimulation {
       playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
       maxPlayerHealth: this.archetypes.player.maxHealth,
       defaultUnlockedAbilityIds: DEFAULT_UNLOCKED_ABILITY_IDS,
+      resolveInitialUnlockedAbilityIds: (accountId, defaultUnlockedAbilityIds) =>
+        this.abilityCreatorSystem.resolveOwnedAbilityIds(accountId, defaultUnlockedAbilityIds),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       createInitialHotbar: (savedHotbar) => this.createInitialHotbar(savedHotbar),
       clampHealth: (value) => this.clampHealth(value),
@@ -626,11 +841,13 @@ export class GameSimulation {
         groundedPlatformPid: null,
         health: options.health,
         maxHealth: this.archetypes.player.maxHealth,
-        activeHotbarSlot: options.activeHotbarSlot,
+        primaryMouseSlot: options.primaryMouseSlot,
+        secondaryMouseSlot: options.secondaryMouseSlot,
         hotbarAbilityIds: options.hotbarAbilityIds,
         lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
         lastProcessedSequence: 0,
         primaryHeld: false,
+        secondaryHeld: false,
         unlockedAbilityIds: options.unlockedAbilityIds,
         body: options.body,
         collider: options.collider
@@ -644,11 +861,20 @@ export class GameSimulation {
       removeProjectilesByOwner: (ownerNid) => this.projectileSystem.removeByOwner(ownerNid),
       queueIdentityMessage: (user, playerNid) => this.replication.queueIdentityMessage(user, playerNid),
       sendInitialReplicationState: (user, _player) => {
-        const loadout = this.simulationEcs.getPlayerLoadoutStateByUserId(user.id);
-        if (!loadout) {
+        const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+        if (!abilityState) {
           return;
         }
-        this.replication.sendInitialAbilityStateFromSnapshot(user, loadout);
+        this.replication.sendInitialAbilityStateFromSnapshot(user, abilityState);
+        const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
+        if (accountId === null) {
+          return;
+        }
+        const creatorState = this.abilityCreatorSystem.initializeUserSession(
+          user.id,
+          abilityState.unlockedAbilityIds
+        );
+        this.replication.queueAbilityCreatorStateMessage(user, creatorState);
       },
       queueOfflineSnapshot: (accountId, snapshot) =>
         this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot),
@@ -667,6 +893,7 @@ export class GameSimulation {
         this.simulationEcs.bindPlayerLookupIndexes(player, user.id);
       },
       onPlayerRemoved: (user, player) => {
+        this.abilityCreatorSystem.removeUserSession(user.id);
         this.simulationEcs.unbindPlayerLookupIndexes(player, user.id);
         const eid = this.simulationEcs.getEidForObject(player);
         if (typeof eid === "number") {

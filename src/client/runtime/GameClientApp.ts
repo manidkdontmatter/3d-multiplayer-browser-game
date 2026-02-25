@@ -1,7 +1,10 @@
+// Main client runtime loop coordinating input, networking, prediction, rendering, and UI state.
 import { Clock } from "three";
 import {
   ABILITY_ID_NONE,
   DEFAULT_HOTBAR_ABILITY_IDS,
+  DEFAULT_PRIMARY_MOUSE_SLOT,
+  DEFAULT_SECONDARY_MOUSE_SLOT,
   getAbilityDefinitionById
 } from "../../shared/index";
 import { NetworkClient } from "./NetworkClient";
@@ -13,7 +16,7 @@ import { WorldRenderer } from "./WorldRenderer";
 import { ClientNetworkOrchestrator } from "./network/ClientNetworkOrchestrator";
 import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
 import { AbilityHud } from "../ui/AbilityHud";
-import { resolveAccessKey, storeAccessKey, writeAccessKeyToFragment } from "../auth/accessKey";
+import { resolveAccessKey } from "../auth/accessKey";
 import { AuthPanel } from "../ui/AuthPanel";
 
 const FIXED_STEP = 1 / 60;
@@ -26,6 +29,7 @@ export class GameClientApp {
   private readonly renderer: WorldRenderer;
   private readonly abilityHud: AbilityHud;
   private readonly authPanel: AuthPanel;
+  private readonly connectedPlayersNode: HTMLDivElement;
   private readonly network = new NetworkClient();
   private readonly networkOrchestrator: ClientNetworkOrchestrator;
   private readonly platformTimeline = new DeterministicPlatformTimeline();
@@ -50,9 +54,12 @@ export class GameClientApp {
   private groundingSampleInitialized = false;
   private groundedLastFixedTick = true;
   private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
-  private lastQueuedHotbarSlot = 0;
+  private primaryMouseSlot = DEFAULT_PRIMARY_MOUSE_SLOT;
+  private secondaryMouseSlot = DEFAULT_SECONDARY_MOUSE_SLOT;
   private queuedTestPrimaryActionCount = 0;
+  private queuedTestSecondaryActionCount = 0;
   private testPrimaryHeld = false;
+  private testSecondaryHeld = false;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -70,25 +77,26 @@ export class GameClientApp {
     this.input = new InputController(canvas);
     this.abilityHud = AbilityHud.mount(document, {
       initialHotbarAssignments: this.hotbarAbilityIds,
-      initialSelectedSlot: this.input.getSelectedHotbarSlot(),
-      onHotbarSlotSelected: (slot) => {
-        this.input.setSelectedHotbarSlot(slot);
-        this.network.queueLoadoutSelection(slot);
-        this.lastQueuedHotbarSlot = slot;
-      },
+      initialPrimaryMouseSlot: this.primaryMouseSlot,
+      initialSecondaryMouseSlot: this.secondaryMouseSlot,
       onHotbarAssignmentChanged: (slot, abilityId) => {
-        this.hotbarAbilityIds[slot] = abilityId;
-        this.input.setSelectedHotbarSlot(slot);
-        this.abilityHud.setSelectedSlot(slot, false);
-        this.network.queueLoadoutSelection(slot);
-        this.network.queueLoadoutAssignment(slot, abilityId);
-        this.lastQueuedHotbarSlot = slot;
+        this.network.queueHotbarAssignment(slot, abilityId);
+      },
+      onAbilityForgotten: (abilityId) => {
+        this.network.queueForgetAbility(abilityId);
+      },
+      onAbilityCreatorCommand: (command) => {
+        this.network.queueAbilityCreatorCommand(command);
       }
     });
     this.authPanel = AuthPanel.mount(document, {
       serverUrl: this.serverUrl,
       initialAccessKey
     });
+    this.connectedPlayersNode = document.createElement("div");
+    this.connectedPlayersNode.id = "connected-players-indicator";
+    this.connectedPlayersNode.textContent = "Connected Players: 0";
+    document.body.append(this.connectedPlayersNode);
     this.renderer = new WorldRenderer(canvas);
     this.networkOrchestrator = new ClientNetworkOrchestrator(this.network, this.physics);
     this.renderSnapshotAssembler = new RenderSnapshotAssembler({
@@ -105,8 +113,7 @@ export class GameClientApp {
     const physics = await LocalPhysicsWorld.create();
     const serverUrl = GameClientApp.resolveServerUrl();
     const resolvedAccessKey = resolveAccessKey(serverUrl);
-    storeAccessKey(serverUrl, resolvedAccessKey.key);
-    writeAccessKeyToFragment(resolvedAccessKey.key);
+    const accessKey = resolvedAccessKey.key.length > 0 ? resolvedAccessKey.key : null;
     const app = new GameClientApp(
       canvas,
       statusNode,
@@ -114,10 +121,10 @@ export class GameClientApp {
       GameClientApp.resolveCspEnabled(),
       GameClientApp.resolveE2eSimulationOnly(),
       serverUrl,
-      resolvedAccessKey.key
+      accessKey ?? ""
     );
     onCreatePhase?.("network");
-    await app.network.connect(serverUrl, resolvedAccessKey.key);
+    await app.network.connect(serverUrl, accessKey);
     onCreatePhase?.("ready");
     app.updateStatus();
     app.registerTestingHooks();
@@ -156,6 +163,15 @@ export class GameClientApp {
 
   private advance(seconds: number): void {
     this.trackFps(seconds);
+
+    if (this.input.consumeMainMenuToggle()) {
+      const open = this.abilityHud.toggleMainMenu();
+      this.input.setMainUiOpen(open);
+      if (document.pointerLockElement === this.canvas) {
+        void document.exitPointerLock();
+      }
+    }
+
     if (this.input.consumeCameraFreezeToggle()) {
       this.freezeCamera = !this.freezeCamera;
       this.frozenCameraPose = this.freezeCamera ? this.getRenderPose() : null;
@@ -164,20 +180,14 @@ export class GameClientApp {
       this.cspEnabled = !this.cspEnabled;
       this.networkOrchestrator.onCspModeChanged();
     }
-    let shouldReleasePointerLock = false;
-    if (this.input.consumeAbilityLoadoutToggle()) {
-      const loadoutOpen = this.abilityHud.toggleLoadoutPanel();
-      shouldReleasePointerLock = shouldReleasePointerLock || loadoutOpen;
+
+    for (const bindingIntent of this.input.consumeBindingIntents()) {
+      if (bindingIntent.target === "primary") {
+        this.network.queuePrimaryMouseSlot(bindingIntent.slot);
+      } else {
+        this.network.queueSecondaryMouseSlot(bindingIntent.slot);
+      }
     }
-    if (shouldReleasePointerLock && document.pointerLockElement === this.canvas) {
-      void document.exitPointerLock();
-    }
-    const selectedSlot = this.input.getSelectedHotbarSlot();
-    if (selectedSlot !== this.lastQueuedHotbarSlot) {
-      this.network.queueLoadoutSelection(selectedSlot);
-      this.lastQueuedHotbarSlot = selectedSlot;
-    }
-    this.abilityHud.setSelectedSlot(selectedSlot, false);
 
     this.accumulator += seconds;
     while (this.accumulator >= FIXED_STEP) {
@@ -185,6 +195,7 @@ export class GameClientApp {
       this.accumulator -= FIXED_STEP;
     }
     this.applyAbilityEvents();
+    this.applyAbilityCreatorEvents();
 
     const renderSnapshot = this.renderSnapshotAssembler.build(seconds);
     this.renderer.apply(renderSnapshot);
@@ -192,15 +203,29 @@ export class GameClientApp {
   }
 
   private stepFixed(delta: number): void {
-    const movement = this.testMovementOverride ?? this.input.sampleMovement();
+    const mainUiOpen = this.abilityHud.isMainMenuOpen();
+    const movement =
+      mainUiOpen
+        ? { forward: 0, strafe: 0, jump: false, sprint: false }
+        : (this.testMovementOverride ?? this.input.sampleMovement());
     const yaw = this.input.getYaw();
     const pitch = this.input.getPitch();
-    const usePrimaryPressed =
-      this.input.consumePrimaryActionTrigger() || this.consumeTestPrimaryActionTrigger();
-    const usePrimaryHeld = this.input.isPrimaryActionHeld() || this.testPrimaryHeld;
-    if (usePrimaryPressed && this.getSelectedAbilityDefinition()?.melee) {
+
+    const queuedDirectCastSlot = this.input.consumeDirectCastSlotTrigger();
+    const usePrimaryPressed = !mainUiOpen && (this.input.consumePrimaryActionTrigger() || this.consumeTestPrimaryActionTrigger());
+    const useSecondaryPressed = !mainUiOpen && (this.input.consumeSecondaryActionTrigger() || this.consumeTestSecondaryActionTrigger());
+    const usePrimaryHeld = !mainUiOpen && (this.input.isPrimaryActionHeld() || this.testPrimaryHeld);
+    const useSecondaryHeld = !mainUiOpen && (this.input.isSecondaryActionHeld() || this.testSecondaryHeld);
+    const castSlotPressed = !mainUiOpen && queuedDirectCastSlot !== null;
+    const castSlotIndex = queuedDirectCastSlot ?? 0;
+
+    if (usePrimaryPressed && this.getAbilityDefinitionAtSlot(this.primaryMouseSlot)?.melee) {
       this.renderer.triggerLocalMeleePunch();
     }
+    if (useSecondaryPressed && this.getAbilityDefinitionAtSlot(this.secondaryMouseSlot)?.melee) {
+      this.renderer.triggerLocalMeleePunch();
+    }
+
     this.networkOrchestrator.stepFixed({
       delta,
       movement,
@@ -208,7 +233,11 @@ export class GameClientApp {
       orientation: { yaw, pitch },
       actions: {
         usePrimaryPressed,
-        usePrimaryHeld
+        usePrimaryHeld,
+        useSecondaryPressed,
+        useSecondaryHeld,
+        castSlotPressed,
+        castSlotIndex
       },
       look: {
         getYaw: () => this.input.getYaw(),
@@ -230,17 +259,29 @@ export class GameClientApp {
       this.abilityHud.upsertAbility(definition);
     }
 
-    if (events.loadout) {
-      this.hotbarAbilityIds = [...events.loadout.abilityIds];
-      this.input.setSelectedHotbarSlot(events.loadout.selectedHotbarSlot);
-      this.lastQueuedHotbarSlot = events.loadout.selectedHotbarSlot;
+    if (events.abilityState) {
+      this.hotbarAbilityIds = [...events.abilityState.hotbarAbilityIds];
+      this.primaryMouseSlot = events.abilityState.primaryMouseSlot;
+      this.secondaryMouseSlot = events.abilityState.secondaryMouseSlot;
       this.abilityHud.setHotbarAssignments(this.hotbarAbilityIds);
-      this.abilityHud.setSelectedSlot(events.loadout.selectedHotbarSlot, false);
+      this.abilityHud.setMouseBindings(this.primaryMouseSlot, this.secondaryMouseSlot);
     }
+    if (events.ownedAbilityIds) {
+      this.abilityHud.setOwnedAbilityIds(events.ownedAbilityIds);
+    }
+  }
 
+  private applyAbilityCreatorEvents(): void {
+    const creatorState = this.network.consumeAbilityCreatorState();
+    if (!creatorState) {
+      return;
+    }
+    this.abilityHud.setAbilityCreatorState(creatorState);
   }
 
   private updateStatus(): void {
+    this.updateConnectedPlayersIndicator();
+
     if (!this.statusNode) {
       return;
     }
@@ -256,11 +297,19 @@ export class GameClientApp {
     const ackJitterMs = this.network.getAckJitterMs();
     const localHealth = this.network.getLocalPlayerPose()?.health ?? 100;
     const projectileCount = this.network.getProjectiles().length;
-    const activeSlot = this.input.getSelectedHotbarSlot() + 1;
-    const selectedAbilityId = this.hotbarAbilityIds[activeSlot - 1] ?? ABILITY_ID_NONE;
-    const activeAbilityName = this.resolveAbilityName(selectedAbilityId);
+    const lmbAbilityName = this.resolveAbilityName(this.hotbarAbilityIds[this.primaryMouseSlot] ?? ABILITY_ID_NONE);
+    const rmbAbilityName = this.resolveAbilityName(this.hotbarAbilityIds[this.secondaryMouseSlot] ?? ABILITY_ID_NONE);
     this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | slot=${activeSlot}:${activeAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${reconDiagnostics.lastPositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${reconDiagnostics.lastReplayCount} | hs=${reconDiagnostics.hardSnapCorrections}/${reconDiagnostics.totalCorrections} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+      `mode=${netState} | csp=${cspLabel} | menu=${this.abilityHud.isMainMenuOpen() ? "open" : "closed"} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | lmb=${this.primaryMouseSlot + 1}:${lmbAbilityName} | rmb=${this.secondaryMouseSlot + 1}:${rmbAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${reconDiagnostics.lastPositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${reconDiagnostics.lastReplayCount} | hs=${reconDiagnostics.hardSnapCorrections}/${reconDiagnostics.totalCorrections} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+  }
+
+  private updateConnectedPlayersIndicator(): void {
+    const remoteCount = this.network.getRemotePlayers().length;
+    const localCount = this.network.getLocalPlayerNid() === null ? 0 : 1;
+    const aoiCount = remoteCount + localCount;
+    const serverPlayers = this.network.getServerPlayerCount();
+    const playersText = serverPlayers === null ? "..." : String(serverPlayers);
+    this.connectedPlayersNode.textContent = `Players: ${playersText}\nAOI: ${aoiCount}`;
   }
 
   private trackFps(seconds: number): void {
@@ -283,8 +332,6 @@ export class GameClientApp {
   private buildRenderGameStatePayload(scope: "full" | "minimal" = "full"): RenderGameStatePayload {
     const pose = this.getRenderPose();
     const reconDiagnostics = this.networkOrchestrator.getDiagnostics();
-    const selectedSlot = this.input.getSelectedHotbarSlot();
-    const selectedAbilityId = this.hotbarAbilityIds[selectedSlot] ?? ABILITY_ID_NONE;
     const remotePlayers = this.network.getRemotePlayers();
     const basePayload: RenderGameStatePayload = {
       mode: this.network.getConnectionState(),
@@ -340,12 +387,15 @@ export class GameClientApp {
         maxHealth: dummy.maxHealth
       })),
       localAbility: {
-        selectedSlot,
-        selectedAbilityId,
         ui: {
-          loadoutPanelOpen: this.abilityHud.isLoadoutPanelOpen()
+          mainMenuOpen: this.abilityHud.isMainMenuOpen()
         },
-        selectedAbilityName: this.resolveAbilityName(selectedAbilityId),
+        bindings: {
+          primaryMouseSlot: this.primaryMouseSlot,
+          secondaryMouseSlot: this.secondaryMouseSlot,
+          primaryAbilityId: this.hotbarAbilityIds[this.primaryMouseSlot] ?? ABILITY_ID_NONE,
+          secondaryAbilityId: this.hotbarAbilityIds[this.secondaryMouseSlot] ?? ABILITY_ID_NONE
+        },
         hotbar: this.hotbarAbilityIds.map((abilityId, slot) => ({
           slot,
           abilityId,
@@ -426,8 +476,18 @@ export class GameClientApp {
         1024
       );
     };
+    window.trigger_test_secondary_action = (count = 1) => {
+      const normalized = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+      this.queuedTestSecondaryActionCount = Math.min(
+        this.queuedTestSecondaryActionCount + normalized,
+        1024
+      );
+    };
     window.set_test_primary_hold = (held) => {
       this.testPrimaryHeld = Boolean(held);
+    };
+    window.set_test_secondary_hold = (held) => {
+      this.testSecondaryHeld = Boolean(held);
     };
     window.set_test_look_angles = (yaw, pitch) => {
       if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) {
@@ -495,6 +555,12 @@ export class GameClientApp {
     );
   }
 
+  private getAbilityDefinitionAtSlot(slot: number) {
+    const normalizedSlot = Math.max(0, Math.min(this.hotbarAbilityIds.length - 1, Math.floor(slot)));
+    const abilityId = this.hotbarAbilityIds[normalizedSlot] ?? ABILITY_ID_NONE;
+    return this.network.getAbilityById(abilityId) ?? getAbilityDefinitionById(abilityId);
+  }
+
   private resolveLocalGroundedState(): boolean {
     if (this.isCspActive()) {
       return this.physics.isGrounded();
@@ -502,17 +568,19 @@ export class GameClientApp {
     return this.network.getLocalPlayerPose()?.grounded ?? this.physics.isGrounded();
   }
 
-  private getSelectedAbilityDefinition() {
-    const selectedSlot = this.input.getSelectedHotbarSlot();
-    const abilityId = this.hotbarAbilityIds[selectedSlot] ?? ABILITY_ID_NONE;
-    return this.network.getAbilityById(abilityId) ?? getAbilityDefinitionById(abilityId);
-  }
-
   private consumeTestPrimaryActionTrigger(): boolean {
     if (this.queuedTestPrimaryActionCount <= 0) {
       return false;
     }
     this.queuedTestPrimaryActionCount -= 1;
+    return true;
+  }
+
+  private consumeTestSecondaryActionTrigger(): boolean {
+    if (this.queuedTestSecondaryActionCount <= 0) {
+      return false;
+    }
+    this.queuedTestSecondaryActionCount -= 1;
     return true;
   }
 

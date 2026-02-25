@@ -1,11 +1,19 @@
 import RAPIER from "@dimforge/rapier3d-compat";
+import { WORLD_GROUND_HALF_EXTENT, WORLD_GROUND_HALF_THICKNESS } from "./config";
 import { STATIC_WORLD_BLOCKS } from "./world";
 
 export function createStaticWorldColliders(world: RAPIER.World): void {
   const groundBody = world.createRigidBody(
-    RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0)
+    RAPIER.RigidBodyDesc.fixed().setTranslation(0, -WORLD_GROUND_HALF_THICKNESS, 0)
   );
-  world.createCollider(RAPIER.ColliderDesc.cuboid(128, 0.5, 128), groundBody);
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(
+      WORLD_GROUND_HALF_EXTENT,
+      WORLD_GROUND_HALF_THICKNESS,
+      WORLD_GROUND_HALF_EXTENT
+    ),
+    groundBody
+  );
 
   for (const block of STATIC_WORLD_BLOCKS) {
     const rotationZ = block.rotationZ ?? 0;

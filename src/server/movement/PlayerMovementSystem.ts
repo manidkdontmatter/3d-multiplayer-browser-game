@@ -1,3 +1,4 @@
+// Authoritative fixed-step movement system that advances player kinematic controller state.
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   GROUND_CONTACT_MIN_NORMAL_Y,
@@ -85,24 +86,26 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
       return this.options.resolveGroundSupportColliderHandle(player, groundedByQuery);
     }
 
-    if (
-      !this.options.world ||
-      !Number.isFinite(this.options.playerCapsuleHalfHeight) ||
-      !Number.isFinite(this.options.playerCapsuleRadius)
-    ) {
+    const world = this.options.world;
+    const capsuleHalfHeight = this.options.playerCapsuleHalfHeight;
+    const capsuleRadius = this.options.playerCapsuleRadius;
+    if (!world || !Number.isFinite(capsuleHalfHeight) || !Number.isFinite(capsuleRadius)) {
       throw new Error(
         "PlayerMovementSystem requires either resolveGroundSupportColliderHandle or world + capsule dimensions"
       );
     }
 
+    const resolvedCapsuleHalfHeight = capsuleHalfHeight as number;
+    const resolvedCapsuleRadius = capsuleRadius as number;
+
     return queryGroundSupportColliderHandle({
       groundedByQuery,
-      world: this.options.world,
+      world,
       characterController: this.options.characterController,
       body: player.body,
       collider: player.collider,
-      capsuleHalfHeight: this.options.playerCapsuleHalfHeight,
-      capsuleRadius: this.options.playerCapsuleRadius,
+      capsuleHalfHeight: resolvedCapsuleHalfHeight,
+      capsuleRadius: resolvedCapsuleRadius,
       groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y
     });
   }

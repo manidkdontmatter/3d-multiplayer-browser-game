@@ -69,7 +69,11 @@ export class GameServer {
           throw new Error("Handshake payload required.");
         }
         const authKey = (handshake as { authKey?: unknown }).authKey;
+        const allowGuestAuth = process.env.SERVER_ALLOW_GUEST_AUTH !== "0";
         if (typeof authKey !== "string" || authKey.length === 0) {
+          if (allowGuestAuth) {
+            return {};
+          }
           throw new Error("authKey required.");
         }
         return {

@@ -1,4 +1,5 @@
 import type { PlayerSnapshot } from "./PersistenceService";
+import { GUEST_ACCOUNT_ID_BASE } from "./PersistenceService";
 
 type PendingOfflineSnapshot = {
   snapshot: PlayerSnapshot;
@@ -22,6 +23,9 @@ export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
     accountId: number,
     options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean }
   ): void {
+    if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
+    }
     const normalizedAccountId = Math.max(1, Math.floor(Number.isFinite(accountId) ? accountId : 1));
     const dirtyCharacter = options?.dirtyCharacter ?? true;
     const dirtyAbilityState = options?.dirtyAbilityState ?? true;
@@ -34,6 +38,9 @@ export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
   }
 
   public queueOfflineSnapshot(accountId: number, snapshot: PlayerSnapshot): void {
+    if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
+    }
     this.pendingOfflineSnapshots.set(accountId, {
       snapshot,
       dirtyCharacter: true,
@@ -44,6 +51,9 @@ export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
   }
 
   public takePendingSnapshotForLogin(accountId: number): PlayerSnapshot | null {
+    if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return null;
+    }
     const pendingOfflineSnapshot = this.pendingOfflineSnapshots.get(accountId);
     if (!pendingOfflineSnapshot) {
       return null;

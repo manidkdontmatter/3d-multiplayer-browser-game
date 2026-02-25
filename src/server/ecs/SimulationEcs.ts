@@ -1,5 +1,7 @@
+// ECS facade exposing high-level simulation operations used by game systems.
 import type RAPIER from "@dimforge/rapier3d-compat";
 import { query } from "bitecs";
+import { HOTBAR_SLOT_COUNT, clampHotbarSlotIndex } from "../../shared/index";
 import { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
 import { SimulationEcsProjectors } from "./SimulationEcsProjectors";
 import { SimulationEcsStore } from "./SimulationEcsStore";
@@ -72,7 +74,8 @@ export class SimulationEcs {
     vy: number;
     vz: number;
     health: number;
-    activeHotbarSlot: number;
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
   } | null {
     return this.projectors.getPlayerPersistenceSnapshotByEid(eid);
@@ -240,7 +243,9 @@ export class SimulationEcs {
     lastProcessedSequence: number;
     lastPrimaryFireAtSeconds: number;
     primaryHeld: boolean;
-    activeHotbarSlot: number;
+    secondaryHeld: boolean;
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
     unlockedAbilityIds: Set<number>;
     position: { x: number; y: number; z: number };
@@ -332,6 +337,9 @@ export class SimulationEcs {
       lastProcessedSequence: number;
       lastPrimaryFireAtSeconds: number;
       primaryHeld: boolean;
+      secondaryHeld: boolean;
+      primaryMouseSlot: number;
+      secondaryMouseSlot: number;
       rotation: { x: number; y: number; z: number; w: number };
     }
   ): void {
@@ -354,6 +362,9 @@ export class SimulationEcs {
     c.LastProcessedSequence.value[eid] = Math.max(0, Math.floor(state.lastProcessedSequence));
     c.LastPrimaryFireAtSeconds.value[eid] = state.lastPrimaryFireAtSeconds;
     c.PrimaryHeld.value[eid] = state.primaryHeld ? 1 : 0;
+    c.SecondaryHeld.value[eid] = state.secondaryHeld ? 1 : 0;
+    c.PrimaryMouseSlot.value[eid] = clampHotbarSlotIndex(state.primaryMouseSlot);
+    c.SecondaryMouseSlot.value[eid] = clampHotbarSlotIndex(state.secondaryMouseSlot);
     c.Rotation.x[eid] = state.rotation.x;
     c.Rotation.y[eid] = state.rotation.y;
     c.Rotation.z[eid] = state.rotation.z;
@@ -377,23 +388,36 @@ export class SimulationEcs {
     return this.projectors.getPlayerInputAckStateByUserId(userId);
   }
 
-  public getPlayerLoadoutStateByUserId(userId: number): {
-    activeHotbarSlot: number;
+  public getPlayerAbilityStateByUserId(userId: number): {
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
     unlockedAbilityIds: number[];
   } | null {
-    return this.projectors.getPlayerLoadoutStateByUserId(userId);
+    return this.projectors.getPlayerAbilityStateByUserId(userId);
   }
 
-  public setPlayerActiveHotbarSlotByUserId(userId: number, slot: number): boolean {
+  public setPlayerPrimaryMouseSlotByUserId(userId: number, slot: number): boolean {
     const eid = this.indexes.getPlayerEidByUserId(userId);
     if (typeof eid !== "number") {
       return false;
     }
     const c = this.store.world.components;
-    const normalized = Math.max(0, Math.floor(Number.isFinite(slot) ? slot : 0));
-    const previous = c.ActiveHotbarSlot.value[eid] ?? 0;
-    c.ActiveHotbarSlot.value[eid] = normalized;
+    const normalized = clampHotbarSlotIndex(slot);
+    const previous = c.PrimaryMouseSlot.value[eid] ?? 0;
+    c.PrimaryMouseSlot.value[eid] = normalized;
+    return previous !== normalized;
+  }
+
+  public setPlayerSecondaryMouseSlotByUserId(userId: number, slot: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") {
+      return false;
+    }
+    const c = this.store.world.components;
+    const normalized = clampHotbarSlotIndex(slot);
+    const previous = c.SecondaryMouseSlot.value[eid] ?? 1;
+    c.SecondaryMouseSlot.value[eid] = normalized;
     return previous !== normalized;
   }
 
@@ -403,6 +427,64 @@ export class SimulationEcs {
       return false;
     }
     return this.store.setHotbarAbilityBySlot(eid, slot, abilityId);
+  }
+
+  public setPlayerUnlockedAbilityIdsByUserId(
+    userId: number,
+    unlockedAbilityIds: ReadonlyArray<number>
+  ): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") {
+      return false;
+    }
+    return this.store.setUnlockedAbilitiesFromList(eid, unlockedAbilityIds);
+  }
+
+  public replacePlayerAbilityOnHotbarByUserId(
+    userId: number,
+    oldAbilityId: number,
+    newAbilityId: number
+  ): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") {
+      return false;
+    }
+    const normalizedOld = Math.max(0, Math.floor(Number.isFinite(oldAbilityId) ? oldAbilityId : 0));
+    const normalizedNew = Math.max(0, Math.floor(Number.isFinite(newAbilityId) ? newAbilityId : 0));
+    if (normalizedOld <= 0 || normalizedNew <= 0) {
+      return false;
+    }
+    let changed = false;
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+      if (this.store.getHotbarSlot(eid, slot) !== normalizedOld) {
+        continue;
+      }
+      changed = this.store.setHotbarAbilityBySlot(eid, slot, normalizedNew) || changed;
+    }
+    return changed;
+  }
+
+  public clearPlayerAbilityOnHotbarByUserId(userId: number, abilityId: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") {
+      return false;
+    }
+    const normalizedAbilityId = Math.max(
+      0,
+      Math.floor(Number.isFinite(abilityId) ? abilityId : 0)
+    );
+    if (normalizedAbilityId <= 0) {
+      return false;
+    }
+    let changed = false;
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+      if (this.store.getHotbarSlot(eid, slot) !== normalizedAbilityId) {
+        continue;
+      }
+      changed =
+        this.store.setHotbarAbilityBySlot(eid, slot, 0) || changed;
+    }
+    return changed;
   }
 
   public getPlayerPersistenceSnapshotByAccountId(accountId: number): {
@@ -416,7 +498,8 @@ export class SimulationEcs {
     vy: number;
     vz: number;
     health: number;
-    activeHotbarSlot: number;
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
   } | null {
     const eid = this.indexes.getPlayerEidByAccountId(accountId);

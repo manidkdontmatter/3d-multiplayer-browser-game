@@ -1,3 +1,4 @@
+// Headless smoke test that verifies server/client startup, connection, and main UI toggling.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -128,17 +129,17 @@ async function waitForLoadoutPanelState(page, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const state = await readState(page);
-    if (state?.localAbility?.ui?.loadoutPanelOpen === true) {
+    if (state?.localAbility?.ui?.mainMenuOpen === true) {
       return state;
     }
     await delay(120);
   }
-  throw new Error("Timed out waiting for loadout panel open state.");
+  throw new Error("Timed out waiting for main UI open state.");
 }
 
 async function openLoadoutPanel(page) {
   await page.evaluate(() => {
-    const eventInit = { code: "KeyB", key: "b", bubbles: true };
+    const eventInit = { code: "Backquote", key: "`", bubbles: true };
     window.dispatchEvent(new KeyboardEvent("keydown", eventInit));
     window.dispatchEvent(new KeyboardEvent("keyup", eventInit));
   });
@@ -197,7 +198,7 @@ async function main() {
     finalState = await waitForConnectedState(page, CONNECT_TIMEOUT_MS);
     await openLoadoutPanel(page);
     finalState = await waitForLoadoutPanelState(page, 3000);
-    await page.waitForSelector("#ability-loadout-panel.ability-panel-visible", {
+    await page.waitForSelector("#main-ui-overlay.main-ui-visible", {
       state: "visible",
       timeout: 3000
     });

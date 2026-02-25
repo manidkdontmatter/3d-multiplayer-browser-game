@@ -1,0 +1,207 @@
+{
+  "generatedAt": "2026-02-24T06:32:15.167Z",
+  "exitCode": 0,
+  "failureMessage": null,
+  "totalDurationMs": 9848,
+  "activePhaseAtExit": null,
+  "mode": "functional",
+  "config": {
+    "serverUrl": "ws://127.0.0.1:10645",
+    "useExistingServer": false,
+    "useExistingClient": false,
+    "headless": true,
+    "simOnly": true,
+    "movementPollMs": 120
+  },
+  "phases": [
+    {
+      "name": "server:allocate-port",
+      "startedAt": 1771914725181,
+      "status": "ok",
+      "endedAt": 1771914725184,
+      "durationMs": 3
+    },
+    {
+      "name": "server:start-and-wait",
+      "startedAt": 1771914725191,
+      "status": "ok",
+      "endedAt": 1771914726307,
+      "durationMs": 1116
+    },
+    {
+      "name": "client:start-and-wait",
+      "startedAt": 1771914726308,
+      "status": "ok",
+      "endedAt": 1771914727270,
+      "durationMs": 962
+    },
+    {
+      "name": "browser-a:launch",
+      "startedAt": 1771914727271,
+      "status": "ok",
+      "endedAt": 1771914727410,
+      "durationMs": 139
+    },
+    {
+      "name": "browser-b:launch",
+      "startedAt": 1771914727410,
+      "status": "ok",
+      "endedAt": 1771914727522,
+      "durationMs": 112
+    },
+    {
+      "name": "browser-a:new-page",
+      "startedAt": 1771914727522,
+      "status": "ok",
+      "endedAt": 1771914727610,
+      "durationMs": 88
+    },
+    {
+      "name": "browser-b:new-page",
+      "startedAt": 1771914727610,
+      "status": "ok",
+      "endedAt": 1771914727667,
+      "durationMs": 57
+    },
+    {
+      "name": "page-a:goto",
+      "startedAt": 1771914727668,
+      "status": "ok",
+      "endedAt": 1771914728208,
+      "durationMs": 540
+    },
+    {
+      "name": "page-b:goto",
+      "startedAt": 1771914728208,
+      "status": "ok",
+      "endedAt": 1771914728446,
+      "durationMs": 238
+    },
+    {
+      "name": "pages:initial-focus",
+      "startedAt": 1771914728446,
+      "status": "ok",
+      "endedAt": 1771914729216,
+      "durationMs": 770
+    },
+    {
+      "name": "connect:wait-a",
+      "startedAt": 1771914729216,
+      "status": "ok",
+      "endedAt": 1771914729241,
+      "durationMs": 25
+    },
+    {
+      "name": "connect:wait-b",
+      "startedAt": 1771914729242,
+      "status": "ok",
+      "endedAt": 1771914729257,
+      "durationMs": 15
+    },
+    {
+      "name": "hooks:status-a",
+      "startedAt": 1771914729257,
+      "status": "ok",
+      "endedAt": 1771914729259,
+      "durationMs": 2
+    },
+    {
+      "name": "hooks:status-b",
+      "startedAt": 1771914729259,
+      "status": "ok",
+      "endedAt": 1771914729261,
+      "durationMs": 2
+    },
+    {
+      "name": "state:baseline-a",
+      "startedAt": 1771914729261,
+      "status": "ok",
+      "endedAt": 1771914729264,
+      "durationMs": 3
+    },
+    {
+      "name": "state:baseline-b",
+      "startedAt": 1771914729264,
+      "status": "ok",
+      "endedAt": 1771914729267,
+      "durationMs": 3
+    },
+    {
+      "name": "presence:wait-a-on-b",
+      "startedAt": 1771914729267,
+      "status": "ok",
+      "endedAt": 1771914729273,
+      "durationMs": 6
+    },
+    {
+      "name": "movement:prep-a",
+      "startedAt": 1771914729273,
+      "status": "ok",
+      "endedAt": 1771914729408,
+      "durationMs": 135
+    },
+    {
+      "name": "movement:local-a",
+      "startedAt": 1771914729409,
+      "status": "ok",
+      "endedAt": 1771914729798,
+      "durationMs": 389
+    },
+    {
+      "name": "movement:prep-b",
+      "startedAt": 1771914729798,
+      "status": "ok",
+      "endedAt": 1771914729937,
+      "durationMs": 139
+    },
+    {
+      "name": "movement:remote-b",
+      "startedAt": 1771914729937,
+      "status": "ok",
+      "endedAt": 1771914729953,
+      "durationMs": 16
+    },
+    {
+      "name": "action:primary-remote",
+      "startedAt": 1771914729953,
+      "status": "ok",
+      "endedAt": 1771914730439,
+      "durationMs": 486
+    },
+    {
+      "name": "movement:sprint-a",
+      "startedAt": 1771914730440,
+      "status": "ok",
+      "endedAt": 1771914730583,
+      "durationMs": 143
+    },
+    {
+      "name": "movement:sprint-cooldown",
+      "startedAt": 1771914730583,
+      "status": "ok",
+      "endedAt": 1771914730995,
+      "durationMs": 412
+    },
+    {
+      "name": "movement:jump-a",
+      "startedAt": 1771914730995,
+      "status": "ok",
+      "endedAt": 1771914731417,
+      "durationMs": 422
+    },
+    {
+      "name": "movement:jump-cooldown",
+      "startedAt": 1771914731417,
+      "status": "ok",
+      "endedAt": 1771914732018,
+      "durationMs": 601
+    },
+    {
+      "name": "reconnect:b",
+      "startedAt": 1771914732018,
+      "status": "ok",
+      "endedAt": 1771914735029,
+      "durationMs": 3011
+    }
+  ]
+}

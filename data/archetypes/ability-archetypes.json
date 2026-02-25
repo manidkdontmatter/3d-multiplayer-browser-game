@@ -48,7 +48,9 @@
     }
   ],
   "defaults": {
-    "hotbarAbilityIds": [1, 2, 0, 0, 0],
-    "unlockedAbilityIds": [1, 2]
+    "hotbarAbilityIds": [1, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+    "unlockedAbilityIds": [1, 2],
+    "primaryMouseSlot": 0,
+    "secondaryMouseSlot": 1
   }
 }

@@ -1,12 +1,15 @@
+// Routes parsed nengi command payloads to input simulation or ability-state mutation handlers.
 import { NType } from "../../shared/netcode";
 import type {
+  AbilityCommand as AbilityWireCommand,
+  AbilityCreatorCommand as AbilityCreatorWireCommand,
   InputCommand as InputWireCommand,
-  LoadoutCommand as LoadoutWireCommand
 } from "../../shared/netcode";
 
 export interface ServerCommandRouterHandlers<TUser> {
   readonly onInputCommands: (commands: Partial<InputWireCommand>[]) => void;
-  readonly onLoadoutCommand: (user: TUser, command: Partial<LoadoutWireCommand>) => void;
+  readonly onAbilityCommand: (user: TUser, command: Partial<AbilityWireCommand>) => void;
+  readonly onAbilityCreatorCommand: (user: TUser, command: Partial<AbilityCreatorWireCommand>) => void;
 }
 
 export class ServerCommandRouter<TUser> {
@@ -15,8 +18,13 @@ export class ServerCommandRouter<TUser> {
 
     for (const rawCommand of commands) {
       const ntype = (rawCommand as { ntype?: unknown })?.ntype;
-      if (ntype === NType.LoadoutCommand) {
-        handlers.onLoadoutCommand(user, rawCommand as Partial<LoadoutWireCommand>);
+      if (ntype === NType.AbilityCommand) {
+        handlers.onAbilityCommand(user, rawCommand as Partial<AbilityWireCommand>);
+        continue;
+      }
+
+      if (ntype === NType.AbilityCreatorCommand) {
+        handlers.onAbilityCreatorCommand(user, rawCommand as Partial<AbilityCreatorWireCommand>);
         continue;
       }
 

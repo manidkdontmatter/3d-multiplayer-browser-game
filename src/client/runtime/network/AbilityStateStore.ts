@@ -1,5 +1,11 @@
+// Client-side authoritative ability state cache populated from server messages.
 import {
+  ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY,
+  ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY,
+  abilityCategoryToCreatorType,
   DEFAULT_HOTBAR_ABILITY_IDS,
+  DEFAULT_PRIMARY_MOUSE_SLOT,
+  DEFAULT_SECONDARY_MOUSE_SLOT,
   abilityCategoryFromWireValue,
   clampHotbarSlotIndex,
   decodeAbilityAttributeMask,
@@ -9,17 +15,20 @@ import {
 import {
   NType,
   type AbilityDefinitionMessage,
-  type AbilityUseMessage,
-  type LoadoutStateMessage
+  type AbilityOwnershipMessage,
+  type AbilityStateMessage,
+  type AbilityUseMessage
 } from "../../../shared/netcode";
 import type { AbilityUseEvent } from "../types";
-import type { AbilityEventBatch, LoadoutState } from "./types";
+import type { AbilityEventBatch, AbilityState } from "./types";
 
 export class AbilityStateStore {
   private readonly abilityDefinitions = new Map<number, AbilityDefinition>();
   private readonly pendingAbilityDefinitions = new Map<number, AbilityDefinition>();
   private readonly pendingAbilityUseEvents: AbilityUseEvent[] = [];
-  private pendingLoadoutState: LoadoutState | null = null;
+  private pendingAbilityState: AbilityState | null = null;
+  private ownedAbilityIds = new Set<number>();
+  private pendingOwnedAbilityIds: number[] | null = null;
 
   public constructor() {
     for (const ability of getAllAbilityDefinitions()) {
@@ -30,13 +39,16 @@ export class AbilityStateStore {
   public reset(): void {
     this.pendingAbilityUseEvents.length = 0;
     this.pendingAbilityDefinitions.clear();
-    this.pendingLoadoutState = null;
+    this.pendingAbilityState = null;
+    this.pendingOwnedAbilityIds = null;
+    this.ownedAbilityIds = new Set<number>();
   }
 
   public processMessage(message: unknown): boolean {
     const typed = message as
       | AbilityDefinitionMessage
-      | LoadoutStateMessage
+      | AbilityOwnershipMessage
+      | AbilityStateMessage
       | AbilityUseMessage
       | undefined;
 
@@ -50,8 +62,15 @@ export class AbilityStateStore {
       return true;
     }
 
-    if (typed?.ntype === NType.LoadoutStateMessage) {
-      this.pendingLoadoutState = this.toLoadoutState(typed);
+    if (typed?.ntype === NType.AbilityStateMessage) {
+      this.pendingAbilityState = this.toAbilityState(typed);
+      return true;
+    }
+
+    if (typed?.ntype === NType.AbilityOwnershipMessage) {
+      const ids = this.parseOwnershipCsv(typed.unlockedAbilityIdsCsv);
+      this.ownedAbilityIds = new Set<number>(ids);
+      this.pendingOwnedAbilityIds = ids;
       return true;
     }
 
@@ -73,18 +92,25 @@ export class AbilityStateStore {
   }
 
   public consumeAbilityEvents(): AbilityEventBatch | null {
-    if (this.pendingAbilityDefinitions.size === 0 && this.pendingLoadoutState === null) {
+    if (
+      this.pendingAbilityDefinitions.size === 0 &&
+      this.pendingAbilityState === null &&
+      this.pendingOwnedAbilityIds === null
+    ) {
       return null;
     }
 
     const definitions = Array.from(this.pendingAbilityDefinitions.values()).sort((a, b) => a.id - b.id);
-    const loadout = this.pendingLoadoutState;
+    const abilityState = this.pendingAbilityState;
+    const ownedAbilityIds = this.pendingOwnedAbilityIds ? this.pendingOwnedAbilityIds.slice() : null;
     this.pendingAbilityDefinitions.clear();
-    this.pendingLoadoutState = null;
+    this.pendingAbilityState = null;
+    this.pendingOwnedAbilityIds = null;
 
     return {
       definitions,
-      loadout
+      abilityState,
+      ownedAbilityIds
     };
   }
 
@@ -105,6 +131,10 @@ export class AbilityStateStore {
     return this.abilityDefinitions.get(abilityId) ?? null;
   }
 
+  public getOwnedAbilityIds(): number[] {
+    return Array.from(this.ownedAbilityIds.values()).sort((a, b) => a - b);
+  }
+
   private toAbilityDefinition(message: AbilityDefinitionMessage): AbilityDefinition | null {
     const category = abilityCategoryFromWireValue(message.category);
     if (!category) {
@@ -118,6 +148,8 @@ export class AbilityStateStore {
       control: this.clampUnsignedInt(message.pointsControl, 255)
     };
     const attributes = decodeAbilityAttributeMask(this.clampUnsignedInt(message.attributeMask, 0xffff));
+    const creatorCategory = abilityCategoryFromWireValue(message.category);
+    const creatorType = creatorCategory ? abilityCategoryToCreatorType(creatorCategory) : null;
     const hasProjectile =
       category === "projectile" &&
       this.clampUnsignedInt(message.kind, 0xff) > 0 &&
@@ -139,6 +171,19 @@ export class AbilityStateStore {
       category,
       points,
       attributes,
+      creator: creatorType
+        ? {
+            type: creatorType,
+            tier: this.clampUnsignedInt(message.creatorTier, 255),
+            coreExampleStat: this.clampUnsignedInt(message.creatorCoreExampleStat, 255),
+            exampleUpsideEnabled:
+              (this.clampUnsignedInt(message.creatorFlags, 0xff) & (1 << 0)) !== 0 ||
+              attributes.includes(ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY),
+            exampleDownsideEnabled:
+              (this.clampUnsignedInt(message.creatorFlags, 0xff) & (1 << 1)) !== 0 ||
+              attributes.includes(ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY)
+          }
+        : undefined,
       projectile: hasProjectile
         ? {
             kind: this.clampUnsignedInt(message.kind, 0xff),
@@ -163,15 +208,21 @@ export class AbilityStateStore {
     };
   }
 
-  private toLoadoutState(message: LoadoutStateMessage): LoadoutState {
+  private toAbilityState(message: AbilityStateMessage): AbilityState {
     return {
-      selectedHotbarSlot: clampHotbarSlotIndex(message.selectedHotbarSlot),
-      abilityIds: [
+      primaryMouseSlot: clampHotbarSlotIndex(message.primaryMouseSlot ?? DEFAULT_PRIMARY_MOUSE_SLOT),
+      secondaryMouseSlot: clampHotbarSlotIndex(message.secondaryMouseSlot ?? DEFAULT_SECONDARY_MOUSE_SLOT),
+      hotbarAbilityIds: [
         message.slot0AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[0],
         message.slot1AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[1],
         message.slot2AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[2],
         message.slot3AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[3],
-        message.slot4AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[4]
+        message.slot4AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[4],
+        message.slot5AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[5],
+        message.slot6AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[6],
+        message.slot7AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[7],
+        message.slot8AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[8],
+        message.slot9AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[9]
       ]
     };
   }
@@ -182,5 +233,30 @@ export class AbilityStateStore {
     }
     const integer = Math.floor(raw);
     return Math.max(0, Math.min(max, integer));
+  }
+
+  private parseOwnershipCsv(csv: unknown): number[] {
+    if (typeof csv !== "string" || csv.length === 0) {
+      return [];
+    }
+    const ids: number[] = [];
+    const seen = new Set<number>();
+    for (const part of csv.split(",")) {
+      if (!part) {
+        continue;
+      }
+      const parsed = Number.parseInt(part, 10);
+      if (!Number.isFinite(parsed)) {
+        continue;
+      }
+      const normalized = this.clampUnsignedInt(parsed, 0xffff);
+      if (normalized <= 0 || seen.has(normalized)) {
+        continue;
+      }
+      ids.push(normalized);
+      seen.add(normalized);
+    }
+    ids.sort((a, b) => a - b);
+    return ids;
   }
 }

@@ -4,7 +4,10 @@ const ACCESS_KEY_FRAGMENT_PARAM = "k";
 const ACCESS_KEY_SESSION_PREFIX = "vibe_access_key_session:";
 const ACCESS_KEY_BACKUP_PREFIX = "vibe_access_key_backup:";
 
-export function resolveAccessKey(serverUrl: string): { key: string; source: "fragment" | "storage" | "generated" } {
+export function resolveAccessKey(serverUrl: string): {
+  key: string;
+  source: "fragment" | "storage" | "none";
+} {
   const fragmentKey = readAccessKeyFromFragment();
   if (isValidAccessKey(fragmentKey)) {
     storeAccessKey(serverUrl, fragmentKey);
@@ -15,10 +18,7 @@ export function resolveAccessKey(serverUrl: string): { key: string; source: "fra
   if (isValidAccessKey(stored)) {
     return { key: stored, source: "storage" };
   }
-
-  const generated = generateAccessKey();
-  storeAccessKey(serverUrl, generated);
-  return { key: generated, source: "generated" };
+  return { key: "", source: "none" };
 }
 
 export function readAccessKeyFromFragment(): string | null {

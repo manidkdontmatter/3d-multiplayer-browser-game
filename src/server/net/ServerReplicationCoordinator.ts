@@ -1,10 +1,12 @@
+// Bridges simulation state changes into nengi replication entities and server messages.
 import type { AbilityDefinition } from "../../shared/index";
+import type { AbilityCreatorSessionSnapshot } from "../../shared/index";
 import { NType } from "../../shared/netcode";
 import { NetReplicationBridge, type ReplicatedSnapshot } from "../netcode/NetReplicationBridge";
 import {
   ReplicationMessagingSystem,
+  type AbilityStateSnapshot,
   type InputAckStateSnapshot,
-  type LoadoutStateSnapshot,
   type ReplicationPlayer,
   type ReplicationUser
 } from "../netcode/ReplicationMessagingSystem";
@@ -88,12 +90,24 @@ export class ServerReplicationCoordinator<
     this.replicationMessaging.queueInputAckFromState(userId, state);
   }
 
-  public sendInitialAbilityStateFromSnapshot(user: TUser, snapshot: LoadoutStateSnapshot): void {
+  public sendInitialAbilityStateFromSnapshot(user: TUser, snapshot: AbilityStateSnapshot): void {
     this.replicationMessaging.sendInitialAbilityStateFromSnapshot(user, snapshot);
   }
 
-  public queueLoadoutStateMessageFromSnapshot(user: TUser, snapshot: LoadoutStateSnapshot): void {
-    this.replicationMessaging.queueLoadoutStateMessageFromSnapshot(user, snapshot);
+  public queueAbilityStateMessageFromSnapshot(user: TUser, snapshot: AbilityStateSnapshot): void {
+    this.replicationMessaging.queueAbilityStateMessageFromSnapshot(user, snapshot);
+  }
+
+  public queueAbilityOwnershipMessage(user: TUser, unlockedAbilityIds: ReadonlyArray<number>): void {
+    this.replicationMessaging.queueAbilityOwnershipMessage(user, unlockedAbilityIds);
+  }
+
+  public queueAbilityDefinitionMessage(user: TUser, ability: AbilityDefinition): void {
+    this.replicationMessaging.queueAbilityDefinitionMessage(user, ability);
+  }
+
+  public queueAbilityCreatorStateMessage(user: TUser, snapshot: AbilityCreatorSessionSnapshot): void {
+    this.replicationMessaging.queueAbilityCreatorStateMessage(user, snapshot);
   }
 
   public broadcastAbilityUseMessage(player: TPlayer, ability: AbilityDefinition): void {

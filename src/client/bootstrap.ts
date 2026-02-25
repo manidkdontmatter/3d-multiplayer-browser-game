@@ -3,6 +3,7 @@ import { preloadAssets } from "./assets/assetLoader";
 import { GameClientApp } from "./runtime/GameClientApp";
 import type { ClientCreatePhase } from "./runtime/GameClientApp";
 import { BootOverlay } from "./ui/BootOverlay";
+import { TooltipSystem } from "./ui/TooltipSystem";
 
 const ASSET_PROGRESS_START = 0.05;
 const ASSET_PROGRESS_END = 0.74;
@@ -17,6 +18,7 @@ export async function bootstrapClient(): Promise<void> {
 
   const overlay = BootOverlay.fromDocument(document);
   const status = document.getElementById("status");
+  TooltipSystem.install(document);
 
   overlay.setStage("Preparing startup");
   overlay.setDetail("Validating runtime and preload plan...");

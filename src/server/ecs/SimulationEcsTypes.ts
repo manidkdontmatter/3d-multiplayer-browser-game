@@ -1,3 +1,4 @@
+// Type contracts for simulation ECS objects and component layout.
 import type RAPIER from "@dimforge/rapier3d-compat";
 
 export type SimObject = {
@@ -17,7 +18,9 @@ export type PlayerObject = SimObject & {
   lastProcessedSequence: number;
   lastPrimaryFireAtSeconds: number;
   primaryHeld: boolean;
-  activeHotbarSlot: number;
+  secondaryHeld: boolean;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
   hotbarAbilityIds: number[];
   unlockedAbilityIds: Set<number>;
   body: RAPIER.RigidBody;
@@ -72,6 +75,9 @@ export type WorldWithComponents = {
     LastProcessedSequence: { value: number[] };
     LastPrimaryFireAtSeconds: { value: number[] };
     PrimaryHeld: { value: number[] };
+    SecondaryHeld: { value: number[] };
+    PrimaryMouseSlot: { value: number[] };
+    SecondaryMouseSlot: { value: number[] };
     ProjectileOwnerNid: { value: number[] };
     ProjectileKind: { value: number[] };
     ProjectileRadius: { value: number[] };
@@ -85,13 +91,17 @@ export type WorldWithComponents = {
     ProjectileRemainingPierces: { value: number[] };
     ProjectileDespawnOnDamageableHit: { value: number[] };
     ProjectileDespawnOnWorldHit: { value: number[] };
-    ActiveHotbarSlot: { value: number[] };
     Hotbar: {
       slot0: number[];
       slot1: number[];
       slot2: number[];
       slot3: number[];
       slot4: number[];
+      slot5: number[];
+      slot6: number[];
+      slot7: number[];
+      slot8: number[];
+      slot9: number[];
     };
     UnlockedAbilityCsv: { value: string[] };
     ReplicatedTag: number[];

@@ -1,3 +1,4 @@
+// Handles player connect/disconnect flow and runtime entity spawn/teardown wiring.
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { PlayerSnapshot } from "../persistence/PersistenceService";
 
@@ -13,7 +14,14 @@ export interface LifecycleUser {
   id: number;
   queueMessage: (message: unknown) => void;
   accountId?: number;
-  view?: { x: number; y: number; z: number };
+  view?: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  };
 }
 
 export interface LifecyclePlayer {
@@ -34,11 +42,13 @@ export interface LifecyclePlayer {
   groundedPlatformPid: number | null;
   health: number;
   maxHealth: number;
-  activeHotbarSlot: number;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
   hotbarAbilityIds: number[];
   lastPrimaryFireAtSeconds: number;
   lastProcessedSequence: number;
   primaryHeld: boolean;
+  secondaryHeld: boolean;
   unlockedAbilityIds: Set<number>;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
@@ -67,6 +77,10 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly playerCapsuleRadius: number;
   readonly maxPlayerHealth: number;
   readonly defaultUnlockedAbilityIds: readonly number[];
+  readonly resolveInitialUnlockedAbilityIds: (
+    accountId: number,
+    defaultUnlockedAbilityIds: readonly number[]
+  ) => number[];
   readonly sanitizeHotbarSlot: (rawSlot: unknown, fallbackSlot: number) => number;
   readonly createInitialHotbar: (savedHotbar?: number[]) => number[];
   readonly clampHealth: (value: number) => number;
@@ -81,7 +95,8 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
     body: RAPIER.RigidBody;
     collider: RAPIER.Collider;
     health: number;
-    activeHotbarSlot: number;
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
     unlockedAbilityIds: Set<number>;
   }) => TPlayer;
@@ -141,9 +156,15 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       body,
       collider,
       health: this.options.clampHealth(loaded?.health ?? this.options.maxPlayerHealth),
-      activeHotbarSlot: this.options.sanitizeHotbarSlot(loaded?.activeHotbarSlot ?? 0, 0),
+      primaryMouseSlot: this.options.sanitizeHotbarSlot(loaded?.primaryMouseSlot ?? 0, 0),
+      secondaryMouseSlot: this.options.sanitizeHotbarSlot(loaded?.secondaryMouseSlot ?? 1, 1),
       hotbarAbilityIds: this.options.createInitialHotbar(loaded?.hotbarAbilityIds),
-      unlockedAbilityIds: new Set<number>(this.options.defaultUnlockedAbilityIds)
+      unlockedAbilityIds: new Set<number>(
+        this.options.resolveInitialUnlockedAbilityIds(
+          accountId,
+          this.options.defaultUnlockedAbilityIds
+        )
+      )
     });
 
     this.options.ensurePunchAssigned(player);

@@ -1,0 +1,33 @@
+{
+  "generatedAt": "2026-02-24T03:09:19.772Z",
+  "config": {
+    "clients": 10,
+    "gridRows": 3,
+    "warmupSeconds": 1,
+    "durationSeconds": 2,
+    "connectStaggerMs": 10,
+    "connectTimeoutMs": 30000,
+    "connectSettleMs": 900,
+    "serverPort": 9300,
+    "gridSpacing": 72.53333333333333,
+    "gridColumns": 4,
+    "mode": "benchmark"
+  },
+  "result": {
+    "clients": 10,
+    "connected": 10,
+    "failed": 0,
+    "connectTimeSeconds": 9.278,
+    "meanTickMs": 33.28,
+    "p95TickMs": 46.499,
+    "maxTickMs": 48.145,
+    "stddevTickMs": 4.927,
+    "achievedTps": 30.048,
+    "targetTps": 30,
+    "p95AbsErrorMs": 13.165,
+    "samples": 59,
+    "rssMb": 81.723,
+    "heapUsedMb": 26.711,
+    "pass": true
+  }
+}

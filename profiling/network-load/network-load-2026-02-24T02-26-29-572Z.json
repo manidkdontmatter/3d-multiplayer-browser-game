@@ -1,0 +1,56 @@
+{
+  "generatedAt": "2026-02-24T02:26:29.569Z",
+  "config": {
+    "scenarios": [
+      2,
+      4
+    ],
+    "warmupSeconds": 2,
+    "durationSeconds": 4,
+    "connectStaggerMs": 10,
+    "connectTimeoutMs": 30000,
+    "serverPortBase": 9300
+  },
+  "results": [
+    {
+      "clients": 2,
+      "attempted": 2,
+      "connected": 2,
+      "failed": 0,
+      "durationSeconds": 4,
+      "warmupSeconds": 2,
+      "connectTimeSeconds": 6.14,
+      "meanTickMs": 33.351,
+      "p95TickMs": 46.762,
+      "maxTickMs": 47.927,
+      "stddevTickMs": 5.276,
+      "achievedTps": 29.984,
+      "targetTps": 30,
+      "p95AbsErrorMs": 13.428,
+      "samples": 181,
+      "rssMb": 81.602,
+      "heapUsedMb": 18.74,
+      "pass": true
+    },
+    {
+      "clients": 4,
+      "attempted": 4,
+      "connected": 4,
+      "failed": 0,
+      "durationSeconds": 4,
+      "warmupSeconds": 2,
+      "connectTimeSeconds": 6.124,
+      "meanTickMs": 33.344,
+      "p95TickMs": 46.868,
+      "maxTickMs": 48.526,
+      "stddevTickMs": 5.229,
+      "achievedTps": 29.99,
+      "targetTps": 30,
+      "p95AbsErrorMs": 13.534,
+      "samples": 181,
+      "rssMb": 74.082,
+      "heapUsedMb": 21.044,
+      "pass": true
+    }
+  ]
+}

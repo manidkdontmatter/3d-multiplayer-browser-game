@@ -1,0 +1,35 @@
+{
+  "generatedAt": "2026-02-24T02:40:10.748Z",
+  "config": {
+    "scenarios": [
+      1
+    ],
+    "warmupSeconds": 1,
+    "durationSeconds": 1,
+    "connectStaggerMs": 10,
+    "connectTimeoutMs": 30000,
+    "serverPortBase": 9300
+  },
+  "results": [
+    {
+      "clients": 1,
+      "attempted": 1,
+      "connected": 1,
+      "failed": 0,
+      "durationSeconds": 1,
+      "warmupSeconds": 1,
+      "connectTimeSeconds": 0.042,
+      "meanTickMs": 33.38,
+      "p95TickMs": 46.68,
+      "maxTickMs": 47.09,
+      "stddevTickMs": 5.092,
+      "achievedTps": 29.958,
+      "targetTps": 30,
+      "p95AbsErrorMs": 13.346,
+      "samples": 60,
+      "rssMb": 81.098,
+      "heapUsedMb": 18.801,
+      "pass": true
+    }
+  ]
+}
