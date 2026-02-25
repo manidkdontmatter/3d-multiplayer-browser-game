@@ -25,6 +25,17 @@ import { AuthPanel } from "../ui/AuthPanel";
 
 const FIXED_STEP = 1 / 60;
 const LOOK_PITCH_LIMIT = 1.45;
+const TRANSFER_BOOTSTRAP_STORAGE_KEY = "mapTransferBootstrapV1";
+const TRANSFER_BOOTSTRAP_TTL_MS = 15_000;
+
+interface TransferBootstrapPayload {
+  wsUrl: string;
+  joinTicket: string;
+  mapConfig: RuntimeMapConfig;
+  accessKeyScopeUrl: string | null;
+  issuedAtMs: number;
+  expiresAtMs: number;
+}
 
 export type ClientCreatePhase = "physics" | "network" | "ready";
 
@@ -118,6 +129,9 @@ export class GameClientApp {
     onCreatePhase?: (phase: ClientCreatePhase) => void
   ): Promise<GameClientApp> {
     const connectionTarget = await GameClientApp.resolveConnectionTarget();
+    if (connectionTarget.mapConfig) {
+      GameClientApp.installRuntimeMapConfig(connectionTarget.mapConfig);
+    }
     onCreatePhase?.("physics");
     const physics = await LocalPhysicsWorld.create();
     const serverUrl = connectionTarget.serverUrl;
@@ -642,8 +656,19 @@ export class GameClientApp {
   private static async resolveConnectionTarget(): Promise<{
     serverUrl: string;
     joinTicket: string | null;
+    mapConfig?: RuntimeMapConfig;
     accessKeyScopeUrl?: string;
   }> {
+    const transferBootstrap = GameClientApp.consumeTransferBootstrapPayload();
+    if (transferBootstrap) {
+      return {
+        serverUrl: transferBootstrap.wsUrl,
+        joinTicket: transferBootstrap.joinTicket,
+        mapConfig: transferBootstrap.mapConfig,
+        accessKeyScopeUrl: transferBootstrap.accessKeyScopeUrl ?? undefined
+      };
+    }
+
     const params = new URLSearchParams(window.location.search);
     const directServerUrl = params.get("server");
     if (typeof directServerUrl === "string" && directServerUrl.length > 0) {
@@ -720,11 +745,82 @@ export class GameClientApp {
       return;
     }
     this.transferInProgress = true;
+    if (this.stageFullReloadTransfer(transfer)) {
+      return;
+    }
     GameClientApp.installRuntimeMapConfig(transfer.mapConfig);
     void this.network
       .connect(transfer.wsUrl, this.activeAccessKey, { joinTicket: transfer.joinTicket })
       .finally(() => {
         this.transferInProgress = false;
       });
+  }
+
+  private stageFullReloadTransfer(transfer: { wsUrl: string; joinTicket: string; mapConfig: RuntimeMapConfig }): boolean {
+    const now = Date.now();
+    const payload: TransferBootstrapPayload = {
+      wsUrl: transfer.wsUrl,
+      joinTicket: transfer.joinTicket,
+      mapConfig: transfer.mapConfig,
+      accessKeyScopeUrl: this.resolveAccessKeyScopeUrl(),
+      issuedAtMs: now,
+      expiresAtMs: now + TRANSFER_BOOTSTRAP_TTL_MS
+    };
+    try {
+      sessionStorage.setItem(TRANSFER_BOOTSTRAP_STORAGE_KEY, JSON.stringify(payload));
+      window.location.reload();
+      return true;
+    } catch (error) {
+      console.warn("[client] transfer reload staging failed; falling back to in-app reconnect", error);
+      return false;
+    }
+  }
+
+  private resolveAccessKeyScopeUrl(): string | null {
+    const params = new URLSearchParams(window.location.search);
+    const orchestratorUrl = params.get("orchestrator");
+    if (typeof orchestratorUrl === "string" && orchestratorUrl.length > 0) {
+      return orchestratorUrl;
+    }
+    return null;
+  }
+
+  private static consumeTransferBootstrapPayload(): TransferBootstrapPayload | null {
+    try {
+      const raw = sessionStorage.getItem(TRANSFER_BOOTSTRAP_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      sessionStorage.removeItem(TRANSFER_BOOTSTRAP_STORAGE_KEY);
+      const parsed = JSON.parse(raw) as Partial<TransferBootstrapPayload>;
+      if (
+        typeof parsed.wsUrl !== "string" ||
+        parsed.wsUrl.length === 0 ||
+        typeof parsed.joinTicket !== "string" ||
+        parsed.joinTicket.length === 0 ||
+        !parsed.mapConfig ||
+        typeof parsed.mapConfig !== "object"
+      ) {
+        return null;
+      }
+      const now = Date.now();
+      const expiresAtMs = Number(parsed.expiresAtMs);
+      if (!Number.isFinite(expiresAtMs) || expiresAtMs < now) {
+        return null;
+      }
+      return {
+        wsUrl: parsed.wsUrl,
+        joinTicket: parsed.joinTicket,
+        mapConfig: parsed.mapConfig as RuntimeMapConfig,
+        accessKeyScopeUrl:
+          typeof parsed.accessKeyScopeUrl === "string" && parsed.accessKeyScopeUrl.length > 0
+            ? parsed.accessKeyScopeUrl
+            : null,
+        issuedAtMs: Number(parsed.issuedAtMs) || now,
+        expiresAtMs
+      };
+    } catch {
+      return null;
+    }
   }
 }

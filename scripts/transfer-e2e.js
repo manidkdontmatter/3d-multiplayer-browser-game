@@ -84,17 +84,37 @@ function stopProcessTree(child) {
 }
 
 async function readState(page) {
-  return page.evaluate(() => {
-    const text = window.render_game_to_text?.();
-    if (!text) {
-      return null;
-    }
+  try {
+    return await page.evaluate(() => {
+      const text = window.render_game_to_text?.();
+      if (!text) {
+        return null;
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        return null;
+      }
+    });
+  } catch {
+    // During full-page reload transfer, execution context can briefly disappear.
+    return null;
+  }
+}
+
+async function waitForPageReadyAfterTransfer(page, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
     try {
-      return JSON.parse(text);
+      if (!page.isClosed()) {
+        await page.waitForLoadState("domcontentloaded", { timeout: 350 });
+      }
+      return;
     } catch {
-      return null;
+      await delay(80);
     }
-  });
+  }
+  throw new Error("Timed out waiting for page reload after transfer.");
 }
 
 async function waitForConnected(page, timeoutMs) {
@@ -119,6 +139,18 @@ async function waitForMapInstance(page, instanceId, timeoutMs) {
     await delay(120);
   }
   throw new Error(`Timed out waiting for map instance '${instanceId}'.`);
+}
+
+async function waitForLocalPlayerNid(page, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const state = await readState(page);
+    if (state?.mode === "connected" && state?.player && typeof state.player.nid === "number") {
+      return state;
+    }
+    await delay(120);
+  }
+  throw new Error("Timed out waiting for local player identity after transfer.");
 }
 
 async function main() {
@@ -159,10 +191,9 @@ async function main() {
     await page.evaluate(() => {
       window.request_map_transfer?.("map-b");
     });
-    const transferred = await waitForMapInstance(page, "map-b", TRANSFER_TIMEOUT_MS);
-    if (!transferred?.player || typeof transferred.player.nid !== "number") {
-      throw new Error("Transferred state missing player identity.");
-    }
+    await waitForPageReadyAfterTransfer(page, TRANSFER_TIMEOUT_MS);
+    await waitForMapInstance(page, "map-b", TRANSFER_TIMEOUT_MS);
+    const transferred = await waitForLocalPlayerNid(page, TRANSFER_TIMEOUT_MS);
     console.log(`[transfer] PASS from=${initial.map.instanceId} to=${transferred.map.instanceId}`);
   } catch (error) {
     exitCode = 1;

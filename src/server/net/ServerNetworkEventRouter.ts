@@ -168,6 +168,10 @@ export class ServerNetworkEventRouter {
     try {
       user.networkAdapter?.disconnect?.(user, reason);
     } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      if (text.includes("Invalid access of closed uWS.WebSocket/SSLWebSocket")) {
+        return;
+      }
       console.warn("[server] failed to disconnect rejected user", error);
     }
   }
