@@ -27,7 +27,7 @@ type SlotElements = {
 
 type MainUiSectionKey = "character" | "inventory" | "ability-book" | "ability-creator" | "settings";
 
-const ABILITY_DRAG_MIME = "application/x-vibe-ability-id";
+const ABILITY_DRAG_MIME = "application/x-ability-id";
 
 export class AbilityHud {
   private readonly root: HTMLDivElement;

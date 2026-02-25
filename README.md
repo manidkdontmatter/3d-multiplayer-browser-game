@@ -1,4 +1,4 @@
-# Vibe Coded 3D Browser Game
+# Browser Game
 
 Authoritative server/browser-client scaffold using:
 

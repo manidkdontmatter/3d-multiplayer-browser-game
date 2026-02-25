@@ -1,5 +1,5 @@
 {
-  "name": "vibe-coded-3d-browser-game",
+  "name": "browser-game",
   "version": "0.1.0",
   "description": "Authoritative first-person browser game scaffold (Three.js + Rapier + nengi 2.0)",
   "private": true,

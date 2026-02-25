@@ -1,8 +1,9 @@
+// Handles access-key generation, URL-fragment parsing, and browser storage persistence per server URL.
 const ACCESS_KEY_LENGTH = 12;
 const ACCESS_KEY_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const ACCESS_KEY_FRAGMENT_PARAM = "k";
-const ACCESS_KEY_SESSION_PREFIX = "vibe_access_key_session:";
-const ACCESS_KEY_BACKUP_PREFIX = "vibe_access_key_backup:";
+const ACCESS_KEY_SESSION_PREFIX = "access_key_session:";
+const ACCESS_KEY_BACKUP_PREFIX = "access_key_backup:";
 
 export function resolveAccessKey(serverUrl: string): {
   key: string;
