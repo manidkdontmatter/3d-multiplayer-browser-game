@@ -370,7 +370,8 @@ export class GameClientApp {
       perf: {
         fps: this.fps,
         lowFpsFrameCount: this.lowFpsFrameCount
-      }
+      },
+      map: GameClientApp.readRuntimeMapConfig()
     };
 
     if (scope === "minimal") {
@@ -684,6 +685,11 @@ export class GameClientApp {
   private static installRuntimeMapConfig(config: RuntimeMapConfig): void {
     const globalObject = globalThis as unknown as { __runtimeMapConfig?: RuntimeMapConfig };
     globalObject.__runtimeMapConfig = config;
+  }
+
+  private static readRuntimeMapConfig(): RuntimeMapConfig | null {
+    const globalObject = globalThis as unknown as { __runtimeMapConfig?: RuntimeMapConfig };
+    return globalObject.__runtimeMapConfig ?? null;
   }
 
   private static resolveCspEnabled(): boolean {

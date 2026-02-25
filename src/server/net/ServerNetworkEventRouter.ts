@@ -10,6 +10,7 @@ import type { ServerNetworkUser } from "./ServerNetworkTypes";
 export class ServerNetworkEventRouter {
   private readonly commandRouter = new ServerCommandRouter<ServerNetworkUser>();
   private nextGuestAccountId = GUEST_ACCOUNT_ID_BASE;
+  private readonly transferDisconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   public constructor(
     private readonly networkHost: ServerNetworkHost,
@@ -21,7 +22,10 @@ export class ServerNetworkEventRouter {
     this.networkHost.drainQueue({
       onUserConnected: (user, payload) => this.handleUserConnected(user, payload),
       onCommandSet: (user, commands) => this.handleCommandSet(user, commands),
-      onUserDisconnected: (user) => this.simulation.removeUser(user)
+      onUserDisconnected: (user) => {
+        this.clearTransferDisconnectTimer(user.id);
+        this.simulation.removeUser(user);
+      }
     });
   }
 
@@ -124,6 +128,7 @@ export class ServerNetworkEventRouter {
       groundHalfThickness: transfer.mapConfig.groundHalfThickness,
       cubeCount: transfer.mapConfig.cubeCount
     });
+    this.scheduleTransferDisconnect(user, targetMapInstanceId);
   }
 
   private normalizePlayerSnapshot(raw: unknown, fallbackAccountId: number): PlayerSnapshot | null {
@@ -165,5 +170,26 @@ export class ServerNetworkEventRouter {
     } catch (error) {
       console.warn("[server] failed to disconnect rejected user", error);
     }
+  }
+
+  private scheduleTransferDisconnect(user: ServerNetworkUser, targetMapInstanceId: string): void {
+    this.clearTransferDisconnectTimer(user.id);
+    const timer = setTimeout(() => {
+      this.clearTransferDisconnectTimer(user.id);
+      this.disconnectUser(user, {
+        code: "map_transfer",
+        toMapInstanceId: targetMapInstanceId
+      });
+    }, 200);
+    this.transferDisconnectTimers.set(user.id, timer);
+  }
+
+  private clearTransferDisconnectTimer(userId: number): void {
+    const timer = this.transferDisconnectTimers.get(userId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.transferDisconnectTimers.delete(userId);
   }
 }

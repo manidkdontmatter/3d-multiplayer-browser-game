@@ -268,6 +268,7 @@ export class NetworkClient {
       ntype: NType.MapTransferCommand,
       targetMapInstanceId: normalized
     } satisfies MapTransferCommand);
+    this.transport.flush();
   }
 
   public consumeAbilityEvents(): AbilityEventBatch | null {

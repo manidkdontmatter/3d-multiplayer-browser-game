@@ -33,6 +33,7 @@ export class NetTransportClient {
     options?: { joinTicket?: string | null }
   ): Promise<void> {
     try {
+      this.disconnectActiveSocket("map-transfer-reconnect");
       const handshake: { authVersion: number; authKey?: string; joinTicket?: string } = { authVersion: 1 };
       if (typeof authKey === "string" && authKey.length > 0) {
         handshake.authKey = authKey;
@@ -86,5 +87,21 @@ export class NetTransportClient {
   public getLatencyMs(): number {
     const rawLatency = (this.client.network as { latency?: unknown }).latency;
     return typeof rawLatency === "number" && Number.isFinite(rawLatency) ? rawLatency : 0;
+  }
+
+  private disconnectActiveSocket(reason: string): void {
+    const adapter = this.client.adapter as { socket?: WebSocket | null } | undefined;
+    const socket = adapter?.socket;
+    if (!socket) {
+      return;
+    }
+    if (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING) {
+      return;
+    }
+    try {
+      socket.close(1000, reason);
+    } catch {
+      // Best-effort reconnect handoff.
+    }
   }
 }

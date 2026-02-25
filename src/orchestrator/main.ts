@@ -34,6 +34,7 @@ const JOIN_TICKET_TTL_MS = Number(process.env.ORCH_JOIN_TICKET_TTL_MS ?? 10_000)
 const DEFAULT_MAP_ID = process.env.ORCH_DEFAULT_MAP_ID ?? "sandbox-alpha";
 const MAP_A_PORT = Number(process.env.MAP_A_PORT ?? 9001);
 const MAP_B_PORT = Number(process.env.MAP_B_PORT ?? 9002);
+const ORCH_PERSIST_FLUSH_MS = Math.max(100, Math.floor(Number(process.env.ORCH_PERSIST_FLUSH_MS ?? 5000)));
 const persistence = new PersistenceService(process.env.ORCH_DATA_PATH ?? "./data/game.sqlite");
 let nextGuestAccountId = GUEST_ACCOUNT_ID_BASE;
 
@@ -65,9 +66,22 @@ const joinTickets = new Map<string, JoinTicketRecord>();
 const mapReady = new Map<string, { wsUrl: string; mapConfig: RuntimeMapConfig; pid: number; atMs: number }>();
 const orchestratorBaseUrl = `http://localhost:${ORCH_PORT}`;
 const supervisor = new MapProcessSupervisor(orchestratorBaseUrl, INTERNAL_RPC_SECRET);
+const persistenceQueue = new Map<number, PersistSnapshotRequest>();
+const persistenceMetrics = {
+  enqueued: 0,
+  flushed: 0,
+  flushErrors: 0,
+  flushBatches: 0,
+  maxQueueSize: 0,
+  lastFlushAtMs: 0,
+  lastFlushDurationMs: 0
+};
 
 function bootstrap(): void {
   supervisor.start(mapSpecs);
+  const flushTimer = setInterval(() => {
+    void flushPersistenceQueue();
+  }, ORCH_PERSIST_FLUSH_MS);
   const server = createServer(async (req, res) => {
     try {
       await routeRequest(req, res);
@@ -82,6 +96,10 @@ function bootstrap(): void {
 
   const shutdown = (): void => {
     console.log("[orchestrator] shutdown requested");
+    clearInterval(flushTimer);
+    void flushPersistenceQueue().catch((error) => {
+      console.error("[orchestrator] flush on shutdown failed", error);
+    });
     supervisor.stopAll();
     persistence.close();
     server.close(() => process.exit(0));
@@ -106,7 +124,11 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
         instanceId: spec.instanceId,
         wsUrl: `ws://localhost:${spec.wsPort}`,
         ready: mapReady.has(spec.instanceId)
-      }))
+      })),
+      persistence: {
+        queueSize: persistenceQueue.size,
+        ...persistenceMetrics
+      }
     });
     return;
   }
@@ -168,12 +190,13 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       sendJson(res, 404, { ok: false, error: "target_map_not_ready" } satisfies TransferResponse);
       return;
     }
-    if (payload.playerSnapshot) {
+    const normalizedAccountId = Math.max(1, Math.floor(payload.accountId));
+    if (payload.playerSnapshot && normalizedAccountId < GUEST_ACCOUNT_ID_BASE) {
       persistence.savePlayerSnapshot(toPlayerSnapshot(payload.playerSnapshot));
     }
     const ticket = issueJoinTicket(
       typeof payload.authKey === "string" && payload.authKey.length > 0 ? payload.authKey : null,
-      Math.max(1, Math.floor(payload.accountId)),
+      normalizedAccountId,
       payload.playerSnapshot ? toPlayerSnapshot(payload.playerSnapshot) : null,
       payload.toMapInstanceId
     );
@@ -192,13 +215,9 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       return;
     }
     const payload = (await readJsonBody(req)) as PersistSnapshotRequest;
-    const snapshot = toPlayerSnapshot(payload.snapshot);
-    if (payload.saveCharacter && payload.saveAbilityState) {
-      persistence.savePlayerSnapshot(snapshot);
-    } else if (payload.saveCharacter) {
-      persistence.saveCharacterSnapshot(snapshot);
-    } else if (payload.saveAbilityState) {
-      persistence.saveAbilityStateSnapshot(snapshot);
+    enqueuePersistSnapshot(payload);
+    if (persistenceQueue.size >= 512) {
+      await flushPersistenceQueue();
     }
     sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
     return;
@@ -355,6 +374,65 @@ function toPlayerSnapshot(snapshot: PersistedPlayerSnapshot): PlayerSnapshot {
         )
       : []
   };
+}
+
+function enqueuePersistSnapshot(payload: PersistSnapshotRequest): void {
+  const accountId = Math.max(1, Math.floor(payload.accountId));
+  if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+    return;
+  }
+  const existing = persistenceQueue.get(accountId);
+  if (existing) {
+    persistenceQueue.set(accountId, {
+      accountId,
+      snapshot: payload.snapshot,
+      saveCharacter: existing.saveCharacter || payload.saveCharacter,
+      saveAbilityState: existing.saveAbilityState || payload.saveAbilityState
+    });
+  } else {
+    persistenceQueue.set(accountId, {
+      accountId,
+      snapshot: payload.snapshot,
+      saveCharacter: payload.saveCharacter,
+      saveAbilityState: payload.saveAbilityState
+    });
+  }
+  persistenceMetrics.enqueued += 1;
+  if (persistenceQueue.size > persistenceMetrics.maxQueueSize) {
+    persistenceMetrics.maxQueueSize = persistenceQueue.size;
+  }
+}
+
+async function flushPersistenceQueue(): Promise<void> {
+  if (persistenceQueue.size === 0) {
+    return;
+  }
+  const start = Date.now();
+  const entries = [...persistenceQueue.values()];
+  persistenceQueue.clear();
+  persistenceMetrics.flushBatches += 1;
+  try {
+    for (const payload of entries) {
+      const snapshot = toPlayerSnapshot(payload.snapshot);
+      if (payload.saveCharacter && payload.saveAbilityState) {
+        persistence.savePlayerSnapshot(snapshot);
+      } else if (payload.saveCharacter) {
+        persistence.saveCharacterSnapshot(snapshot);
+      } else if (payload.saveAbilityState) {
+        persistence.saveAbilityStateSnapshot(snapshot);
+      }
+    }
+    persistenceMetrics.flushed += entries.length;
+  } catch (error) {
+    persistenceMetrics.flushErrors += 1;
+    for (const payload of entries) {
+      enqueuePersistSnapshot(payload);
+    }
+    throw error;
+  } finally {
+    persistenceMetrics.lastFlushAtMs = Date.now();
+    persistenceMetrics.lastFlushDurationMs = Date.now() - start;
+  }
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
