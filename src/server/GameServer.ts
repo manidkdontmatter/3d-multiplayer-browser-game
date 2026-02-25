@@ -196,6 +196,14 @@ export class GameServer {
     this.lastLiveMetricsSampleCount = 0;
   }
 
+  public getRuntimeStats(): {
+    onlinePlayers: number;
+    activeProjectiles: number;
+    pendingOfflineSnapshots: number;
+  } {
+    return this.simulation.getRuntimeStats();
+  }
+
   private tick(): void {
     const tickStart = performance.now();
     const now = performance.now();

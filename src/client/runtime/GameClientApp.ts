@@ -149,6 +149,13 @@ export class GameClientApp {
     );
     onCreatePhase?.("network");
     await app.network.connect(serverUrl, accessKey, { joinTicket: app.joinTicket });
+    if (app.network.getConnectionState() !== "connected" && app.joinTicket && connectionTarget.accessKeyScopeUrl) {
+      const fallback = await GameClientApp.bootstrapFromOrchestrator(connectionTarget.accessKeyScopeUrl);
+      if (fallback) {
+        GameClientApp.installRuntimeMapConfig(fallback.mapConfig);
+        await app.network.connect(fallback.wsUrl, accessKey, { joinTicket: fallback.joinTicket });
+      }
+    }
     onCreatePhase?.("ready");
     app.updateStatus();
     app.registerTestingHooks();
@@ -680,6 +687,24 @@ export class GameClientApp {
     }
 
     const orchestratorUrl = params.get("orchestrator") ?? "http://localhost:9000";
+    const payload = await GameClientApp.bootstrapFromOrchestrator(orchestratorUrl);
+    if (!payload) {
+      throw new Error("Bootstrap response malformed.");
+    }
+
+    return {
+      serverUrl: payload.wsUrl,
+      joinTicket: payload.joinTicket,
+      mapConfig: payload.mapConfig,
+      accessKeyScopeUrl: orchestratorUrl
+    };
+  }
+
+  private static async bootstrapFromOrchestrator(orchestratorUrl: string): Promise<{
+    wsUrl: string;
+    joinTicket: string;
+    mapConfig: RuntimeMapConfig;
+  } | null> {
     const accessKey = resolveAccessKey(orchestratorUrl).key;
     const authKey = accessKey.length > 0 ? accessKey : null;
     const response = await fetch(`${orchestratorUrl}/bootstrap`, {
@@ -690,20 +715,21 @@ export class GameClientApp {
       } satisfies BootstrapRequest)
     });
     if (!response.ok) {
-      throw new Error(`Bootstrap failed with status ${response.status}`);
+      return null;
     }
     const payload = (await response.json()) as BootstrapResponse;
-    if (!payload.ok || typeof payload.wsUrl !== "string" || typeof payload.joinTicket !== "string") {
-      throw new Error(payload.error ?? "Bootstrap response malformed.");
+    if (
+      !payload.ok ||
+      typeof payload.wsUrl !== "string" ||
+      typeof payload.joinTicket !== "string" ||
+      !payload.mapConfig
+    ) {
+      return null;
     }
-    if (payload.mapConfig) {
-      GameClientApp.installRuntimeMapConfig(payload.mapConfig);
-    }
-
     return {
-      serverUrl: payload.wsUrl,
+      wsUrl: payload.wsUrl,
       joinTicket: payload.joinTicket,
-      accessKeyScopeUrl: orchestratorUrl
+      mapConfig: payload.mapConfig
     };
   }
 

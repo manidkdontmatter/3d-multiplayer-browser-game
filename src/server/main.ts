@@ -39,9 +39,13 @@ async function bootstrapServer(): Promise<void> {
   const runtimePort = Number(process.env.SERVER_PORT ?? SERVER_PORT);
   await server.start(runtimePort);
   await notifyOrchestratorMapReady(runtimePort);
+  const heartbeatTimer = installOrchestratorHeartbeat(runtimePort, server);
 
   const shutdown = (): void => {
     console.log("[server] shutdown requested");
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
     server?.stop();
     process.exit(0);
   };
@@ -86,6 +90,43 @@ async function notifyOrchestratorMapReady(runtimePort: number): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed map-ready registration (${response.status})`);
   }
+}
+
+function installOrchestratorHeartbeat(runtimePort: number, server: GameServer): NodeJS.Timeout | null {
+  const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
+  const secret = process.env.ORCH_INTERNAL_RPC_SECRET;
+  const instanceId = process.env.MAP_INSTANCE_ID;
+  if (!orchestratorUrl || !secret || !instanceId) {
+    return null;
+  }
+  const intervalMs = Math.max(500, Math.floor(Number(process.env.MAP_HEARTBEAT_MS ?? 5000)));
+  const startedAtMs = Date.now();
+  const sendHeartbeat = async (): Promise<void> => {
+    try {
+      const runtime = server.getRuntimeStats();
+      await fetch(`${orchestratorUrl}/orch/map-heartbeat`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-orch-secret": secret
+        },
+        body: JSON.stringify({
+          instanceId,
+          pid: process.pid,
+          onlinePlayers: runtime.onlinePlayers,
+          uptimeSeconds: Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)),
+          atMs: Date.now()
+        })
+      });
+    } catch (error) {
+      console.warn("[server] map-heartbeat failed", error);
+    }
+  };
+  const timer = setInterval(() => {
+    void sendHeartbeat();
+  }, intervalMs);
+  void sendHeartbeat();
+  return timer;
 }
 
 void bootstrapServer().catch((error) => {

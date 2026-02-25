@@ -14,6 +14,7 @@ export type ServerNetworkUser = {
   };
   accountId?: number;
   authKey?: string | null;
+  pendingTransferId?: string | null;
   view?: {
     x: number;
     y: number;

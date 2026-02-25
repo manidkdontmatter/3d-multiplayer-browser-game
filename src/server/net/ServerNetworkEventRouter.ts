@@ -24,6 +24,10 @@ export class ServerNetworkEventRouter {
       onCommandSet: (user, commands) => this.handleCommandSet(user, commands),
       onUserDisconnected: (user) => {
         this.clearTransferDisconnectTimer(user.id);
+        if (typeof user.pendingTransferId === "string" && user.pendingTransferId.length > 0) {
+          void this.reportTransferResult(user.pendingTransferId, "source_released");
+          user.pendingTransferId = null;
+        }
         this.simulation.removeUser(user);
       }
     });
@@ -117,6 +121,9 @@ export class ServerNetworkEventRouter {
     if (!transfer.ok || !transfer.wsUrl || !transfer.joinTicket || !transfer.mapConfig) {
       return;
     }
+    if (typeof transfer.transferId === "string" && transfer.transferId.length > 0) {
+      user.pendingTransferId = transfer.transferId;
+    }
     user.queueMessage({
       ntype: NType.MapTransferMessage,
       wsUrl: transfer.wsUrl,
@@ -195,5 +202,33 @@ export class ServerNetworkEventRouter {
     }
     clearTimeout(timer);
     this.transferDisconnectTimers.delete(userId);
+  }
+
+  private async reportTransferResult(
+    transferId: string,
+    stage: "source_released" | "aborted" | "completed",
+    reason?: string
+  ): Promise<void> {
+    const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
+    const orchestratorSecret = process.env.ORCH_INTERNAL_RPC_SECRET;
+    if (!orchestratorUrl || !orchestratorSecret) {
+      return;
+    }
+    try {
+      await fetch(`${orchestratorUrl}/orch/transfer-result`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-orch-secret": orchestratorSecret
+        },
+        body: JSON.stringify({
+          transferId,
+          stage,
+          ...(typeof reason === "string" ? { reason } : {})
+        })
+      });
+    } catch (error) {
+      console.warn("[server] transfer-result report failed", error);
+    }
   }
 }

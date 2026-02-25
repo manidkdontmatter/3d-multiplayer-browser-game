@@ -52,6 +52,14 @@ export class MapProcessSupervisor {
     }
   }
 
+  public startInstance(spec: MapProcessSpec): boolean {
+    this.stopping = false;
+    if (this.managed.has(spec.instanceId)) {
+      return true;
+    }
+    return this.spawnMapProcess(spec);
+  }
+
   public stopAll(): void {
     this.stopping = true;
     for (const managed of this.managed.values()) {
@@ -77,14 +85,19 @@ export class MapProcessSupervisor {
     return true;
   }
 
-  private spawnMapProcess(spec: MapProcessSpec): void {
+  public getQuarantineUntil(instanceId: string): number | null {
+    const until = this.quarantineUntilByInstance.get(instanceId);
+    return typeof until === "number" ? until : null;
+  }
+
+  private spawnMapProcess(spec: MapProcessSpec): boolean {
     const now = Date.now();
     const quarantineUntil = this.quarantineUntilByInstance.get(spec.instanceId) ?? 0;
     if (quarantineUntil > now) {
       console.warn(
         `[orchestrator] map instance quarantined instance=${spec.instanceId} until=${new Date(quarantineUntil).toISOString()}`
       );
-      return;
+      return false;
     }
     const repoRoot = process.cwd();
     const entryPath = resolve(repoRoot, "src/server/main.ts");
@@ -133,9 +146,10 @@ export class MapProcessSupervisor {
         if (this.stopping || this.managed.has(spec.instanceId)) {
           return;
         }
-        this.spawnMapProcess(spec);
+        void this.spawnMapProcess(spec);
       }, 500);
     });
+    return true;
   }
 
   private canRestart(instanceId: string): boolean {

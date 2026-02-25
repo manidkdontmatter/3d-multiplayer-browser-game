@@ -5,17 +5,24 @@ import {
   type BootstrapRequest,
   type BootstrapResponse,
   type GenericOrchestratorResponse,
+  type MapHeartbeatRequest,
   type MapRegistrationRequest,
+  type PersistCriticalEventRequest,
   type PersistSnapshotRequest,
   type PersistedPlayerSnapshot,
   type TransferRequest,
+  type TransferResultRequest,
   type TransferResponse,
   type ValidateJoinTicketRequest,
   type ValidateJoinTicketResponse
 } from "../shared/orchestrator";
 import type { RuntimeMapConfig } from "../shared/world";
 import { MapProcessSupervisor, type MapProcessSpec } from "./MapProcessSupervisor";
-import { GUEST_ACCOUNT_ID_BASE, PersistenceService, type PlayerSnapshot } from "../server/persistence/PersistenceService";
+import {
+  GUEST_ACCOUNT_ID_BASE,
+  PersistenceService,
+  type PlayerSnapshot
+} from "../server/persistence/PersistenceService";
 
 interface JoinTicketRecord {
   token: string;
@@ -26,15 +33,34 @@ interface JoinTicketRecord {
   issuedAtMs: number;
   expiresAtMs: number;
   consumedAtMs: number | null;
+  kind: "bootstrap" | "transfer";
+  transferId: string | null;
+}
+
+interface TransferRecord {
+  transferId: string;
+  accountId: number;
+  fromMapInstanceId: string;
+  toMapInstanceId: string;
+  issuedAtMs: number;
+  expiresAtMs: number;
+  sourceReleasedAtMs: number | null;
+  destinationAcceptedAtMs: number | null;
+  completedAtMs: number | null;
+  abortedAtMs: number | null;
+  lastReason: string | null;
 }
 
 const ORCH_PORT = Number(process.env.ORCH_PORT ?? 9000);
 const INTERNAL_RPC_SECRET = process.env.ORCH_INTERNAL_RPC_SECRET ?? randomBytes(24).toString("hex");
 const JOIN_TICKET_TTL_MS = Number(process.env.ORCH_JOIN_TICKET_TTL_MS ?? 10_000);
+const TRANSFER_TOKEN_TTL_MS = Number(process.env.ORCH_TRANSFER_TOKEN_TTL_MS ?? 10_000);
 const ORCH_ENABLE_DEBUG_ENDPOINTS = process.env.ORCH_ENABLE_DEBUG_ENDPOINTS === "1";
 const ORCH_MAP_RESTART_WINDOW_MS = Math.max(1_000, Math.floor(Number(process.env.ORCH_MAP_RESTART_WINDOW_MS ?? 60_000)));
 const ORCH_MAP_RESTART_MAX_IN_WINDOW = Math.max(1, Math.floor(Number(process.env.ORCH_MAP_RESTART_MAX_IN_WINDOW ?? 3)));
 const ORCH_MAP_QUARANTINE_MS = Math.max(1_000, Math.floor(Number(process.env.ORCH_MAP_QUARANTINE_MS ?? 60_000)));
+const ORCH_HEARTBEAT_TIMEOUT_MS = Math.max(1_000, Math.floor(Number(process.env.ORCH_HEARTBEAT_TIMEOUT_MS ?? 15_000)));
+const MAP_DYNAMIC_PORT_BASE = Math.max(1025, Math.floor(Number(process.env.MAP_DYNAMIC_PORT_BASE ?? 9100)));
 const DEFAULT_MAP_ID = process.env.ORCH_DEFAULT_MAP_ID ?? "sandbox-alpha";
 const MAP_A_PORT = Number(process.env.MAP_A_PORT ?? 9001);
 const MAP_B_PORT = Number(process.env.MAP_B_PORT ?? 9002);
@@ -65,9 +91,17 @@ const mapSpecs: MapProcessSpec[] = [
     mapConfig: defaultMapConfig("map-b", 7331)
   }
 ];
+const mapSpecsByInstance = new Map<string, MapProcessSpec>();
+const usedWsPorts = new Set<number>();
+for (const spec of mapSpecs) {
+  mapSpecsByInstance.set(spec.instanceId, spec);
+  usedWsPorts.add(spec.wsPort);
+}
 
 const joinTickets = new Map<string, JoinTicketRecord>();
 const mapReady = new Map<string, { wsUrl: string; mapConfig: RuntimeMapConfig; pid: number; atMs: number }>();
+const mapHeartbeats = new Map<string, { atMs: number; pid: number; onlinePlayers: number; uptimeSeconds: number }>();
+const transferRecords = new Map<string, TransferRecord>();
 const orchestratorBaseUrl = `http://localhost:${ORCH_PORT}`;
 const supervisor = new MapProcessSupervisor(orchestratorBaseUrl, INTERNAL_RPC_SECRET, {
   restartWindowMs: ORCH_MAP_RESTART_WINDOW_MS,
@@ -75,6 +109,7 @@ const supervisor = new MapProcessSupervisor(orchestratorBaseUrl, INTERNAL_RPC_SE
   quarantineMs: ORCH_MAP_QUARANTINE_MS,
   onMapProcessExit: (instanceId) => {
     mapReady.delete(instanceId);
+    mapHeartbeats.delete(instanceId);
   }
 });
 const persistenceQueue = new Map<number, PersistSnapshotRequest>();
@@ -87,11 +122,13 @@ const persistenceMetrics = {
   lastFlushAtMs: 0,
   lastFlushDurationMs: 0
 };
+let nextDynamicWsPort = MAP_DYNAMIC_PORT_BASE;
 
 function bootstrap(): void {
-  supervisor.start(mapSpecs);
+  supervisor.start([...mapSpecsByInstance.values()]);
   const flushTimer = setInterval(() => {
     void flushPersistenceQueue();
+    sweepExpiredTransfers();
   }, ORCH_PERSIST_FLUSH_MS);
   const server = createServer(async (req, res) => {
     try {
@@ -131,12 +168,18 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
   if (method === "GET" && url.pathname === "/health") {
     sendJson(res, 200, {
       ok: true,
-      maps: mapSpecs.map((spec) => ({
+      maps: [...mapSpecsByInstance.values()].map((spec) => ({
         instanceId: spec.instanceId,
         wsUrl: `ws://localhost:${spec.wsPort}`,
         ready: mapReady.has(spec.instanceId),
-        pid: mapReady.get(spec.instanceId)?.pid ?? null
+        healthy: isMapHealthy(spec.instanceId),
+        pid: mapReady.get(spec.instanceId)?.pid ?? null,
+        lastHeartbeatAtMs: mapHeartbeats.get(spec.instanceId)?.atMs ?? null,
+        quarantineUntilMs: supervisor.getQuarantineUntil(spec.instanceId)
       })),
+      transfers: {
+        active: transferRecords.size
+      },
       persistence: {
         queueSize: persistenceQueue.size,
         ...persistenceMetrics
@@ -154,7 +197,10 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     }
     const identity = resolveIdentity(payload.authKey ?? null, req.socket.remoteAddress ?? "unknown");
     const playerSnapshot = loadSnapshot(identity.accountId);
-    const ticket = issueJoinTicket(identity.authKey, identity.accountId, playerSnapshot, selected.instanceId);
+    const ticket = issueJoinTicket(identity.authKey, identity.accountId, playerSnapshot, selected.instanceId, {
+      kind: "bootstrap",
+      transferId: null
+    });
     sendJson(res, 200, {
       ok: true,
       wsUrl: selected.wsUrl,
@@ -175,6 +221,33 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       mapConfig: payload.mapConfig,
       pid: payload.pid,
       atMs: Date.now()
+    });
+    mapHeartbeats.set(payload.instanceId, {
+      atMs: Date.now(),
+      pid: payload.pid,
+      onlinePlayers: 0,
+      uptimeSeconds: 0
+    });
+    sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/orch/map-heartbeat") {
+    if (!isAuthorizedInternalRequest(req)) {
+      sendJson(res, 401, { ok: false, error: "unauthorized" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    const payload = (await readJsonBody(req)) as MapHeartbeatRequest;
+    const instanceId = typeof payload.instanceId === "string" ? payload.instanceId.trim() : "";
+    if (instanceId.length === 0) {
+      sendJson(res, 400, { ok: false, error: "instance_id_required" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    mapHeartbeats.set(instanceId, {
+      atMs: Date.now(),
+      pid: Math.max(0, Math.floor(payload.pid)),
+      onlinePlayers: Math.max(0, Math.floor(payload.onlinePlayers)),
+      uptimeSeconds: Math.max(0, Math.floor(payload.uptimeSeconds))
     });
     sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
     return;
@@ -197,7 +270,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       return;
     }
     const payload = (await readJsonBody(req)) as TransferRequest;
-    const target = mapReady.get(payload.toMapInstanceId);
+    const target = await ensureMapInstanceReady(payload.toMapInstanceId);
     if (!target) {
       sendJson(res, 404, { ok: false, error: "target_map_not_ready" } satisfies TransferResponse);
       return;
@@ -206,14 +279,47 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     if (payload.playerSnapshot && normalizedAccountId < GUEST_ACCOUNT_ID_BASE) {
       persistence.savePlayerSnapshot(toPlayerSnapshot(payload.playerSnapshot));
     }
+    const transferId = randomBytes(16).toString("hex");
+    const issuedAtMs = Date.now();
+    const expiresAtMs = issuedAtMs + Math.max(500, TRANSFER_TOKEN_TTL_MS);
+    transferRecords.set(transferId, {
+      transferId,
+      accountId: normalizedAccountId,
+      fromMapInstanceId: payload.fromMapInstanceId,
+      toMapInstanceId: payload.toMapInstanceId,
+      issuedAtMs,
+      expiresAtMs,
+      sourceReleasedAtMs: null,
+      destinationAcceptedAtMs: null,
+      completedAtMs: null,
+      abortedAtMs: null,
+      lastReason: null
+    });
+    persistCriticalEvent({
+      eventId: `transfer_requested:${transferId}`,
+      instanceId: payload.fromMapInstanceId,
+      accountId: normalizedAccountId,
+      eventType: "map_transfer_requested",
+      eventPayload: {
+        transferId,
+        fromMapInstanceId: payload.fromMapInstanceId,
+        toMapInstanceId: payload.toMapInstanceId
+      },
+      eventAtMs: issuedAtMs
+    });
     const ticket = issueJoinTicket(
       typeof payload.authKey === "string" && payload.authKey.length > 0 ? payload.authKey : null,
       normalizedAccountId,
       payload.playerSnapshot ? toPlayerSnapshot(payload.playerSnapshot) : null,
-      payload.toMapInstanceId
+      payload.toMapInstanceId,
+      {
+        kind: "transfer",
+        transferId
+      }
     );
     sendJson(res, 200, {
       ok: true,
+      transferId,
       wsUrl: target.wsUrl,
       joinTicket: ticket,
       mapConfig: target.mapConfig
@@ -230,6 +336,82 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     enqueuePersistSnapshot(payload);
     if (persistenceQueue.size >= 512) {
       await flushPersistenceQueue();
+    }
+    sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/orch/persist-critical-event") {
+    if (!isAuthorizedInternalRequest(req)) {
+      sendJson(res, 401, { ok: false, error: "unauthorized" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    const payload = (await readJsonBody(req)) as PersistCriticalEventRequest;
+    persistCriticalEvent(payload);
+    sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/orch/transfer-result") {
+    if (!isAuthorizedInternalRequest(req)) {
+      sendJson(res, 401, { ok: false, error: "unauthorized" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    const payload = (await readJsonBody(req)) as TransferResultRequest;
+    const transferId = typeof payload.transferId === "string" ? payload.transferId.trim() : "";
+    if (transferId.length === 0) {
+      sendJson(res, 400, { ok: false, error: "transfer_id_required" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    const record = transferRecords.get(transferId);
+    if (!record) {
+      sendJson(res, 404, { ok: false, error: "transfer_not_found" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    const now = Date.now();
+    if (payload.stage === "source_released") {
+      if (record.sourceReleasedAtMs === null) {
+        record.sourceReleasedAtMs = now;
+        record.lastReason = payload.reason ?? null;
+        persistCriticalEvent({
+          eventId: `transfer_source_released:${transferId}`,
+          instanceId: record.fromMapInstanceId,
+          accountId: record.accountId,
+          eventType: "map_transfer_source_released",
+          eventPayload: { transferId, reason: payload.reason ?? null },
+          eventAtMs: now
+        });
+      }
+      maybeCompleteTransferRecord(record, now);
+      sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    if (payload.stage === "completed") {
+      if (record.completedAtMs === null) {
+        record.completedAtMs = now;
+      }
+      persistCriticalEvent({
+        eventId: `transfer_completed:${transferId}`,
+        instanceId: record.toMapInstanceId,
+        accountId: record.accountId,
+        eventType: "map_transfer_completed",
+        eventPayload: { transferId, reason: payload.reason ?? null },
+        eventAtMs: now
+      });
+      sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    if (record.abortedAtMs === null) {
+      record.abortedAtMs = now;
+      record.lastReason = payload.reason ?? "aborted";
+      persistCriticalEvent({
+        eventId: `transfer_aborted:${transferId}`,
+        instanceId: record.fromMapInstanceId,
+        accountId: record.accountId,
+        eventType: "map_transfer_aborted",
+        eventPayload: { transferId, reason: payload.reason ?? "aborted" },
+        eventAtMs: now
+      });
     }
     sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
     return;
@@ -262,11 +444,12 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
 }
 
 function pickMapForBootstrap(): { instanceId: string; wsUrl: string; mapConfig: RuntimeMapConfig } | null {
-  const preferred = mapSpecs.find((spec) => spec.instanceId === "map-a") ?? mapSpecs[0];
+  const allSpecs = [...mapSpecsByInstance.values()];
+  const preferred = allSpecs.find((spec) => spec.instanceId === "map-a") ?? allSpecs[0];
   if (!preferred) {
     return null;
   }
-  const preferredReady = mapReady.get(preferred.instanceId);
+  const preferredReady = isMapHealthy(preferred.instanceId) ? mapReady.get(preferred.instanceId) : null;
   if (preferredReady) {
     return {
       instanceId: preferred.instanceId,
@@ -274,7 +457,7 @@ function pickMapForBootstrap(): { instanceId: string; wsUrl: string; mapConfig: 
       mapConfig: preferredReady.mapConfig
     };
   }
-  const fallback = mapSpecs.find((spec) => mapReady.has(spec.instanceId));
+  const fallback = allSpecs.find((spec) => isMapHealthy(spec.instanceId));
   if (!fallback) {
     return null;
   }
@@ -287,6 +470,86 @@ function pickMapForBootstrap(): { instanceId: string; wsUrl: string; mapConfig: 
     wsUrl: ready.wsUrl,
     mapConfig: ready.mapConfig
   };
+}
+
+function isMapHealthy(instanceId: string): boolean {
+  const ready = mapReady.get(instanceId);
+  if (!ready) {
+    return false;
+  }
+  const heartbeat = mapHeartbeats.get(instanceId);
+  const basis = heartbeat?.atMs ?? ready.atMs;
+  return Date.now() - basis <= ORCH_HEARTBEAT_TIMEOUT_MS;
+}
+
+async function ensureMapInstanceReady(instanceIdRaw: string): Promise<{ wsUrl: string; mapConfig: RuntimeMapConfig } | null> {
+  const instanceId = instanceIdRaw.trim();
+  if (instanceId.length === 0) {
+    return null;
+  }
+  if (!mapSpecsByInstance.has(instanceId)) {
+    const dynamicSpec: MapProcessSpec = {
+      instanceId,
+      mapId: DEFAULT_MAP_ID,
+      wsPort: allocateDynamicWsPort(),
+      mapConfig: defaultMapConfig(instanceId, deriveSeedFromInstanceId(instanceId))
+    };
+    mapSpecsByInstance.set(instanceId, dynamicSpec);
+    usedWsPorts.add(dynamicSpec.wsPort);
+  }
+  if (!mapReady.has(instanceId)) {
+    const spec = mapSpecsByInstance.get(instanceId);
+    if (!spec) {
+      return null;
+    }
+    const started = supervisor.startInstance(spec);
+    if (!started) {
+      return null;
+    }
+  }
+  const ready = await waitForMapReady(instanceId, 10_000);
+  if (!ready || !isMapHealthy(instanceId)) {
+    return null;
+  }
+  return {
+    wsUrl: ready.wsUrl,
+    mapConfig: ready.mapConfig
+  };
+}
+
+async function waitForMapReady(instanceId: string, timeoutMs: number): Promise<{
+  wsUrl: string;
+  mapConfig: RuntimeMapConfig;
+  pid: number;
+  atMs: number;
+} | null> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const ready = mapReady.get(instanceId);
+    if (ready) {
+      return ready;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 120));
+  }
+  return null;
+}
+
+function allocateDynamicWsPort(): number {
+  while (usedWsPorts.has(nextDynamicWsPort)) {
+    nextDynamicWsPort += 1;
+  }
+  const selected = nextDynamicWsPort;
+  usedWsPorts.add(selected);
+  nextDynamicWsPort += 1;
+  return selected;
+}
+
+function deriveSeedFromInstanceId(instanceId: string): number {
+  let hash = 0;
+  for (let i = 0; i < instanceId.length; i += 1) {
+    hash = Math.imul(hash ^ instanceId.charCodeAt(i), 16777619);
+  }
+  return Math.abs(hash | 0) + 1;
 }
 
 function resolveIdentity(authKey: string | null, remoteIp: string): { authKey: string | null; accountId: number } {
@@ -313,7 +576,8 @@ function issueJoinTicket(
   authKey: string | null,
   accountId: number,
   playerSnapshot: PlayerSnapshot | null,
-  targetInstanceId: string
+  targetInstanceId: string,
+  meta: { kind: "bootstrap" | "transfer"; transferId: string | null }
 ): string {
   const issuedAtMs = Date.now();
   const expiresAtMs = issuedAtMs + Math.max(500, JOIN_TICKET_TTL_MS);
@@ -329,7 +593,9 @@ function issueJoinTicket(
     targetInstanceId,
     issuedAtMs,
     expiresAtMs,
-    consumedAtMs: null
+    consumedAtMs: null,
+    kind: meta.kind,
+    transferId: meta.transferId
   });
   return token;
 }
@@ -348,12 +614,44 @@ function validateJoinTicket(joinTicket: string, mapInstanceId: string): Validate
     return { ok: false, authKey: null, error: "ticket_already_consumed" };
   }
   if (now > ticket.expiresAtMs) {
+    if (ticket.kind === "transfer" && ticket.transferId) {
+      const record = transferRecords.get(ticket.transferId);
+      if (record && record.abortedAtMs === null && record.completedAtMs === null) {
+        record.abortedAtMs = now;
+        record.lastReason = "ticket_expired";
+        persistCriticalEvent({
+          eventId: `transfer_aborted:${record.transferId}`,
+          instanceId: record.fromMapInstanceId,
+          accountId: record.accountId,
+          eventType: "map_transfer_aborted",
+          eventPayload: { transferId: record.transferId, reason: "ticket_expired" },
+          eventAtMs: now
+        });
+      }
+    }
     return { ok: false, authKey: null, error: "ticket_expired" };
   }
   if (ticket.targetInstanceId !== mapInstanceId) {
     return { ok: false, authKey: null, error: "ticket_target_mismatch" };
   }
   ticket.consumedAtMs = now;
+  if (ticket.kind === "transfer" && typeof ticket.transferId === "string" && ticket.transferId.length > 0) {
+    const record = transferRecords.get(ticket.transferId);
+    if (record) {
+      if (record.destinationAcceptedAtMs === null) {
+        record.destinationAcceptedAtMs = now;
+        persistCriticalEvent({
+          eventId: `transfer_destination_accepted:${record.transferId}`,
+          instanceId: mapInstanceId,
+          accountId: record.accountId,
+          eventType: "map_transfer_destination_accepted",
+          eventPayload: { transferId: record.transferId, mapInstanceId },
+          eventAtMs: now
+        });
+      }
+      maybeCompleteTransferRecord(record, now);
+    }
+  }
   return {
     ok: true,
     authKey: ticket.authKey,
@@ -467,6 +765,95 @@ async function flushPersistenceQueue(): Promise<void> {
   } finally {
     persistenceMetrics.lastFlushAtMs = Date.now();
     persistenceMetrics.lastFlushDurationMs = Date.now() - start;
+  }
+}
+
+function maybeCompleteTransferRecord(record: TransferRecord, atMs: number): void {
+  if (record.completedAtMs !== null || record.abortedAtMs !== null) {
+    return;
+  }
+  if (record.sourceReleasedAtMs === null || record.destinationAcceptedAtMs === null) {
+    return;
+  }
+  record.completedAtMs = atMs;
+  persistCriticalEvent({
+    eventId: `transfer_completed:${record.transferId}`,
+    instanceId: record.toMapInstanceId,
+    accountId: record.accountId,
+    eventType: "map_transfer_completed",
+    eventPayload: {
+      transferId: record.transferId,
+      sourceReleasedAtMs: record.sourceReleasedAtMs,
+      destinationAcceptedAtMs: record.destinationAcceptedAtMs
+    },
+    eventAtMs: atMs
+  });
+}
+
+function sweepExpiredTransfers(): void {
+  const now = Date.now();
+  for (const record of transferRecords.values()) {
+    if (record.completedAtMs !== null || record.abortedAtMs !== null) {
+      continue;
+    }
+    if (now <= record.expiresAtMs) {
+      continue;
+    }
+    record.abortedAtMs = now;
+    record.lastReason = "transfer_expired";
+    persistCriticalEvent({
+      eventId: `transfer_aborted:${record.transferId}`,
+      instanceId: record.fromMapInstanceId,
+      accountId: record.accountId,
+      eventType: "map_transfer_aborted",
+      eventPayload: {
+        transferId: record.transferId,
+        reason: "transfer_expired"
+      },
+      eventAtMs: now
+    });
+  }
+  for (const [transferId, record] of transferRecords.entries()) {
+    const terminalAtMs = record.completedAtMs ?? record.abortedAtMs;
+    if (terminalAtMs === null) {
+      continue;
+    }
+    if (now - terminalAtMs < 60_000) {
+      continue;
+    }
+    transferRecords.delete(transferId);
+  }
+}
+
+function persistCriticalEvent(payload: PersistCriticalEventRequest): void {
+  const eventId = typeof payload.eventId === "string" ? payload.eventId : "";
+  if (eventId.length === 0) {
+    return;
+  }
+  const instanceId =
+    typeof payload.instanceId === "string" && payload.instanceId.length > 0
+      ? payload.instanceId
+      : "unknown";
+  const eventType =
+    typeof payload.eventType === "string" && payload.eventType.length > 0
+      ? payload.eventType
+      : "unknown";
+  const eventPayloadJson = safeJsonStringify(payload.eventPayload ?? {});
+  persistence.saveCriticalEvent({
+    eventId,
+    instanceId,
+    accountId: Math.max(1, Math.floor(payload.accountId)),
+    eventType,
+    eventPayloadJson,
+    eventAtMs: Math.max(0, Math.floor(payload.eventAtMs))
+  });
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return JSON.stringify({ error: "payload_stringify_failed" });
   }
 }
 

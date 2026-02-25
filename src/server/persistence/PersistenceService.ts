@@ -72,6 +72,15 @@ export interface PlayerSnapshot {
   hotbarAbilityIds: number[];
 }
 
+export interface CriticalEventRecord {
+  eventId: string;
+  instanceId: string;
+  accountId: number;
+  eventType: string;
+  eventPayloadJson: string;
+  eventAtMs: number;
+}
+
 export interface PersistedAbilityDefinitionRecord {
   abilityId: number;
   name: string;
@@ -775,6 +784,26 @@ export class PersistenceService {
     tx(snapshot);
   }
 
+  public saveCriticalEvent(record: CriticalEventRecord): void {
+    if (this.disablePersistenceWrites) {
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO critical_events (event_id, instance_id, account_id, event_type, event_payload_json, event_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(event_id) DO NOTHING`
+      )
+      .run(
+        record.eventId,
+        record.instanceId,
+        Math.max(1, this.clampInteger(record.accountId, 1, 0x7fffffff)),
+        record.eventType,
+        record.eventPayloadJson,
+        Math.max(0, this.clampInteger(record.eventAtMs, 0, Number.MAX_SAFE_INTEGER))
+      );
+  }
+
   private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS players (
@@ -839,6 +868,15 @@ export class PersistenceService {
         remote_ip TEXT NOT NULL,
         result TEXT NOT NULL,
         reason TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS critical_events (
+        event_id TEXT PRIMARY KEY,
+        instance_id TEXT NOT NULL,
+        account_id INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        event_payload_json TEXT NOT NULL,
+        event_at_ms INTEGER NOT NULL
       );
     `);
     this.db.exec(

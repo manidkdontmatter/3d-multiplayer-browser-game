@@ -50,6 +50,14 @@ export interface MapRegistrationRequest {
   pid: number;
 }
 
+export interface MapHeartbeatRequest {
+  instanceId: string;
+  pid: number;
+  onlinePlayers: number;
+  uptimeSeconds: number;
+  atMs: number;
+}
+
 export interface GenericOrchestratorResponse {
   ok: boolean;
   error?: string;
@@ -65,6 +73,7 @@ export interface TransferRequest {
 
 export interface TransferResponse {
   ok: boolean;
+  transferId?: string;
   wsUrl?: string;
   joinTicket?: string;
   mapConfig?: RuntimeMapConfig;
@@ -76,4 +85,19 @@ export interface PersistSnapshotRequest {
   snapshot: PersistedPlayerSnapshot;
   saveCharacter: boolean;
   saveAbilityState: boolean;
+}
+
+export interface PersistCriticalEventRequest {
+  eventId: string;
+  instanceId: string;
+  accountId: number;
+  eventType: string;
+  eventPayload: unknown;
+  eventAtMs: number;
+}
+
+export interface TransferResultRequest {
+  transferId: string;
+  stage: "source_released" | "aborted" | "completed";
+  reason?: string;
 }
