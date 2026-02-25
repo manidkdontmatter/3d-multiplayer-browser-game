@@ -39,3 +39,12 @@ data/
 data/*
 !data/archetypes/
 !data/archetypes/*.json
+
+# Profiling outputs (generated locally)
+profiling/multiplayer-e2e/
+profiling/network-load/
+
+# SQLite artifacts
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
