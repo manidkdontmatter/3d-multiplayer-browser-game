@@ -1,3 +1,4 @@
+// Runs the authoritative fixed-tick server loop, persistence flush cadence, and runtime health telemetry.
 import { performance } from "node:perf_hooks";
 import type { Context } from "nengi";
 import { SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
@@ -8,7 +9,7 @@ import { ServerNetworkEventRouter } from "./net/ServerNetworkEventRouter";
 
 const MAX_TICK_INTERVAL_SAMPLES = 6000;
 const DEFAULT_PERSIST_FLUSH_INTERVAL_MS = 5000;
-const DEFAULT_HEALTH_LOG_INTERVAL_MS = 5000;
+const DEFAULT_HEALTH_LOG_INTERVAL_MS = 30000;
 
 export class GameServer {
   private readonly networkHost: ServerNetworkHost;
@@ -237,7 +238,7 @@ export class GameServer {
 
   private resolveHealthLogIntervalMs(): number {
     const raw = Number(process.env.SERVER_HEALTH_LOG_MS ?? DEFAULT_HEALTH_LOG_INTERVAL_MS);
-    if (!Number.isFinite(raw) || raw < 1000) {
+    if (!Number.isFinite(raw) || raw < DEFAULT_HEALTH_LOG_INTERVAL_MS) {
       return DEFAULT_HEALTH_LOG_INTERVAL_MS;
     }
     return Math.floor(raw);

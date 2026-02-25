@@ -37,6 +37,7 @@ Thumbs.db
 data/
 !data/
 data/*
+data/server-errors.log
 !data/archetypes/
 !data/archetypes/*.json
 
