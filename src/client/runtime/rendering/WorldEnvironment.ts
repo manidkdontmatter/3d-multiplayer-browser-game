@@ -17,6 +17,7 @@ import {
   Mesh,
   ShaderMaterial,
   MeshStandardMaterial,
+  FrontSide,
   PlaneGeometry,
   PMREMGenerator,
   PerspectiveCamera,
@@ -35,8 +36,7 @@ import {
   generateDeterministicVisualBushes,
   generateDeterministicVisualGrass,
   getRuntimeMapLayout,
-  sampleTerrainHeightAt,
-  sampleOceanHeightAt,
+  OCEAN_WAVE_COMPONENTS,
   type RuntimeMapConfig,
   type VisualGrassInstance
 } from "../../../shared/index";
@@ -51,8 +51,6 @@ import type { PlayerPose } from "../types";
 
 const LOCAL_FIRST_PERSON_ONLY_LAYER = 11;
 const LOCAL_THIRD_PERSON_ONLY_LAYER = 12;
-const OCEAN_SHORE_OVERLAP_HEIGHT = 1.1;
-
 interface StaticPropVisual {
   kind: "tree" | "rock" | "bush";
   x: number;
@@ -62,11 +60,9 @@ interface StaticPropVisual {
   scale: number;
 }
 
-interface OceanTile {
-  mesh: Mesh<BufferGeometry, ShaderMaterial | MeshStandardMaterial> | null;
-  baseXZ: Float32Array;
-  terrainHeights: Float32Array;
-  shoreFoam: Float32Array;
+interface OceanSurface {
+  mesh: Mesh<BufferGeometry, ShaderMaterial | MeshStandardMaterial>;
+  snapSize: number;
 }
 
 interface GrassRenderVariant {
@@ -106,6 +102,49 @@ const GRASS_LOD_FAR_DISTANCE = 600;
 const GRASS_FAR_DENSITY_STRIDE = 3;
 const GRASS_FADE_START_DISTANCE = 90;
 const GRASS_FADE_END_DISTANCE = 150;
+const OCEAN_RING_LEVELS = [
+  { innerHalf: 0, outerHalf: 180, radialSegments: 60 },
+  { innerHalf: 180, outerHalf: 440, radialSegments: 44 },
+  { innerHalf: 440, outerHalf: 920, radialSegments: 28 },
+  { innerHalf: 920, outerHalf: 1720, radialSegments: 16 }
+] as const;
+const OCEAN_RING_ANGULAR_SEGMENTS = 192;
+const OCEAN_GLSL_COMPONENT_LINES = OCEAN_WAVE_COMPONENTS.map(
+  (component) =>
+    `wave += componentWave(p, vec2(${component.dirX.toFixed(6)}, ${component.dirZ.toFixed(6)}), ${component.ampMul.toFixed(6)}, ${component.speedMul.toFixed(6)}, ${component.lengthMul.toFixed(6)}, ${component.phase.toFixed(6)}, ${component.crestMul.toFixed(6)}, timeSeconds, waveAmplitude, waveSpeed, waveLength);`
+).join("\n  ");
+const OCEAN_GLSL_WAVE_FUNCTIONS = `
+float componentWave(
+  vec2 p,
+  vec2 dir,
+  float ampMul,
+  float speedMul,
+  float lenMul,
+  float phaseSeed,
+  float crestMul,
+  float timeSeconds,
+  float waveAmplitude,
+  float waveSpeed,
+  float waveLength
+) {
+  float wavelength = max(1.0, waveLength * lenMul);
+  float k = 6.28318530718 / wavelength;
+  float omega = k * waveSpeed * speedMul;
+  float projection = dot(p, dir);
+  float phase = projection * k + timeSeconds * omega + phaseSeed;
+  float primary = sin(phase);
+  float crest = sin(phase * 2.0 + phaseSeed * 0.37) * crestMul;
+  return (primary + crest) * waveAmplitude * ampMul;
+}
+
+float sampleWaveHeightAt(vec2 p, float baseHeight, float waveAmplitude, float waveSpeed, float waveLength, float timeSeconds) {
+  if (waveAmplitude <= 0.00001) {
+    return baseHeight;
+  }
+  float wave = 0.0;
+  ${OCEAN_GLSL_COMPONENT_LINES}
+  return baseHeight + wave;
+}`;
 
 export class WorldEnvironment {
   public readonly renderer: WebGLRenderer;
@@ -123,7 +162,7 @@ export class WorldEnvironment {
   private readonly sunDirection = new Vector3(0.33, 0.9, 0.22).normalize();
   private skyDome: Sky | null = null;
   private sunLight: DirectionalLight | null = null;
-  private oceanSurface: OceanTile | null = null;
+  private oceanSurface: OceanSurface | null = null;
   private groundMaterial: MeshStandardMaterial | null = null;
   private deferredTerrainCausticsPending = false;
   private deferredOceanUpgradePending = false;
@@ -315,33 +354,19 @@ uniform float uWaveAmplitude;
 uniform float uWaveSpeed;
 uniform float uWaveLength;
 uniform float uCausticStrength;
-
-float causticComponentWave(vec2 p, vec2 dir, float ampMul, float speedMul, float lenMul, float phaseSeed, float crestMul) {
-  float waveSpeed = max(0.0, uWaveSpeed);
-  float baseLength = max(1.0, uWaveLength);
-  float wavelength = max(1.0, baseLength * lenMul);
-  float k = 6.28318530718 / wavelength;
-  float omega = k * waveSpeed * speedMul;
-  float phase = dot(p, dir) * k + uCausticTime * omega + phaseSeed;
-  float primary = sin(phase);
-  float crest = sin(phase * 2.0 + phaseSeed * 0.37) * crestMul;
-  return (primary + crest) * max(0.0, uWaveAmplitude) * ampMul;
-}
-
-float sampleOceanAt(vec2 p) {
-  float amplitude = max(0.0, uWaveAmplitude);
-  if (amplitude <= 0.00001) return uOceanBaseHeight;
-  float wave = 0.0;
-  wave += causticComponentWave(p, normalize(vec2(0.92, 0.38)), 1.00, 1.00, 1.35, 0.7, 0.12);
-  wave += causticComponentWave(p, normalize(vec2(-0.51, 0.86)), 0.46, 1.16, 1.05, 2.1, 0.14);
-  wave += causticComponentWave(p, normalize(vec2(0.17, -0.98)), 0.18, 1.32, 0.88, 4.0, 0.18);
-  return uOceanBaseHeight + wave;
-}`
+${OCEAN_GLSL_WAVE_FUNCTIONS}`
       );
 
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <dithering_fragment>",
-        `float oceanY = sampleOceanAt(vCausticWorldPos.xz);
+        `float oceanY = sampleWaveHeightAt(
+vCausticWorldPos.xz,
+uOceanBaseHeight,
+max(0.0, uWaveAmplitude),
+max(0.0, uWaveSpeed),
+max(1.0, uWaveLength),
+uCausticTime
+);
 float underWater = step(vCausticWorldPos.y, oceanY - 0.05);
 float depth = clamp((oceanY - vCausticWorldPos.y) / 3.0, 0.0, 1.0);
 vec2 cUv = vCausticWorldPos.xz * 0.024;
@@ -361,14 +386,20 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
   }
 
   private createOceanSurface(config: RuntimeMapConfig): void {
-    const outerHalf = config.groundHalfExtent * 3.2;
-    const segmentsPerAxis = 312;
-    this.oceanSurface = this.createOceanTileWithCenterHole(config, outerHalf, segmentsPerAxis);
-    if (this.oceanSurface.mesh) {
-      this.oceanSurface.mesh.frustumCulled = false;
-      this.scene.add(this.oceanSurface.mesh);
-      this.deferredOceanUpgradePending = this.oceanSurface.mesh.material instanceof MeshStandardMaterial;
-    }
+    const material = this.createOceanWaterMaterial(config);
+    const geometry = this.createOceanRingGeometry();
+    const mesh = new Mesh(geometry, material);
+    mesh.frustumCulled = false;
+    this.scene.add(mesh);
+    const firstLevel = OCEAN_RING_LEVELS[0];
+    const radialStep = firstLevel
+      ? Math.max(1, (firstLevel.outerHalf - firstLevel.innerHalf) / Math.max(1, firstLevel.radialSegments))
+      : 4;
+    this.oceanSurface = {
+      mesh,
+      snapSize: radialStep
+    };
+    this.deferredOceanUpgradePending = material instanceof MeshStandardMaterial;
     this.updateOceanSurface(0);
   }
 
@@ -397,138 +428,128 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
     env.dispose();
   }
 
-  private createOceanTileWithCenterHole(
-    config: RuntimeMapConfig,
-    outerHalf: number,
-    segmentsPerAxis: number
-  ): OceanTile {
-    const segmentsX = Math.max(32, Math.floor(segmentsPerAxis));
-    const segmentsZ = Math.max(32, Math.floor(segmentsPerAxis));
-    const verticesX = segmentsX + 1;
-    const verticesZ = segmentsZ + 1;
-    const vertexCount = verticesX * verticesZ;
-    const positions = new Float32Array(vertexCount * 3);
-    const baseXZ = new Float32Array(vertexCount * 2);
-    const terrainHeights = new Float32Array(vertexCount);
-    const shoreFoam = new Float32Array(vertexCount);
-    const isLandVertex = new Uint8Array(vertexCount);
-    const waterCandidateCell = new Uint8Array(segmentsX * segmentsZ);
-    const oceanConnectedCell = new Uint8Array(segmentsX * segmentsZ);
-    const indexList: number[] = [];
-    const span = outerHalf * 2;
-    const shorelineThreshold = config.oceanBaseHeight + OCEAN_SHORE_OVERLAP_HEIGHT;
+  private createOceanRingGeometry(): BufferGeometry {
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+    const angularSegments = Math.max(16, OCEAN_RING_ANGULAR_SEGMENTS);
+    const fullTurn = Math.PI * 2;
 
-    let vertexWrite = 0;
-    let xzWrite = 0;
-    for (let row = 0; row < verticesZ; row += 1) {
-      const v = row / segmentsZ;
-      const z = -outerHalf + span * v;
-      for (let col = 0; col < verticesX; col += 1) {
-        const u = col / segmentsX;
-        const x = -outerHalf + span * u;
-        positions[vertexWrite] = x;
-        positions[vertexWrite + 1] = 0;
-        positions[vertexWrite + 2] = z;
-        baseXZ[xzWrite] = x;
-        baseXZ[xzWrite + 1] = z;
-        const terrainHeight = sampleTerrainHeightAt(config, x, z);
-        terrainHeights[row * verticesX + col] = terrainHeight;
-        isLandVertex[row * verticesX + col] = terrainHeight > shorelineThreshold ? 1 : 0;
-        vertexWrite += 3;
-        xzWrite += 2;
+    let firstBandOuterStart = -1;
+    let firstBandOuterStride = 0;
+
+    for (let levelIndex = 0; levelIndex < OCEAN_RING_LEVELS.length; levelIndex += 1) {
+      const level = OCEAN_RING_LEVELS[levelIndex];
+      if (!level) {
+        continue;
+      }
+      const innerRadius = Math.max(0, level.innerHalf);
+      const outerRadius = Math.max(innerRadius + 0.001, level.outerHalf);
+      const radialSegments = Math.max(1, Math.floor(level.radialSegments));
+      const vertexBase = positions.length / 3;
+      const stride = angularSegments + 1;
+
+      if (innerRadius <= 0.0001) {
+        positions.push(0, 0, 0);
+        uvs.push(0.5, 0.5);
+        const centerIndex = vertexBase;
+        for (let radial = 1; radial <= radialSegments; radial += 1) {
+          const radialT = radial / radialSegments;
+          const radius = outerRadius * radialT;
+          for (let angular = 0; angular <= angularSegments; angular += 1) {
+            const angularT = angular / angularSegments;
+            const theta = angularT * fullTurn;
+            const x = Math.cos(theta) * radius;
+            const z = Math.sin(theta) * radius;
+            positions.push(x, 0, z);
+            uvs.push(angularT, radialT);
+          }
+        }
+
+        const firstRingStart = centerIndex + 1;
+        for (let angular = 0; angular < angularSegments; angular += 1) {
+          const a = firstRingStart + angular;
+          const b = firstRingStart + angular + 1;
+          indices.push(centerIndex, b, a);
+        }
+        for (let radial = 1; radial < radialSegments; radial += 1) {
+          const ringA = firstRingStart + (radial - 1) * stride;
+          const ringB = firstRingStart + radial * stride;
+          for (let angular = 0; angular < angularSegments; angular += 1) {
+            const a = ringA + angular;
+            const b = ringA + angular + 1;
+            const c = ringB + angular;
+            const d = ringB + angular + 1;
+            indices.push(a, b, c, b, d, c);
+          }
+        }
+        firstBandOuterStart = firstRingStart + (radialSegments - 1) * stride;
+        firstBandOuterStride = stride;
+        continue;
+      }
+
+      for (let radial = 0; radial <= radialSegments; radial += 1) {
+        const radialT = radial / radialSegments;
+        const radius = innerRadius + (outerRadius - innerRadius) * radialT;
+        for (let angular = 0; angular <= angularSegments; angular += 1) {
+          const angularT = angular / angularSegments;
+          const theta = angularT * fullTurn;
+          const x = Math.cos(theta) * radius;
+          const z = Math.sin(theta) * radius;
+          positions.push(x, 0, z);
+          uvs.push(angularT, radialT);
+        }
+      }
+      for (let radial = 0; radial < radialSegments; radial += 1) {
+        const ringA = vertexBase + radial * stride;
+        const ringB = vertexBase + (radial + 1) * stride;
+        for (let angular = 0; angular < angularSegments; angular += 1) {
+          const a = ringA + angular;
+          const b = ringA + angular + 1;
+          const c = ringB + angular;
+          const d = ringB + angular + 1;
+          indices.push(a, b, c, b, d, c);
+        }
       }
     }
 
-    for (let row = 0; row < segmentsZ; row += 1) {
-      for (let col = 0; col < segmentsX; col += 1) {
-        const topLeft = row * verticesX + col;
-        const topRight = topLeft + 1;
-        const bottomLeft = topLeft + verticesX;
-        const bottomRight = bottomLeft + 1;
-        const land0 = isLandVertex[topLeft] === 1;
-        const land1 = isLandVertex[topRight] === 1;
-        const land2 = isLandVertex[bottomLeft] === 1;
-        const land3 = isLandVertex[bottomRight] === 1;
-        const cellIndex = row * segmentsX + col;
-        waterCandidateCell[cellIndex] = land0 && land1 && land2 && land3 ? 0 : 1;
+    if (firstBandOuterStart >= 0 && firstBandOuterStride > 0) {
+      const seamRadius = OCEAN_RING_LEVELS[0]?.outerHalf ?? 0;
+      const epsilon = Math.max(0.2, seamRadius * 0.00025);
+      const skirtBase = positions.length / 3;
+      for (let angular = 0; angular <= angularSegments; angular += 1) {
+        const sourceIndex = firstBandOuterStart + angular;
+        const x = positions[sourceIndex * 3] ?? 0;
+        const y = positions[sourceIndex * 3 + 1] ?? 0;
+        const z = positions[sourceIndex * 3 + 2] ?? 0;
+        const len = Math.hypot(x, z) || 1;
+        const ox = (x / len) * (len + epsilon);
+        const oz = (z / len) * (len + epsilon);
+        positions.push(ox, y, oz);
+        uvs.push((angular / angularSegments), 1);
+      }
+      for (let angular = 0; angular < angularSegments; angular += 1) {
+        const innerA = firstBandOuterStart + angular;
+        const innerB = firstBandOuterStart + angular + 1;
+        const outerA = skirtBase + angular;
+        const outerB = skirtBase + angular + 1;
+        indices.push(innerA, innerB, outerA, innerB, outerB, outerA);
       }
     }
-
-    const queueRow: number[] = [];
-    const queueCol: number[] = [];
-    for (let row = 0; row < segmentsZ; row += 1) {
-      for (let col = 0; col < segmentsX; col += 1) {
-        const onBoundary = row === 0 || col === 0 || row === segmentsZ - 1 || col === segmentsX - 1;
-        if (!onBoundary) {
-          continue;
-        }
-        const cellIndex = row * segmentsX + col;
-        if (waterCandidateCell[cellIndex] !== 1 || oceanConnectedCell[cellIndex] === 1) {
-          continue;
-        }
-        oceanConnectedCell[cellIndex] = 1;
-        queueRow.push(row);
-        queueCol.push(col);
-      }
-    }
-
-    const neighborOffsets = [
-      { dr: -1, dc: 0 },
-      { dr: 1, dc: 0 },
-      { dr: 0, dc: -1 },
-      { dr: 0, dc: 1 }
-    ];
-    for (let q = 0; q < queueRow.length; q += 1) {
-      const row = queueRow[q] ?? 0;
-      const col = queueCol[q] ?? 0;
-      for (const offset of neighborOffsets) {
-        const nr = row + offset.dr;
-        const nc = col + offset.dc;
-        if (nr < 0 || nr >= segmentsZ || nc < 0 || nc >= segmentsX) {
-          continue;
-        }
-        const neighborIndex = nr * segmentsX + nc;
-        if (waterCandidateCell[neighborIndex] !== 1 || oceanConnectedCell[neighborIndex] === 1) {
-          continue;
-        }
-        oceanConnectedCell[neighborIndex] = 1;
-        queueRow.push(nr);
-        queueCol.push(nc);
-      }
-    }
-
-    for (let row = 0; row < segmentsZ; row += 1) {
-      for (let col = 0; col < segmentsX; col += 1) {
-        const cellIndex = row * segmentsX + col;
-        if (oceanConnectedCell[cellIndex] !== 1) {
-          continue;
-        }
-        const topLeft = row * verticesX + col;
-        const topRight = topLeft + 1;
-        const bottomLeft = topLeft + verticesX;
-        const bottomRight = bottomLeft + 1;
-        indexList.push(topLeft, bottomLeft, topRight, topRight, bottomLeft, bottomRight);
-      }
-    }
-    const indices = new Uint32Array(indexList);
 
     const geometry = new BufferGeometry();
-    geometry.setAttribute("position", new BufferAttribute(positions, 3));
-    geometry.setAttribute("aShoreFoam", new BufferAttribute(shoreFoam, 1));
-    geometry.setIndex(new BufferAttribute(indices, 1));
-    geometry.computeVertexNormals();
-    return {
-      mesh: this.createOceanWaterMesh(geometry, config),
-      baseXZ,
-      terrainHeights,
-      shoreFoam
-    };
+    geometry.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
+    geometry.setAttribute("uv", new BufferAttribute(new Float32Array(uvs), 2));
+    const indexArray =
+      positions.length / 3 > 65_535 ? new Uint32Array(indices) : new Uint16Array(indices);
+    geometry.setIndex(new BufferAttribute(indexArray, 1));
+    geometry.computeBoundingSphere();
+    return geometry;
   }
 
-  private createOceanWaterMesh(
-    geometry: BufferGeometry,
+  private createOceanWaterMaterial(
     config: RuntimeMapConfig
-  ): Mesh<BufferGeometry, any> {
+  ): ShaderMaterial | MeshStandardMaterial {
     const waterNormalsA =
       getLoadedAsset<Texture>(WORLD_WATER_NORMALS_A_ASSET_ID) ??
       getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
@@ -536,15 +557,12 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
       getLoadedAsset<Texture>(WORLD_WATER_NORMALS_B_ASSET_ID) ??
       getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
     if (!waterNormalsA || !waterNormalsB) {
-      return new Mesh(
-        geometry,
-        new MeshStandardMaterial({
-          color: 0x2e78b8,
-          roughness: 0.35,
-          metalness: 0.05,
-          side: DoubleSide
-        })
-      );
+      return new MeshStandardMaterial({
+        color: 0x2e78b8,
+        roughness: 0.35,
+        metalness: 0.05,
+        side: FrontSide
+      });
     }
     waterNormalsA.wrapS = RepeatWrapping;
     waterNormalsA.wrapT = RepeatWrapping;
@@ -582,14 +600,27 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
         uFogFar: { value: fogFar }
       },
       vertexShader: `
-        attribute float aShoreFoam;
+        uniform float uTime;
+        uniform float uOceanBaseHeight;
+        uniform float uWaveAmplitude;
+        uniform float uWaveSpeed;
+        uniform float uWaveLength;
         varying vec3 vWorldPosition;
         varying vec3 vViewPosition;
-        varying float vShoreFoam;
+        ${OCEAN_GLSL_WAVE_FUNCTIONS}
+
         void main() {
-          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vec4 worldBasePos = modelMatrix * vec4(position.x, 0.0, position.z, 1.0);
+          float waveY = sampleWaveHeightAt(
+            worldBasePos.xz,
+            uOceanBaseHeight,
+            max(0.0, uWaveAmplitude),
+            max(0.0, uWaveSpeed),
+            max(1.0, uWaveLength),
+            uTime
+          );
+          vec4 worldPos = vec4(worldBasePos.x, waveY, worldBasePos.z, 1.0);
           vWorldPosition = worldPos.xyz;
-          vShoreFoam = aShoreFoam;
           vec4 mvPosition = viewMatrix * worldPos;
           vViewPosition = -mvPosition.xyz;
           gl_Position = projectionMatrix * mvPosition;
@@ -620,53 +651,21 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
         uniform float uFogFar;
         varying vec3 vWorldPosition;
         varying vec3 vViewPosition;
-        varying float vShoreFoam;
 
         vec3 sampleNormalDetail(vec2 uv) {
           vec3 n0 = texture2D(uNormalSamplerA, uv + vec2(uTime * 0.009, uTime * 0.011)).xyz * 2.0 - 1.0;
           vec3 n1 = texture2D(uNormalSamplerB, uv * 1.27 + vec2(-uTime * 0.011, uTime * 0.008)).xyz * 2.0 - 1.0;
-          vec3 n2 = texture2D(uNormalSamplerA, uv * 0.43 + vec2(uTime * 0.004, -uTime * 0.006)).xyz * 2.0 - 1.0;
-          return normalize(n0 * 0.50 + n1 * 0.32 + n2 * 0.18);
-        }
-
-        float componentWave(vec2 p, vec2 dir, float ampMul, float speedMul, float lenMul, float phaseSeed, float crestMul) {
-          float waveSpeed = max(0.0, uWaveSpeed);
-          float baseLength = max(1.0, uWaveLength);
-          float wavelength = max(1.0, baseLength * lenMul);
-          float k = 6.28318530718 / wavelength;
-          float omega = k * waveSpeed * speedMul;
-          float phase = dot(p, dir) * k + uTime * omega + phaseSeed;
-          float primary = sin(phase);
-          float crest = sin(phase * 2.0 + phaseSeed * 0.37) * crestMul;
-          return (primary + crest) * max(0.0, uWaveAmplitude) * ampMul;
-        }
-
-        float sampleWaveHeight(vec2 p) {
-          float amplitude = max(0.0, uWaveAmplitude);
-          if (amplitude <= 0.00001) {
-            return uOceanBaseHeight;
-          }
-          float wave = 0.0;
-          wave += componentWave(p, normalize(vec2(0.92, 0.38)), 1.00, 1.00, 1.35, 0.7, 0.12);
-          wave += componentWave(p, normalize(vec2(-0.51, 0.86)), 0.46, 1.16, 1.05, 2.1, 0.14);
-          wave += componentWave(p, normalize(vec2(0.17, -0.98)), 0.18, 1.32, 0.88, 4.0, 0.18);
-          return uOceanBaseHeight + wave;
-        }
-
-        vec3 waveNormal(vec2 p) {
-          float e = 2.2;
-          float hL = sampleWaveHeight(p - vec2(e, 0.0));
-          float hR = sampleWaveHeight(p + vec2(e, 0.0));
-          float hD = sampleWaveHeight(p - vec2(0.0, e));
-          float hU = sampleWaveHeight(p + vec2(0.0, e));
-          float dhdx = (hR - hL) / (2.0 * e);
-          float dhdz = (hU - hD) / (2.0 * e);
-          return normalize(vec3(-dhdx, 1.0, -dhdz));
+          return normalize(n0 * 0.62 + n1 * 0.38);
         }
 
         void main() {
           vec3 viewDir = normalize(vViewPosition);
-          vec3 geomNormal = waveNormal(vWorldPosition.xz);
+          vec3 dpdx = dFdx(vWorldPosition);
+          vec3 dpdy = dFdy(vWorldPosition);
+          vec3 geomNormal = normalize(cross(dpdx, dpdy));
+          if (!gl_FrontFacing) {
+            geomNormal = -geomNormal;
+          }
           vec2 uv = vWorldPosition.xz * 0.0022;
           vec3 nTex = sampleNormalDetail(uv);
           vec3 tangentNormal = normalize(vec3(nTex.x, nTex.z * 0.42, nTex.y));
@@ -700,8 +699,7 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
           float crest = pow(clamp(1.0 - perturbed.y, 0.0, 1.0), 2.25);
           float foamNoise = texture2D(uNormalSamplerB, vWorldPosition.xz * 0.009 + vec2(uTime * 0.021, uTime * 0.017)).b;
           float crestFoam = smoothstep(0.62, 0.94, crest + foamNoise * 0.34);
-          float shoreFoam = smoothstep(0.08, 0.92, vShoreFoam);
-          float foamMask = clamp(crestFoam * 0.5 + shoreFoam * 0.9, 0.0, 1.0);
+          float foamMask = clamp(crestFoam * 0.72, 0.0, 1.0);
           vec3 foamTint = uFoamColor * foamMask * uFoamStrength;
 
           vec3 color = mix(waterBody + scatterTint, skyReflection, fresnel);
@@ -720,10 +718,10 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
       `,
       transparent: true,
       depthWrite: false,
-      side: DoubleSide,
+      side: FrontSide,
       fog: false
     });
-    return new Mesh(geometry, material);
+    return material;
   }
 
   private updateOceanSurface(renderServerTimeSeconds: number): void {
@@ -733,26 +731,18 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
     const time =
       this.oceanWavesEnabled && Number.isFinite(renderServerTimeSeconds) ? renderServerTimeSeconds : 0;
     const surface = this.oceanSurface;
-    if (!surface?.mesh) {
+    if (!surface) {
       return;
     }
-    const position = surface.mesh.geometry.getAttribute("position");
-    const shoreAttribute = surface.mesh.geometry.getAttribute("aShoreFoam");
-    for (let i = 0, xz = 0; i < position.count; i += 1, xz += 2) {
-      const x = surface.baseXZ[xz] ?? 0;
-      const z = surface.baseXZ[xz + 1] ?? 0;
-      const y = sampleOceanHeightAt(this.mapConfig, x, z, time);
-      position.setY(i, y);
-      const terrainY = surface.terrainHeights[i] ?? y;
-      const depth = Math.max(0, y - terrainY);
-      const shore =
-        depth <= 0 ? 1 : 1 - Math.max(0, Math.min(1, (depth - 0.12) / (2.2 - 0.12)));
-      surface.shoreFoam[i] = shore;
-    }
-    position.needsUpdate = true;
-    if (shoreAttribute) {
-      shoreAttribute.needsUpdate = true;
-    }
+    const snapToGrid = (value: number, snap: number): number => {
+      const step = Math.max(0.001, snap);
+      return Math.round(value / step) * step;
+    };
+    surface.mesh.position.set(
+      snapToGrid(this.camera.position.x, surface.snapSize),
+      0,
+      snapToGrid(this.camera.position.z, surface.snapSize)
+    );
     const oceanMaterial = surface.mesh.material;
     if (oceanMaterial instanceof ShaderMaterial) {
       const waterUniforms = oceanMaterial.uniforms;
@@ -1013,7 +1003,7 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
   }
 
   private tryUpgradeOceanMaterial(): void {
-    if (!this.deferredOceanUpgradePending || !this.mapConfig || !this.oceanSurface?.mesh) {
+    if (!this.deferredOceanUpgradePending || !this.mapConfig || !this.oceanSurface) {
       return;
     }
     const waterNormalsA =
@@ -1026,10 +1016,10 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
       return;
     }
     const previousMaterial = this.oceanSurface.mesh.material;
-    const upgraded = this.createOceanWaterMesh(this.oceanSurface.mesh.geometry, this.mapConfig);
-    this.oceanSurface.mesh.material = upgraded.material;
-    this.deferredOceanUpgradePending = this.oceanSurface.mesh.material instanceof MeshStandardMaterial;
-    if (previousMaterial !== this.oceanSurface.mesh.material) {
+    const upgradedMaterial = this.createOceanWaterMaterial(this.mapConfig);
+    this.oceanSurface.mesh.material = upgradedMaterial;
+    this.deferredOceanUpgradePending = upgradedMaterial instanceof MeshStandardMaterial;
+    if (previousMaterial !== upgradedMaterial) {
       previousMaterial.dispose();
     }
   }

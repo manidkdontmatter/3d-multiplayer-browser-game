@@ -1,3 +1,4 @@
+// Architecture guard checks that enforce critical layering and determinism contracts.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -175,6 +176,20 @@ function main(): void {
   assert(
     clientOrchestrator.includes("consumeReconciliationFrame"),
     "ClientNetworkOrchestrator must own reconciliation-frame consumption"
+  );
+
+  const worldEnvironment = read("src/client/runtime/rendering/WorldEnvironment.ts");
+  assert(
+    worldEnvironment.includes("OCEAN_WAVE_COMPONENTS"),
+    "WorldEnvironment must source wave components from shared OCEAN_WAVE_COMPONENTS"
+  );
+  assert(
+    worldEnvironment.includes("const OCEAN_GLSL_COMPONENT_LINES = OCEAN_WAVE_COMPONENTS.map("),
+    "WorldEnvironment shader wave components must be generated from shared OCEAN_WAVE_COMPONENTS"
+  );
+  assert(
+    !worldEnvironment.includes("wave += componentWave(p, normalize(vec2("),
+    "WorldEnvironment must not hardcode per-component shader wave constants"
   );
 
   console.log("architecture-guards passed");
