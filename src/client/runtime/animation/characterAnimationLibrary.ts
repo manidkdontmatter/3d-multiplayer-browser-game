@@ -2,7 +2,7 @@ import { AnimationClip, AnimationUtils } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { VRM, VRMCore } from "@pixiv/three-vrm";
 import { type VRMAnimation, createVRMAnimationClip } from "@pixiv/three-vrm-animation";
-import { getLoadedAsset } from "../../assets/assetLoader";
+import { ensureAsset, getLoadedAsset } from "../../assets/assetLoader";
 import {
   CHARACTER_ANIM_IDLE_ASSET_ID,
   CHARACTER_ANIM_JUMP_ASSET_ID,
@@ -22,6 +22,8 @@ export interface CharacterVRMAnimationAssets {
   jump: VRMAnimation;
   punch: VRMAnimation;
 }
+
+let requestIssued = false;
 
 export function loadCharacterVRMAnimationAssets(): CharacterVRMAnimationAssets | null {
   const idle = getFirstVRMAnimation(CHARACTER_ANIM_IDLE_ASSET_ID);
@@ -59,6 +61,25 @@ export function createCharacterAnimationClips(
     jump,
     punchUpperBodyAdditive: punchUpperBody
   };
+}
+
+export function requestCharacterAnimationAssets(): void {
+  if (requestIssued) {
+    return;
+  }
+  requestIssued = true;
+  const assetIds = [
+    CHARACTER_ANIM_IDLE_ASSET_ID,
+    CHARACTER_ANIM_WALK_ASSET_ID,
+    CHARACTER_ANIM_RUN_ASSET_ID,
+    CHARACTER_ANIM_JUMP_ASSET_ID,
+    CHARACTER_ANIM_PUNCH_ASSET_ID
+  ];
+  for (const assetId of assetIds) {
+    void ensureAsset(assetId, "critical").catch(() => {
+      requestIssued = false;
+    });
+  }
 }
 
 function createNamedClip(target: VRM | VRMCore, animation: VRMAnimation, name: string): AnimationClip | null {

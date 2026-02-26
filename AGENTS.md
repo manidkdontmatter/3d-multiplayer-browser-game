@@ -88,6 +88,7 @@
 - Treat older/legacy tests as potentially stale: when a test fails, validate whether the test assumptions still match current game architecture/behavior before concluding the underlying game system is broken.
 - For multiplayer browser automation tests, run each client in a separate browser window/process (not separate tabs in one window) to avoid inactive-tab throttling artifacts.
 - In headless browser automation, do not rely on RAF cadence for gameplay/test progress; drive simulation deterministically through test hooks (for example `window.advanceTime`) whenever possible.
+- If you notice anything needs added to `.gitignore`, add it.
 
 ### Humanoid Conversion Playbook (Offline, Production Path)
 

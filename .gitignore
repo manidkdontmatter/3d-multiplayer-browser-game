@@ -4,6 +4,9 @@ node_modules/
 # Build artifacts
 dist/
 output/
+public/runtime-assets/
+public/runtime-manifests/
+public/runtime-transcoders/
 
 # Logs
 *.log

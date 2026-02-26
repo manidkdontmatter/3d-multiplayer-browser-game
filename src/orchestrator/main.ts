@@ -52,6 +52,7 @@ interface TransferRecord {
 }
 
 const ORCH_PORT = Number(process.env.ORCH_PORT ?? 9000);
+const ORCH_PUBLIC_WS_URL_TEMPLATE = process.env.ORCH_PUBLIC_WS_URL_TEMPLATE?.trim() ?? "";
 const INTERNAL_RPC_SECRET = process.env.ORCH_INTERNAL_RPC_SECRET ?? randomBytes(24).toString("hex");
 const JOIN_TICKET_TTL_MS = Number(process.env.ORCH_JOIN_TICKET_TTL_MS ?? 10_000);
 const TRANSFER_TOKEN_TTL_MS = Number(process.env.ORCH_TRANSFER_TOKEN_TTL_MS ?? 10_000);
@@ -202,7 +203,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     });
     sendJson(res, 200, {
       ok: true,
-      wsUrl: selected.wsUrl,
+      wsUrl: resolveClientWsUrl(selected.instanceId, selected.wsUrl),
       joinTicket: ticket,
       mapConfig: selected.mapConfig
     } satisfies BootstrapResponse);
@@ -319,7 +320,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     sendJson(res, 200, {
       ok: true,
       transferId,
-      wsUrl: target.wsUrl,
+      wsUrl: resolveClientWsUrl(payload.toMapInstanceId, target.wsUrl),
       joinTicket: ticket,
       mapConfig: target.mapConfig
     } satisfies TransferResponse);
@@ -469,6 +470,37 @@ function pickMapForBootstrap(): { instanceId: string; wsUrl: string; mapConfig: 
     wsUrl: ready.wsUrl,
     mapConfig: ready.mapConfig
   };
+}
+
+function resolveClientWsUrl(instanceId: string, internalWsUrl: string): string {
+  if (ORCH_PUBLIC_WS_URL_TEMPLATE.length === 0) {
+    return internalWsUrl;
+  }
+  const port = extractPortFromWsUrl(internalWsUrl);
+  return ORCH_PUBLIC_WS_URL_TEMPLATE
+    .replaceAll("{instanceId}", encodeURIComponent(instanceId))
+    .replaceAll("{port}", String(port ?? ""));
+}
+
+function extractPortFromWsUrl(wsUrl: string): number | null {
+  try {
+    const parsed = new URL(wsUrl);
+    if (parsed.port.length > 0) {
+      const numericPort = Number(parsed.port);
+      if (Number.isInteger(numericPort) && numericPort > 0 && numericPort <= 65535) {
+        return numericPort;
+      }
+    }
+    if (parsed.protocol === "ws:") {
+      return 80;
+    }
+    if (parsed.protocol === "wss:") {
+      return 443;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function isMapHealthy(instanceId: string): boolean {

@@ -4,11 +4,12 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type VRM } from "@pixiv/three-vrm";
 import { PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED, type MovementMode } from "../../../shared/index";
 import { CHARACTER_MALE_ASSET_ID } from "../../assets/assetManifest";
-import { getLoadedAsset } from "../../assets/assetLoader";
+import { ensureAsset, getLoadedAsset } from "../../assets/assetLoader";
 import {
   CharacterAnimationController
 } from "../animation/CharacterAnimationController";
 import {
+  requestCharacterAnimationAssets,
   createCharacterAnimationClips,
   loadCharacterVRMAnimationAssets
 } from "../animation/characterAnimationLibrary";
@@ -35,13 +36,12 @@ interface LocalPlayerVisual {
 }
 
 export class LocalCharacterVisualSystem {
-  private readonly localPlayerVisual: LocalPlayerVisual | null;
+  private localPlayerVisual: LocalPlayerVisual | null = null;
+  private visualBuildRequested = false;
 
   public constructor(private readonly scene: Scene) {
-    this.localPlayerVisual = this.createLocalPlayerVisual();
-    if (this.localPlayerVisual) {
-      this.scene.add(this.localPlayerVisual.root);
-    }
+    this.requestCharacterAssets();
+    this.tryBuildVisual();
   }
 
   public syncLocalPlayer(
@@ -49,6 +49,7 @@ export class LocalCharacterVisualSystem {
     options: { frameDeltaSeconds: number; grounded: boolean; movementMode: MovementMode }
   ): void {
     if (!this.localPlayerVisual) {
+      this.tryBuildVisual();
       return;
     }
     const dt = Math.max(1 / 240, Math.min(options.frameDeltaSeconds, 1 / 20));
@@ -152,5 +153,32 @@ export class LocalCharacterVisualSystem {
       sprinting: false,
       initialized: false
     };
+  }
+
+  private tryBuildVisual(): void {
+    if (this.localPlayerVisual) {
+      return;
+    }
+    const visual = this.createLocalPlayerVisual();
+    if (!visual) {
+      return;
+    }
+    this.localPlayerVisual = visual;
+    this.scene.add(visual.root);
+  }
+
+  private requestCharacterAssets(): void {
+    if (this.visualBuildRequested) {
+      return;
+    }
+    this.visualBuildRequested = true;
+    void ensureAsset(CHARACTER_MALE_ASSET_ID, "critical")
+      .then(() => {
+        requestCharacterAnimationAssets();
+        this.tryBuildVisual();
+      })
+      .catch(() => {
+        this.visualBuildRequested = false;
+      });
   }
 }

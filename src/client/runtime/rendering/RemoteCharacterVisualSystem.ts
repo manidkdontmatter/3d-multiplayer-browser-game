@@ -4,13 +4,14 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type VRM, type VRMHumanoid } from "@pixiv/three-vrm";
 import { MOVEMENT_MODE_GROUNDED, PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED } from "../../../shared/index";
 import { CHARACTER_MALE_ASSET_ID } from "../../assets/assetManifest";
-import { getLoadedAsset } from "../../assets/assetLoader";
+import { ensureAsset, getLoadedAsset } from "../../assets/assetLoader";
 import {
   CharacterAnimationController
 } from "../animation/CharacterAnimationController";
 import {
   createCharacterAnimationClips,
   loadCharacterVRMAnimationAssets,
+  requestCharacterAnimationAssets,
   type CharacterVRMAnimationAssets
 } from "../animation/characterAnimationLibrary";
 import type { RemotePlayerState } from "../types";
@@ -44,19 +45,18 @@ interface RemotePlayerVisual {
 
 export class RemoteCharacterVisualSystem {
   private readonly remotePlayers = new Map<number, RemotePlayerVisual>();
-  private readonly characterAnimationAssets: CharacterVRMAnimationAssets | null;
+  private characterAnimationAssets: CharacterVRMAnimationAssets | null;
   private readonly sourceRawBoneNames: SourceBoneBinding[] = [];
-  private readonly sourceVrmMetaVersion: "0" | "1" | null;
-  private readonly remotePlayerTemplate: Group | null;
+  private sourceVrmMetaVersion: "0" | "1" | null;
+  private remotePlayerTemplate: Group | null;
+  private templateRequestInFlight = false;
 
   public constructor(private readonly scene: Scene) {
     this.characterAnimationAssets = loadCharacterVRMAnimationAssets();
-    const sourceVrm = this.getSourceVrm();
-    this.sourceVrmMetaVersion = sourceVrm?.meta.metaVersion ?? null;
-    if (sourceVrm) {
-      this.sourceRawBoneNames.push(...buildSourceRawBoneNames(sourceVrm));
-    }
-    this.remotePlayerTemplate = this.createRemotePlayerTemplate();
+    this.sourceVrmMetaVersion = null;
+    this.remotePlayerTemplate = null;
+    this.tryBuildTemplate();
+    this.requestTemplateAssets();
   }
 
   public syncRemotePlayers(players: RemotePlayerState[], frameDeltaSeconds: number): void {
@@ -66,6 +66,7 @@ export class RemoteCharacterVisualSystem {
       activeNids.add(remotePlayer.nid);
       let visual = this.remotePlayers.get(remotePlayer.nid);
       if (!visual) {
+        this.tryBuildTemplate();
         visual = this.createRemotePlayerVisual();
         this.remotePlayers.set(remotePlayer.nid, visual);
         this.scene.add(visual.root);
@@ -159,6 +160,37 @@ export class RemoteCharacterVisualSystem {
     normalizeModelToGround(model);
     root.add(model);
     return root;
+  }
+
+  private tryBuildTemplate(): void {
+    if (this.remotePlayerTemplate) {
+      return;
+    }
+    const sourceVrm = this.getSourceVrm();
+    if (!sourceVrm) {
+      return;
+    }
+    this.characterAnimationAssets = loadCharacterVRMAnimationAssets();
+    this.sourceVrmMetaVersion = sourceVrm.meta.metaVersion ?? null;
+    if (this.sourceRawBoneNames.length === 0) {
+      this.sourceRawBoneNames.push(...buildSourceRawBoneNames(sourceVrm));
+    }
+    this.remotePlayerTemplate = this.createRemotePlayerTemplate();
+  }
+
+  private requestTemplateAssets(): void {
+    if (this.templateRequestInFlight) {
+      return;
+    }
+    this.templateRequestInFlight = true;
+    requestCharacterAnimationAssets();
+    void ensureAsset(CHARACTER_MALE_ASSET_ID, "critical")
+      .then(() => {
+        this.tryBuildTemplate();
+      })
+      .finally(() => {
+        this.templateRequestInFlight = false;
+      });
   }
 
   private createRemotePlayerVisual(): RemotePlayerVisual {

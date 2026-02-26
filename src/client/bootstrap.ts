@@ -1,5 +1,4 @@
-import { ASSET_MANIFEST } from "./assets/assetManifest";
-import { preloadAssets } from "./assets/assetLoader";
+import { preloadCoreAssets } from "./assets/assetLoader";
 import { GameClientApp } from "./runtime/GameClientApp";
 import type { ClientCreatePhase } from "./runtime/GameClientApp";
 import { BootOverlay } from "./ui/BootOverlay";
@@ -21,28 +20,21 @@ export async function bootstrapClient(): Promise<void> {
   TooltipSystem.install(document);
 
   overlay.setStage("Preparing startup");
-  overlay.setDetail("Validating runtime and preload plan...");
+  overlay.setDetail("Loading runtime manifest and preload plan...");
   overlay.setProgress(0.02);
 
   try {
-    const preloadList = ASSET_MANIFEST.filter((asset) => asset.preload !== false);
-    if (preloadList.length > 0) {
-      overlay.setStage("Loading assets");
-      await preloadAssets(ASSET_MANIFEST, {
-        onProgress: (progress) => {
-          const assetPortion = ASSET_PROGRESS_END - ASSET_PROGRESS_START;
-          const ratio = ASSET_PROGRESS_START + progress.ratio * assetPortion;
-          const loaded = `${progress.loadedCount}/${progress.totalCount}`;
-          const label = progress.activeAssetLabel ?? "asset";
-          overlay.setDetail(`Loaded ${loaded} (${label})`);
-          overlay.setProgress(ratio);
-        }
-      });
-    } else {
-      overlay.setStage("No preload assets configured");
-      overlay.setDetail("Skipping asset prefetch and initializing systems...");
-      overlay.setProgress(ASSET_PROGRESS_END);
-    }
+    overlay.setStage("Loading core assets");
+    await preloadCoreAssets({
+      onProgress: (progress) => {
+        const assetPortion = ASSET_PROGRESS_END - ASSET_PROGRESS_START;
+        const ratio = ASSET_PROGRESS_START + progress.ratio * assetPortion;
+        const loaded = `${progress.loadedCount}/${progress.totalCount}`;
+        const label = progress.activeAssetLabel ?? "asset";
+        overlay.setDetail(`Loaded ${loaded} (${label})`);
+        overlay.setProgress(ratio);
+      }
+    });
 
     const app = await GameClientApp.create(canvas, status, (phase) => {
       const phaseProgress = resolveCreatePhaseProgress(phase);

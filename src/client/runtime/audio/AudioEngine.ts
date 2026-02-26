@@ -7,7 +7,7 @@ import {
   type Camera,
   type Scene
 } from "three";
-import { getLoadedAsset } from "../../assets/assetLoader";
+import { ensureAsset, getLoadedAsset } from "../../assets/assetLoader";
 import { AUDIO_EVENT_CATALOG, type AudioEventConfig, type AudioEventId } from "./audioEventCatalog";
 
 interface Vec3Like {
@@ -33,6 +33,7 @@ export class AudioEngine {
   private readonly listenerWorldPosition = new Vector3();
   private readonly activeVoices = new Set<ActiveVoice>();
   private readonly recentPlayByKey = new Map<string, number>();
+  private readonly pendingAssetRequests = new Map<string, number>();
   private disposed = false;
   private unlocked = false;
   private readonly unlockHandler = () => {
@@ -63,6 +64,7 @@ export class AudioEngine {
     }
     const buffer = this.getBuffer(config.assetId);
     if (!buffer) {
+      this.maybeRequestAsset(config.assetId);
       this.playFallbackPulse(position);
       return;
     }
@@ -231,6 +233,18 @@ export class AudioEngine {
   private getBuffer(assetId: string): AudioBuffer | null {
     const loaded = getLoadedAsset(assetId);
     return loaded instanceof AudioBuffer ? loaded : null;
+  }
+
+  private maybeRequestAsset(assetId: string): void {
+    const now = performance.now();
+    const lastAttemptAt = this.pendingAssetRequests.get(assetId);
+    if (typeof lastAttemptAt === "number" && now - lastAttemptAt < 1200) {
+      return;
+    }
+    this.pendingAssetRequests.set(assetId, now);
+    void ensureAsset(assetId, "near").catch(() => {
+      // Keep fallback pulse behavior if the request fails.
+    });
   }
 
   private playFallbackPulse(position: Vec3Like): void {

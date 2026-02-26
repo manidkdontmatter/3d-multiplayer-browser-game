@@ -22,6 +22,8 @@ import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
 import { AbilityHud } from "../ui/AbilityHud";
 import { resolveAccessKey } from "../auth/accessKey";
 import { AuthPanel } from "../ui/AuthPanel";
+import { preloadAssetGroup } from "../assets/assetLoader";
+import { ASSET_GROUP_SFX, ASSET_GROUP_WORLD_DEFAULT } from "../assets/assetManifest";
 
 const FIXED_STEP = 1 / 60;
 const LOOK_PITCH_LIMIT = 1.45;
@@ -147,6 +149,12 @@ export class GameClientApp {
       accessKey ?? "",
       connectionTarget.joinTicket
     );
+    void preloadAssetGroup(ASSET_GROUP_WORLD_DEFAULT, { priority: "near" }).catch((error) => {
+      console.warn("[assets] world preload group failed", error);
+    });
+    void preloadAssetGroup(ASSET_GROUP_SFX, { priority: "background" }).catch((error) => {
+      console.warn("[assets] sfx preload group failed", error);
+    });
     onCreatePhase?.("network");
     await app.network.connect(serverUrl, accessKey, { joinTicket: app.joinTicket });
     if (app.network.getConnectionState() !== "connected" && app.joinTicket && connectionTarget.accessKeyScopeUrl) {

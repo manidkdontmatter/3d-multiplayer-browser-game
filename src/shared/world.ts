@@ -98,9 +98,9 @@ export const RUNTIME_MAP_CONFIG_DEFAULTS = {
   cubeCount: 0,
   oceanBaseHeight: 2,
   oceanEdgeDepth: 10,
-  oceanWaveAmplitude: 1.8,
-  oceanWaveSpeed: 6,
-  oceanWaveLength: 60
+  oceanWaveAmplitude: 3.6,
+  oceanWaveSpeed: 5.4,
+  oceanWaveLength: 96
 } as const;
 
 const DEFAULT_TERRAIN_QUADS_PER_AXIS = 160;

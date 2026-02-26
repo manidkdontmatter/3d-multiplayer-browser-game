@@ -43,9 +43,43 @@ Authoritative server/browser-client scaffold using:
 - Local debug transfer trigger in browser console: `window.request_map_transfer?.('map-b')` (or `'map-a'`).
 - Server transport uses `uWebSockets` via `nengi-uws-instance-adapter` (Node 20.x in this project).
 
+## Production Deploy (Nginx)
+
+- Build artifacts:
+  - `npm run build`
+  - Client output: `dist/` (static files, including generated runtime manifests/assets).
+  - Server output: `dist/server/` (orchestrator + server entrypoints).
+- Example Nginx config:
+  - `deploy/nginx.browser-game.example.conf`
+- Run orchestrator/map runtime behind Nginx:
+  - Nginx serves static files from `dist/`.
+  - Nginx proxies `/bootstrap` (and optional `/health`) to orchestrator HTTP on `127.0.0.1:9000`.
+  - Nginx stream block proxies a public TCP port range (example `9001-9300`) to the same localhost ports for map WS processes.
+
+### Required orchestrator env for browser-visible WS URLs
+
+Set:
+
+- `ORCH_PUBLIC_WS_URL_TEMPLATE`
+
+Example:
+
+- `ORCH_PUBLIC_WS_URL_TEMPLATE=wss://game.example.com:{port}`
+
+Behavior:
+
+- Orchestrator `/bootstrap` and transfer responses will return `wsUrl` based on this template.
+- `{instanceId}` is replaced with the map instance id (for example `map-a`) when present in the template.
+- `{port}` is replaced with the map process WS port.
+
+Important:
+
+- If your map port allocation range changes, keep Nginx stream listen range and firewall rules in sync.
+- Without `ORCH_PUBLIC_WS_URL_TEMPLATE`, orchestrator returns internal map ws URLs (for example `ws://localhost:9001`), which are not suitable for internet deployment.
+
 ## Project Docs
 
 - `overview.md`: canonical summary of what the project is and how it works.
 - `design-doc.md`: canonical game vision/product direction/gameplay and technical intent.
 - `AGENTS.md`: persistent agent operating instructions/memory.
-- `public/assets/README.md`: runtime asset folder conventions (`public/assets/**` is browser-served content).
+- `public/assets/README.md`: source runtime asset folder conventions and generated runtime asset output notes.
