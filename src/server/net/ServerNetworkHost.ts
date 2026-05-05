@@ -27,21 +27,27 @@ export interface ServerNetworkHostQueueHandlers {
 export class ServerNetworkHost {
   private readonly instance: Instance;
   private readonly globalChannel: Channel;
-  private readonly spatialChannel: ChannelAABB3D;
+  private readonly nearChannel: ChannelAABB3D;
+  private readonly farChannel: ChannelAABB3D;
   private adapter: ServerNetworkAdapter | null = null;
 
   public constructor(context: Context) {
     this.instance = new Instance(context);
     this.globalChannel = new Channel(this.instance.localState);
-    this.spatialChannel = new ChannelAABB3D(this.instance.localState);
+    this.nearChannel = new ChannelAABB3D(this.instance.localState);
+    this.farChannel = new ChannelAABB3D(this.instance.localState);
   }
 
   public getGlobalChannel(): Channel {
     return this.globalChannel;
   }
 
-  public getSpatialChannel(): ChannelAABB3D {
-    return this.spatialChannel;
+  public getNearChannel(): ChannelAABB3D {
+    return this.nearChannel;
+  }
+
+  public getFarChannel(): ChannelAABB3D {
+    return this.farChannel;
   }
 
   public createUserView(position: {

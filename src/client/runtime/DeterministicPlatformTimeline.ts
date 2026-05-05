@@ -1,3 +1,4 @@
+// Samples shared deterministic platform definitions for client-side rendering.
 import {
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
@@ -34,4 +35,3 @@ export class DeterministicPlatformTimeline {
     return states;
   }
 }
-

@@ -36,6 +36,17 @@ export class SimulationEcs {
     this.store.syncPlatformFromObject(eid, platform);
   }
 
+  public registerLocationRoot(location: SimObject): void {
+    const eid = this.indexes.getOrCreateEid(location, () => this.store.createEid());
+    this.store.registerLocationRootComponents(eid);
+    this.store.syncLocationRootFromObject(eid, location);
+  }
+
+  public syncLocationRoot(location: SimObject): void {
+    const eid = this.indexes.getEid(location);
+    this.store.syncLocationRootFromObject(eid, location);
+  }
+
   public createProjectile(projectile: ProjectileCreateRequest): number {
     return this.store.createProjectile(projectile);
   }
@@ -170,6 +181,12 @@ export class SimulationEcs {
     movementMode: MovementMode;
     health: number;
     maxHealth: number;
+    locationKind: number;
+    locationArchetypeId: number;
+    locationSeed: number;
+    locationEnvironmentId: number;
+    locationStreamingRadius: number;
+    locationInfluenceRadius: number;
   } {
     return this.projectors.getReplicationSnapshotByEid(eid);
   }
@@ -525,6 +542,7 @@ export class SimulationEcs {
   public getStats(): {
     players: number;
     platforms: number;
+    locationRoots: number;
     projectiles: number;
     dummies: number;
     total: number;
@@ -532,14 +550,16 @@ export class SimulationEcs {
     const world = this.store.world;
     const players = query(world, [world.components.PlayerTag]).length;
     const platforms = query(world, [world.components.PlatformTag]).length;
+    const locationRoots = query(world, [world.components.LocationRootTag]).length;
     const projectiles = query(world, [world.components.ProjectileTag]).length;
     const dummies = query(world, [world.components.DummyTag]).length;
     return {
       players,
       platforms,
+      locationRoots,
       projectiles,
       dummies,
-      total: players + platforms + projectiles + dummies
+      total: players + platforms + locationRoots + projectiles + dummies
     };
   }
 
@@ -555,6 +575,12 @@ export class SimulationEcs {
         movementMode: MovementMode;
         health: number;
         maxHealth: number;
+        locationKind: number;
+        locationArchetypeId: number;
+        locationSeed: number;
+        locationEnvironmentId: number;
+        locationStreamingRadius: number;
+        locationInfluenceRadius: number;
       }
     ) => void
   ): void {
@@ -579,7 +605,13 @@ export class SimulationEcs {
       grounded: boolean,
       movementMode: MovementMode,
       health: number,
-      maxHealth: number
+      maxHealth: number,
+      locationKind: number,
+      locationArchetypeId: number,
+      locationSeed: number,
+      locationEnvironmentId: number,
+      locationStreamingRadius: number,
+      locationInfluenceRadius: number
     ) => void
   ): void {
     const c = this.store.world.components;
@@ -599,7 +631,13 @@ export class SimulationEcs {
         (c.Grounded.value[eid] ?? 0) !== 0,
         (c.MovementMode.value[eid] ?? 0) as MovementMode,
         c.Health.value[eid] ?? 0,
-        c.Health.max[eid] ?? 0
+        c.Health.max[eid] ?? 0,
+        c.LocationKind.value[eid] ?? 0,
+        c.LocationArchetypeId.value[eid] ?? 0,
+        c.LocationSeed.value[eid] ?? 0,
+        c.LocationEnvironmentId.value[eid] ?? 0,
+        c.LocationStreamingRadius.value[eid] ?? 0,
+        c.LocationInfluenceRadius.value[eid] ?? 0
       );
     }
   }

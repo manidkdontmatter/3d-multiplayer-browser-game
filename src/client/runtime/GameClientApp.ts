@@ -417,6 +417,20 @@ export class GameClientApp {
         z: p.z,
         rotation: p.rotation
       })),
+      locationRoots: this.network.getLocationRoots().map((location) => ({
+        nid: location.nid,
+        modelId: location.modelId,
+        locationKind: location.locationKind,
+        locationArchetypeId: location.locationArchetypeId,
+        locationSeed: location.locationSeed,
+        locationEnvironmentId: location.locationEnvironmentId,
+        locationStreamingRadius: location.locationStreamingRadius,
+        locationInfluenceRadius: location.locationInfluenceRadius,
+        x: location.x,
+        y: location.y,
+        z: location.z,
+        rotation: location.rotation
+      })),
       projectiles: this.network.getProjectiles().map((projectile) => ({
         nid: projectile.nid,
         modelId: projectile.modelId,
@@ -578,6 +592,7 @@ export class GameClientApp {
       localPlayerNid: this.network.getLocalPlayerNid(),
       remotePlayers: this.network.getRemotePlayers(),
       abilityUseEvents: this.network.consumeAbilityUseEvents(),
+      locationRoots: this.network.getLocationRoots(),
       platforms: this.getRenderPlatformStates(),
       trainingDummies: this.network.getTrainingDummies(),
       projectiles: this.network.getProjectiles()

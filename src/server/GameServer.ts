@@ -51,7 +51,8 @@ export class GameServer {
     this.orchestratorPersistenceBridge = this.createOrchestratorPersistenceBridge();
     this.simulation = new GameSimulation(
       this.networkHost.getGlobalChannel(),
-      this.networkHost.getSpatialChannel(),
+      this.networkHost.getNearChannel(),
+      this.networkHost.getFarChannel(),
       this.persistence,
       (position) => this.networkHost.createUserView(position)
     );

@@ -178,18 +178,26 @@ function main(): void {
     "ClientNetworkOrchestrator must own reconciliation-frame consumption"
   );
 
-  const worldEnvironment = read("src/client/runtime/rendering/WorldEnvironment.ts");
+  const sharedPlatforms = read("src/shared/platforms.ts");
   assert(
-    worldEnvironment.includes("OCEAN_WAVE_COMPONENTS"),
-    "WorldEnvironment must source wave components from shared OCEAN_WAVE_COMPONENTS"
+    sharedPlatforms.includes("platform-archetypes.json"),
+    "Shared platform definitions must be sourced from data/archetypes/platform-archetypes.json"
   );
   assert(
-    worldEnvironment.includes("const OCEAN_GLSL_COMPONENT_LINES = OCEAN_WAVE_COMPONENTS.map("),
-    "WorldEnvironment shader wave components must be generated from shared OCEAN_WAVE_COMPONENTS"
+    !sharedPlatforms.includes("export const PLATFORM_DEFINITIONS: PlatformDefinition[] = ["),
+    "PLATFORM_DEFINITIONS must not be a hardcoded array in src/shared/platforms.ts"
   );
+
+  const serverArchetypeCatalog = read("src/server/content/ArchetypeCatalog.ts");
   assert(
-    !worldEnvironment.includes("wave += componentWave(p, normalize(vec2("),
-    "WorldEnvironment must not hardcode per-component shader wave constants"
+    serverArchetypeCatalog.includes("PLATFORM_DEFINITIONS"),
+    "Server archetype catalog must use shared PLATFORM_DEFINITIONS for platform content"
+  );
+
+  const serverArchetypes = JSON.parse(read("data/archetypes/server-archetypes.json")) as Record<string, unknown>;
+  assert(
+    !Object.prototype.hasOwnProperty.call(serverArchetypes, "platforms"),
+    "server-archetypes.json must not duplicate platform definitions; use platform-archetypes.json"
   );
 
   console.log("architecture-guards passed");

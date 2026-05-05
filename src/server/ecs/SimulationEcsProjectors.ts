@@ -61,6 +61,12 @@ export class SimulationEcsProjectors {
       movementMode: MovementMode;
       health: number;
       maxHealth: number;
+      locationKind: number;
+      locationArchetypeId: number;
+      locationSeed: number;
+      locationEnvironmentId: number;
+      locationStreamingRadius: number;
+      locationInfluenceRadius: number;
   } {
     const c = this.store.world.components;
     return {
@@ -80,7 +86,13 @@ export class SimulationEcsProjectors {
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
       movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       health: c.Health.value[eid] ?? 0,
-      maxHealth: c.Health.max[eid] ?? 0
+      maxHealth: c.Health.max[eid] ?? 0,
+      locationKind: c.LocationKind.value[eid] ?? 0,
+      locationArchetypeId: c.LocationArchetypeId.value[eid] ?? 0,
+      locationSeed: c.LocationSeed.value[eid] ?? 0,
+      locationEnvironmentId: c.LocationEnvironmentId.value[eid] ?? 0,
+      locationStreamingRadius: c.LocationStreamingRadius.value[eid] ?? 0,
+      locationInfluenceRadius: c.LocationInfluenceRadius.value[eid] ?? 0
     };
   }
 

@@ -36,11 +36,6 @@ export interface RuntimeMapConfig {
   groundHalfExtent: number;
   groundHalfThickness: number;
   cubeCount: number;
-  oceanBaseHeight: number;
-  oceanEdgeDepth: number;
-  oceanWaveAmplitude: number;
-  oceanWaveSpeed: number;
-  oceanWaveLength: number;
 }
 
 export interface RuntimeTerrainMeshData {
@@ -95,12 +90,7 @@ export const RUNTIME_MAP_CONFIG_DEFAULTS = {
   seed: 1337,
   groundHalfExtent: 384,
   groundHalfThickness: 0.5,
-  cubeCount: 0,
-  oceanBaseHeight: 2,
-  oceanEdgeDepth: 10,
-  oceanWaveAmplitude: 3.6,
-  oceanWaveSpeed: 5.4,
-  oceanWaveLength: 96
+  cubeCount: 0
 } as const;
 
 const DEFAULT_TERRAIN_QUADS_PER_AXIS = 160;
@@ -169,17 +159,7 @@ export function coerceRuntimeMapConfig(source: Record<string, unknown> | Partial
       0.1,
       10
     ),
-    cubeCount: normalizeInteger(source.cubeCount, RUNTIME_MAP_CONFIG_DEFAULTS.cubeCount, 0, 10_000),
-    oceanBaseHeight: normalizeNumber(source.oceanBaseHeight, RUNTIME_MAP_CONFIG_DEFAULTS.oceanBaseHeight, -256, 256),
-    oceanEdgeDepth: normalizeNumber(source.oceanEdgeDepth, RUNTIME_MAP_CONFIG_DEFAULTS.oceanEdgeDepth, 1, 64),
-    oceanWaveAmplitude: normalizeNumber(
-      source.oceanWaveAmplitude,
-      RUNTIME_MAP_CONFIG_DEFAULTS.oceanWaveAmplitude,
-      0,
-      12
-    ),
-    oceanWaveSpeed: normalizeNumber(source.oceanWaveSpeed, RUNTIME_MAP_CONFIG_DEFAULTS.oceanWaveSpeed, 0, 8),
-    oceanWaveLength: normalizeNumber(source.oceanWaveLength, RUNTIME_MAP_CONFIG_DEFAULTS.oceanWaveLength, 2, 256)
+    cubeCount: normalizeInteger(source.cubeCount, RUNTIME_MAP_CONFIG_DEFAULTS.cubeCount, 0, 10_000)
   };
 }
 
@@ -194,9 +174,6 @@ export function generateDeterministicVisualBushes(config: RuntimeMapConfig): Vis
     const x = (rng() * 2 - 1) * config.groundHalfExtent * 0.98;
     const z = (rng() * 2 - 1) * config.groundHalfExtent * 0.98;
     const y = sampleTerrainHeightAt(config, x, z);
-    if (y < config.oceanBaseHeight - 0.25) {
-      continue;
-    }
     const biome = sampleDominantBiomeAt(config, x, z, y);
     const slope = sampleTerrainSlopeDegreesAt(config, x, z);
     if (biome !== "grass" || slope > 28 || rng() <= 0.2) {
@@ -238,9 +215,6 @@ export function generateDeterministicVisualGrass(
     const x = (rng() * 2 - 1) * config.groundHalfExtent * 0.98;
     const z = (rng() * 2 - 1) * config.groundHalfExtent * 0.98;
     const y = sampleTerrainHeightAt(config, x, z);
-    if (y < config.oceanBaseHeight - 0.1) {
-      continue;
-    }
     const biome = sampleDominantBiomeAt(config, x, z, y);
     const slope = sampleTerrainSlopeDegreesAt(config, x, z);
     if (slope > 30) {
@@ -455,11 +429,6 @@ function getRuntimeMapSource(): Record<string, unknown> {
       source.groundHalfThickness = process.env.MAP_GROUND_HALF_THICKNESS;
     }
     if (process.env.MAP_CUBE_COUNT) source.cubeCount = process.env.MAP_CUBE_COUNT;
-    if (process.env.MAP_OCEAN_BASE_HEIGHT) source.oceanBaseHeight = process.env.MAP_OCEAN_BASE_HEIGHT;
-    if (process.env.MAP_OCEAN_EDGE_DEPTH) source.oceanEdgeDepth = process.env.MAP_OCEAN_EDGE_DEPTH;
-    if (process.env.MAP_OCEAN_WAVE_AMPLITUDE) source.oceanWaveAmplitude = process.env.MAP_OCEAN_WAVE_AMPLITUDE;
-    if (process.env.MAP_OCEAN_WAVE_SPEED) source.oceanWaveSpeed = process.env.MAP_OCEAN_WAVE_SPEED;
-    if (process.env.MAP_OCEAN_WAVE_LENGTH) source.oceanWaveLength = process.env.MAP_OCEAN_WAVE_LENGTH;
   }
 
   const globalObject = globalThis as unknown as {
@@ -481,11 +450,6 @@ function getRuntimeMapSource(): Record<string, unknown> {
       source.groundHalfThickness = params.get("mapGroundHalfThickness");
     }
     if (params.has("mapCubeCount")) source.cubeCount = params.get("mapCubeCount");
-    if (params.has("mapOceanBaseHeight")) source.oceanBaseHeight = params.get("mapOceanBaseHeight");
-    if (params.has("mapOceanEdgeDepth")) source.oceanEdgeDepth = params.get("mapOceanEdgeDepth");
-    if (params.has("mapOceanWaveAmplitude")) source.oceanWaveAmplitude = params.get("mapOceanWaveAmplitude");
-    if (params.has("mapOceanWaveSpeed")) source.oceanWaveSpeed = params.get("mapOceanWaveSpeed");
-    if (params.has("mapOceanWaveLength")) source.oceanWaveLength = params.get("mapOceanWaveLength");
   }
 
   return source;
@@ -641,10 +605,6 @@ function generateDeterministicProps(
     const y = sampleTerrainHeightAt(config, x, z);
     const biome = sampleDominantBiomeAt(config, x, z, y);
     const slope = sampleTerrainSlopeDegreesAt(config, x, z);
-    const isUnderwater = y < config.oceanBaseHeight - 0.25;
-    if (isUnderwater) {
-      continue;
-    }
 
     if (treesPlaced < targetTrees && biome === "grass" && slope <= 28 && rng() > 0.2) {
       if (!isTooCloseToKind(output, "tree", x, z, minTreeSpacingSq)) {
@@ -793,7 +753,7 @@ function applyCoastalEdgeShaping(config: RuntimeMapConfig, x: number, z: number,
   const radius = Math.hypot(x, z);
   const normalized = clampNumber(radius / Math.max(1, config.groundHalfExtent), 0, 1.2);
   const blend = smoothstep(0.89, 1.0, normalized);
-  const targetEdgeHeight = config.oceanBaseHeight - config.oceanEdgeDepth;
+  const targetEdgeHeight = TERRAIN_MIN_HEIGHT - 4;
   return lerp(height, targetEdgeHeight, blend);
 }
 

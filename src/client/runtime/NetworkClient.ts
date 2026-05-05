@@ -13,6 +13,7 @@ import {
 } from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
 import type {
+  LocationRootState,
   MovementInput,
   PlatformState,
   ProjectileState,
@@ -308,6 +309,10 @@ export class NetworkClient {
     return this.snapshots.getPlatforms();
   }
 
+  public getLocationRoots(): LocationRootState[] {
+    return this.snapshots.getLocationRoots();
+  }
+
   public getProjectiles(): ProjectileState[] {
     return this.snapshots.getProjectiles();
   }
@@ -396,12 +401,7 @@ export class NetworkClient {
           seed: message.seed,
           groundHalfExtent: message.groundHalfExtent,
           groundHalfThickness: message.groundHalfThickness,
-          cubeCount: message.cubeCount,
-          oceanBaseHeight: message.oceanBaseHeight,
-          oceanEdgeDepth: message.oceanEdgeDepth,
-          oceanWaveAmplitude: message.oceanWaveAmplitude,
-          oceanWaveSpeed: message.oceanWaveSpeed,
-          oceanWaveLength: message.oceanWaveLength
+          cubeCount: message.cubeCount
         });
         this.pendingMapTransferInstruction = {
           wsUrl,

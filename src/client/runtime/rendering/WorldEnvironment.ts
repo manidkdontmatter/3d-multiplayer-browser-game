@@ -1,53 +1,66 @@
-// Owns scene/camera/renderer setup and deterministic static world visualization for the local map.
+// Owns client-only scene/camera/renderer setup, void lighting, fog, and environment blending.
 import {
   ACESFilmicToneMapping,
+  AdditiveBlending,
   AmbientLight,
+  BackSide,
   BoxGeometry,
   BufferAttribute,
   BufferGeometry,
   Color,
   ConeGeometry,
+  CubeTexture,
   CylinderGeometry,
   DodecahedronGeometry,
   DirectionalLight,
   DoubleSide,
   Fog,
+  Group,
   InstancedMesh,
   Matrix4,
   Mesh,
-  ShaderMaterial,
+  MeshBasicMaterial,
   MeshStandardMaterial,
-  FrontSide,
   PlaneGeometry,
-  PMREMGenerator,
   PerspectiveCamera,
-  RepeatWrapping,
   Scene,
+  ShaderMaterial,
   SphereGeometry,
+  SRGBColorSpace,
   Texture,
-  Vector3 as Vec3,
   Vector3,
+  Vector4,
   WebGLRenderer
 } from "three";
-import { Sky } from "three/examples/jsm/objects/Sky.js";
 import {
   buildTerrainMeshData,
   DEFAULT_VISUAL_GRASS_VARIANTS,
+  ENVIRONMENT_PRESET_SKY_BLUE_DAY,
+  ENVIRONMENT_PRESET_VOID_ARCANE,
+  ENVIRONMENT_PRESET_VOID_DEEP,
+  ENVIRONMENT_PRESET_VOID_INFERNAL,
+  ENVIRONMENT_PRESET_VOID_NEUTRAL,
+  ENVIRONMENT_PRIORITY_LOCATION,
+  getLocationDefinitionByArchetypeId,
+  getEnvironmentVolumeWeight,
   generateDeterministicVisualBushes,
   generateDeterministicVisualGrass,
   getRuntimeMapLayout,
-  OCEAN_WAVE_COMPONENTS,
-  type RuntimeMapConfig,
+  VOID_ENVIRONMENT_VOLUME_DEFINITIONS,
+  type EnvironmentVolumeDefinition,
   type VisualGrassInstance
 } from "../../../shared/index";
 import { configureAssetLoaderRenderer, ensureAsset, getLoadedAsset } from "../../assets/assetLoader";
 import {
   WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID,
-  WORLD_WATER_NORMALS_A_ASSET_ID,
-  WORLD_WATER_NORMALS_B_ASSET_ID,
-  WORLD_WATER_NORMALS_ASSET_ID
+  WORLD_SKYBOX_1_ASSET_ID,
+  WORLD_SKYBOX_2_ASSET_ID,
+  WORLD_SKYBOX_3_ASSET_ID,
+  WORLD_SKYBOX_4_ASSET_ID,
+  WORLD_SKYBOX_5_ASSET_ID
 } from "../../assets/assetManifest";
-import type { PlayerPose } from "../types";
+import type { LocationEnvironmentVolumeDefinition } from "../../../shared/index";
+import type { LocationRootState, PlayerPose } from "../types";
 
 const LOCAL_FIRST_PERSON_ONLY_LAYER = 11;
 const LOCAL_THIRD_PERSON_ONLY_LAYER = 12;
@@ -58,11 +71,6 @@ interface StaticPropVisual {
   z: number;
   rotationY: number;
   scale: number;
-}
-
-interface OceanSurface {
-  mesh: Mesh<BufferGeometry, ShaderMaterial | MeshStandardMaterial>;
-  snapSize: number;
 }
 
 interface GrassRenderVariant {
@@ -81,6 +89,47 @@ interface GrassCellBatch {
   centerZ: number;
   fullCount: number;
   farCount: number;
+}
+
+type EnvironmentVfxLayerId = "voidStars" | "heavenMist" | "infernalNebula" | "arcaneMotes";
+
+type EnvironmentVfxWeights = Record<EnvironmentVfxLayerId, number>;
+
+type VoidSkyLayerId = "skybox1" | "skybox2" | "skybox3" | "skybox4" | "skybox5";
+
+type VoidSkyWeights = Record<VoidSkyLayerId, number>;
+
+interface EnvironmentPreset {
+  background: Color;
+  fogColor: Color;
+  fogNear: number;
+  fogFar: number;
+  ambientColor: Color;
+  ambientIntensity: number;
+  sunColor: Color;
+  sunIntensity: number;
+  exposure: number;
+  vfx: EnvironmentVfxWeights;
+  sky: VoidSkyWeights;
+}
+
+interface EnvironmentInfluence {
+  readonly priority: number;
+  readonly weight: number;
+  readonly preset: EnvironmentPreset;
+}
+
+interface EnvironmentVfxLayerVisual {
+  readonly group: Group;
+  readonly materials: MeshBasicMaterial[];
+  readonly anchorsToCamera: boolean;
+}
+
+interface VoidSkyLayerDefinition {
+  readonly id: VoidSkyLayerId;
+  readonly assetId: string;
+  readonly uniformName: "skybox0" | "skybox1" | "skybox2" | "skybox3" | "skybox4";
+  readonly weightIndex: 0 | 1 | 2 | 3 | 4;
 }
 
 const GRASS_RENDER_VARIANTS: readonly GrassRenderVariant[] = [
@@ -102,73 +151,279 @@ const GRASS_LOD_FAR_DISTANCE = 600;
 const GRASS_FAR_DENSITY_STRIDE = 3;
 const GRASS_FADE_START_DISTANCE = 90;
 const GRASS_FADE_END_DISTANCE = 150;
-const OCEAN_RING_LEVELS = [
-  { innerHalf: 0, outerHalf: 180, radialSegments: 60 },
-  { innerHalf: 180, outerHalf: 440, radialSegments: 44 },
-  { innerHalf: 440, outerHalf: 920, radialSegments: 28 },
-  { innerHalf: 920, outerHalf: 1720, radialSegments: 16 }
-] as const;
-const OCEAN_RING_ANGULAR_SEGMENTS = 192;
-const OCEAN_GLSL_COMPONENT_LINES = OCEAN_WAVE_COMPONENTS.map(
-  (component) =>
-    `wave += componentWave(p, vec2(${component.dirX.toFixed(6)}, ${component.dirZ.toFixed(6)}), ${component.ampMul.toFixed(6)}, ${component.speedMul.toFixed(6)}, ${component.lengthMul.toFixed(6)}, ${component.phase.toFixed(6)}, ${component.crestMul.toFixed(6)}, timeSeconds, waveAmplitude, waveSpeed, waveLength);`
-).join("\n  ");
-const OCEAN_GLSL_WAVE_FUNCTIONS = `
-float componentWave(
-  vec2 p,
-  vec2 dir,
-  float ampMul,
-  float speedMul,
-  float lenMul,
-  float phaseSeed,
-  float crestMul,
-  float timeSeconds,
-  float waveAmplitude,
-  float waveSpeed,
-  float waveLength
-) {
-  float wavelength = max(1.0, waveLength * lenMul);
-  float k = 6.28318530718 / wavelength;
-  float omega = k * waveSpeed * speedMul;
-  float projection = dot(p, dir);
-  float phase = projection * k + timeSeconds * omega + phaseSeed;
-  float primary = sin(phase);
-  float crest = sin(phase * 2.0 + phaseSeed * 0.37) * crestMul;
-  return (primary + crest) * waveAmplitude * ampMul;
+const DEFAULT_ENVIRONMENT_PRESET_ID = ENVIRONMENT_PRESET_VOID_NEUTRAL;
+const ZERO_VFX_WEIGHTS: EnvironmentVfxWeights = {
+  voidStars: 0,
+  heavenMist: 0,
+  infernalNebula: 0,
+  arcaneMotes: 0
+};
+const ZERO_SKY_WEIGHTS: VoidSkyWeights = {
+  skybox1: 0,
+  skybox2: 0,
+  skybox3: 0,
+  skybox4: 0,
+  skybox5: 0
+};
+const VOID_SKY_RENDER_ORDER = -1000;
+const ENVIRONMENT_VFX_RENDER_ORDER = -900;
+
+const VOID_SKY_LAYERS: readonly VoidSkyLayerDefinition[] = [
+  {
+    id: "skybox1",
+    assetId: WORLD_SKYBOX_1_ASSET_ID,
+    uniformName: "skybox0",
+    weightIndex: 0
+  },
+  {
+    id: "skybox2",
+    assetId: WORLD_SKYBOX_2_ASSET_ID,
+    uniformName: "skybox1",
+    weightIndex: 1
+  },
+  {
+    id: "skybox3",
+    assetId: WORLD_SKYBOX_3_ASSET_ID,
+    uniformName: "skybox2",
+    weightIndex: 2
+  },
+  {
+    id: "skybox4",
+    assetId: WORLD_SKYBOX_4_ASSET_ID,
+    uniformName: "skybox3",
+    weightIndex: 3
+  },
+  {
+    id: "skybox5",
+    assetId: WORLD_SKYBOX_5_ASSET_ID,
+    uniformName: "skybox4",
+    weightIndex: 4
+  }
+];
+
+const VOID_SKY_VERTEX_SHADER = /* glsl */ `
+varying vec3 vWorldDirection;
+
+#include <common>
+
+void main() {
+  vWorldDirection = transformDirection(position, modelMatrix);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  gl_Position.z = gl_Position.w;
+}
+`;
+
+const VOID_SKY_FRAGMENT_SHADER = /* glsl */ `
+uniform samplerCube skybox0;
+uniform samplerCube skybox1;
+uniform samplerCube skybox2;
+uniform samplerCube skybox3;
+uniform samplerCube skybox4;
+uniform vec4 skyWeights0123;
+uniform float skyWeight4;
+uniform float skyIntensity;
+
+varying vec3 vWorldDirection;
+
+vec3 sampleSkybox(samplerCube skybox, vec3 direction) {
+  return textureCube(skybox, vec3(-direction.x, direction.y, direction.z)).rgb;
 }
 
-float sampleWaveHeightAt(vec2 p, float baseHeight, float waveAmplitude, float waveSpeed, float waveLength, float timeSeconds) {
-  if (waveAmplitude <= 0.00001) {
-    return baseHeight;
+void main() {
+  vec3 direction = normalize(vWorldDirection);
+  vec4 weights0123 = max(skyWeights0123, vec4(0.0));
+  float weight4 = max(skyWeight4, 0.0);
+  float totalWeight = dot(weights0123, vec4(1.0)) + weight4;
+
+  vec3 color =
+    sampleSkybox(skybox0, direction) * weights0123.x +
+    sampleSkybox(skybox1, direction) * weights0123.y +
+    sampleSkybox(skybox2, direction) * weights0123.z +
+    sampleSkybox(skybox3, direction) * weights0123.w +
+    sampleSkybox(skybox4, direction) * weight4;
+
+  if (totalWeight <= 0.0001) {
+    color = sampleSkybox(skybox4, direction);
+  } else {
+    color /= totalWeight;
   }
-  float wave = 0.0;
-  ${OCEAN_GLSL_COMPONENT_LINES}
-  return baseHeight + wave;
-}`;
+
+  gl_FragColor = vec4(color * skyIntensity, 1.0);
+
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`;
+
+const ENVIRONMENT_PRESETS = new Map<number, EnvironmentPreset>([
+  [
+    ENVIRONMENT_PRESET_VOID_NEUTRAL,
+    {
+      background: new Color(0x090712),
+      fogColor: new Color(0x171126),
+      fogNear: 420,
+      fogFar: 1800,
+      ambientColor: new Color(0xb8c7ff),
+      ambientIntensity: 0.58,
+      sunColor: new Color(0xd8e4ff),
+      sunIntensity: 0.85,
+      exposure: 0.9,
+      vfx: {
+        voidStars: 0.9,
+        heavenMist: 0,
+        infernalNebula: 0,
+        arcaneMotes: 0.2
+      },
+      sky: {
+        skybox1: 0,
+        skybox2: 0,
+        skybox3: 0,
+        skybox4: 0,
+        skybox5: 1
+      }
+    }
+  ],
+  [
+    ENVIRONMENT_PRESET_SKY_BLUE_DAY,
+    {
+      background: new Color(0x9fd7ff),
+      fogColor: new Color(0xb8e4ff),
+      fogNear: 190,
+      fogFar: 980,
+      ambientColor: new Color(0xffffff),
+      ambientIntensity: 0.54,
+      sunColor: new Color(0xfff2d9),
+      sunIntensity: 1.1,
+      exposure: 0.96,
+      vfx: {
+        voidStars: 0.15,
+        heavenMist: 0.8,
+        infernalNebula: 0,
+        arcaneMotes: 0
+      },
+      sky: {
+        skybox1: 1,
+        skybox2: 0,
+        skybox3: 0,
+        skybox4: 0,
+        skybox5: 0
+      }
+    }
+  ],
+  [
+    ENVIRONMENT_PRESET_VOID_INFERNAL,
+    {
+      background: new Color(0x120207),
+      fogColor: new Color(0x3a0610),
+      fogNear: 260,
+      fogFar: 1200,
+      ambientColor: new Color(0xff6a4f),
+      ambientIntensity: 0.35,
+      sunColor: new Color(0xff9b51),
+      sunIntensity: 1.2,
+      exposure: 0.82,
+      vfx: {
+        voidStars: 0.35,
+        heavenMist: 0,
+        infernalNebula: 1,
+        arcaneMotes: 0.1
+      },
+      sky: {
+        skybox1: 0,
+        skybox2: 0,
+        skybox3: 0,
+        skybox4: 1,
+        skybox5: 0
+      }
+    }
+  ],
+  [
+    ENVIRONMENT_PRESET_VOID_ARCANE,
+    {
+      background: new Color(0x070a22),
+      fogColor: new Color(0x1f225d),
+      fogNear: 300,
+      fogFar: 1450,
+      ambientColor: new Color(0x9bb9ff),
+      ambientIntensity: 0.48,
+      sunColor: new Color(0xa2f6ff),
+      sunIntensity: 1.0,
+      exposure: 0.88,
+      vfx: {
+        voidStars: 0.65,
+        heavenMist: 0.1,
+        infernalNebula: 0,
+        arcaneMotes: 1
+      },
+      sky: {
+        skybox1: 0,
+        skybox2: 0,
+        skybox3: 1,
+        skybox4: 0,
+        skybox5: 0
+      }
+    }
+  ],
+  [
+    ENVIRONMENT_PRESET_VOID_DEEP,
+    {
+      background: new Color(0x090208),
+      fogColor: new Color(0x170711),
+      fogNear: 330,
+      fogFar: 1550,
+      ambientColor: new Color(0xc4a4ff),
+      ambientIntensity: 0.44,
+      sunColor: new Color(0xffb3c4),
+      sunIntensity: 0.95,
+      exposure: 0.86,
+      vfx: {
+        voidStars: 0.7,
+        heavenMist: 0,
+        infernalNebula: 0.25,
+        arcaneMotes: 0.35
+      },
+      sky: {
+        skybox1: 0,
+        skybox2: 1,
+        skybox3: 0,
+        skybox4: 0,
+        skybox5: 0
+      }
+    }
+  ]
+]);
+
 
 export class WorldEnvironment {
   public readonly renderer: WebGLRenderer;
   public readonly scene: Scene;
   public readonly camera: PerspectiveCamera;
+  private readonly skyScene = new Scene();
   private readonly cameraForward = new Vector3(0, 0, -1);
   private readonly tempMatrix = new Matrix4();
-  private readonly tempScale = new Vec3(1, 1, 1);
+  private readonly tempScale = new Vector3(1, 1, 1);
   private readonly e2eMode: boolean;
   private readonly headlessLite: boolean;
-  private readonly oceanMeshEnabled: boolean;
-  private readonly oceanWavesEnabled: boolean;
   private readonly windUniformUpdaters: Array<(timeSeconds: number) => void> = [];
   private readonly grassCellBatches: GrassCellBatch[] = [];
   private readonly sunDirection = new Vector3(0.33, 0.9, 0.22).normalize();
-  private skyDome: Sky | null = null;
+  private readonly currentEnvironment = cloneEnvironmentPreset(
+    requireEnvironmentPreset(DEFAULT_ENVIRONMENT_PRESET_ID)
+  );
+  private readonly targetEnvironment = cloneEnvironmentPreset(
+    requireEnvironmentPreset(DEFAULT_ENVIRONMENT_PRESET_ID)
+  );
+  private readonly environmentVfxLayers = new Map<EnvironmentVfxLayerId, EnvironmentVfxLayerVisual>();
+  private readonly skyboxLayerTextures = new Map<VoidSkyLayerId, CubeTexture>();
+  private readonly fallbackSkybox = createSolidCubeTexture(0x020407);
+  private skyboxMesh: Mesh<BoxGeometry, ShaderMaterial> | null = null;
+  private skyboxMaterial: ShaderMaterial | null = null;
+  private ambientLight: AmbientLight | null = null;
   private sunLight: DirectionalLight | null = null;
-  private oceanSurface: OceanSurface | null = null;
-  private groundMaterial: MeshStandardMaterial | null = null;
-  private deferredTerrainCausticsPending = false;
-  private deferredOceanUpgradePending = false;
   private pendingGrassInstances: VisualGrassInstance[] | null = null;
-  private mapConfig: RuntimeMapConfig | null = null;
   private worldTextureRequestsIssued = false;
+  private skyboxRequestsIssued = false;
   private grassInstancesAdded = false;
 
   public constructor(canvas: HTMLCanvasElement) {
@@ -177,16 +432,6 @@ export class WorldEnvironment {
     const headlessLiteParam = params.get("headlessLite");
     this.headlessLite =
       headlessLiteParam === "0" || headlessLiteParam === "false" ? false : this.e2eMode;
-    const oceanMeshParam = params.get("oceanMesh");
-    this.oceanMeshEnabled =
-      oceanMeshParam === "0" || oceanMeshParam === "false"
-        ? false
-        : !this.e2eMode && !this.headlessLite;
-    const oceanWavesParam = params.get("oceanWaves");
-    this.oceanWavesEnabled =
-      oceanWavesParam === "0" || oceanWavesParam === "false"
-        ? false
-        : !this.e2eMode && this.oceanMeshEnabled;
     this.renderer = new WebGLRenderer({
       canvas,
       antialias: !this.e2eMode,
@@ -195,14 +440,19 @@ export class WorldEnvironment {
     this.renderer.setPixelRatio(this.e2eMode ? 1 : Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.9;
+    this.renderer.toneMappingExposure = this.currentEnvironment.exposure;
+    this.renderer.autoClear = false;
     configureAssetLoaderRenderer(this.renderer);
 
     this.scene = new Scene();
-    this.scene.background = new Color(0xb8e4ff);
-    this.scene.fog = new Fog(0xb8e4ff, 225, 1100);
+    this.scene.background = this.currentEnvironment.background.clone();
+    this.scene.fog = new Fog(
+      this.currentEnvironment.fogColor.clone(),
+      this.currentEnvironment.fogNear,
+      this.currentEnvironment.fogFar
+    );
 
-    this.camera = new PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.01, 1200);
+    this.camera = new PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.01, 5000);
     this.camera.layers.enable(LOCAL_FIRST_PERSON_ONLY_LAYER);
     this.camera.layers.disable(LOCAL_THIRD_PERSON_ONLY_LAYER);
 
@@ -215,7 +465,11 @@ export class WorldEnvironment {
     this.renderer.setSize(width, height);
   }
 
-  public render(localPose: PlayerPose, renderServerTimeSeconds: number): void {
+  public render(
+    localPose: PlayerPose,
+    renderServerTimeSeconds: number,
+    locationRoots: readonly LocationRootState[]
+  ): void {
     this.camera.position.set(localPose.x, localPose.y, localPose.z);
     this.camera.rotation.order = "YXZ";
     this.camera.rotation.y = localPose.yaw;
@@ -225,7 +479,14 @@ export class WorldEnvironment {
     }
     this.maybeApplyDeferredVisuals();
     this.updateGrassLod(localPose.x, localPose.z);
-    this.updateOceanSurface(renderServerTimeSeconds);
+    this.updateEnvironment(localPose, locationRoots);
+    this.updateVoidSkyPosition();
+    this.updateAnchoredEnvironmentVfx();
+    this.renderer.clear(true, true, true);
+    if (!this.headlessLite) {
+      this.renderer.render(this.skyScene, this.camera);
+      this.renderer.clearDepth();
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -234,532 +495,352 @@ export class WorldEnvironment {
   }
 
   public dispose(): void {
+    this.skyboxMesh?.geometry.dispose();
+    this.skyboxMaterial?.dispose();
+    this.fallbackSkybox.dispose();
     this.renderer.dispose();
     this.grassCellBatches.length = 0;
     this.pendingGrassInstances = null;
   }
 
   private initializeScene(): void {
-    const layout = getRuntimeMapLayout({
-      includeStaticBlocks: !this.headlessLite,
-      includeStaticProps: !this.headlessLite
-    });
-    this.mapConfig = layout.config;
-    const ambient = new AmbientLight(0xffffff, 0.48);
+    const ambient = new AmbientLight(
+      this.currentEnvironment.ambientColor,
+      this.currentEnvironment.ambientIntensity
+    );
+    this.ambientLight = ambient;
     this.scene.add(ambient);
 
-    const sun = new DirectionalLight(0xfff2d9, 1.05);
+    const sun = new DirectionalLight(
+      this.currentEnvironment.sunColor,
+      this.currentEnvironment.sunIntensity
+    );
     this.sunLight = sun;
     sun.position.copy(this.sunDirection).multiplyScalar(220);
     this.scene.add(sun);
-    if (!this.headlessLite) {
-      this.configureSkyEnvironment();
-    }
 
     if (!this.headlessLite) {
-      this.requestWorldTextureAssets();
-      const groundMaterial = new MeshStandardMaterial({
-        color: 0xffffff,
-        vertexColors: true,
-        roughness: 0.95,
-        metalness: 0.02
-      });
-      const terrain = buildTerrainMeshData(layout.config);
-      const groundGeometry = new BufferGeometry();
-      groundGeometry.setAttribute("position", new BufferAttribute(terrain.vertices, 3));
-      groundGeometry.setAttribute("color", new BufferAttribute(terrain.colors, 3));
-      groundGeometry.setIndex(new BufferAttribute(terrain.indices, 1));
-      groundGeometry.computeVertexNormals();
-      const ground = new Mesh(groundGeometry, groundMaterial);
-      ground.receiveShadow = false;
-      this.scene.add(ground);
-      this.groundMaterial = groundMaterial;
-      this.deferredTerrainCausticsPending = !this.configureTerrainCaustics(groundMaterial, layout.config);
-    }
-    if (this.oceanMeshEnabled) {
-      this.createOceanSurface(layout.config);
-    }
-
-    if (!this.headlessLite) {
-      const propMaterial = new MeshStandardMaterial({
-        color: 0x8ea8ba,
-        roughness: 0.82,
-        metalness: 0.05
-      });
-      for (const worldBlock of layout.staticBlocks) {
-        const block = new Mesh(
-          new BoxGeometry(worldBlock.halfX * 2, worldBlock.halfY * 2, worldBlock.halfZ * 2),
-          propMaterial
-        );
-        block.position.set(worldBlock.x, worldBlock.y, worldBlock.z);
-        block.rotation.y = worldBlock.rotationY ?? 0;
-        this.scene.add(block);
-      }
-
-      const clientBushes = generateDeterministicVisualBushes(layout.config);
-      this.addProceduralPropInstances([...layout.staticProps, ...clientBushes]);
-      this.pendingGrassInstances = generateDeterministicVisualGrass(layout.config);
-      this.tryAddGrassInstances();
+      this.addVoidSkyboxRenderer();
+      this.applyVoidSky(this.currentEnvironment.sky);
+      this.requestSkyboxAssets();
+      this.addEnvironmentVfxLayers();
+      this.applyEnvironmentVfx(this.currentEnvironment.vfx);
     }
   }
 
-  private configureTerrainCaustics(material: MeshStandardMaterial, config: RuntimeMapConfig): boolean {
-    const normalA =
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_A_ASSET_ID) ??
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
-    const normalB =
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_B_ASSET_ID) ??
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
-    if (!normalA || !normalB) {
-      return false;
-    }
-    normalA.wrapS = RepeatWrapping;
-    normalA.wrapT = RepeatWrapping;
-    normalA.needsUpdate = true;
-    normalB.wrapS = RepeatWrapping;
-    normalB.wrapT = RepeatWrapping;
-    normalB.needsUpdate = true;
-
-    const uTime = { value: 0 };
-    material.onBeforeCompile = (shader) => {
-      shader.uniforms.uCausticTime = uTime;
-      shader.uniforms.uCausticTexA = { value: normalA };
-      shader.uniforms.uCausticTexB = { value: normalB };
-      shader.uniforms.uOceanBaseHeight = { value: config.oceanBaseHeight };
-      shader.uniforms.uWaveAmplitude = { value: config.oceanWaveAmplitude };
-      shader.uniforms.uWaveSpeed = { value: config.oceanWaveSpeed };
-      shader.uniforms.uWaveLength = { value: config.oceanWaveLength };
-      shader.uniforms.uCausticStrength = { value: 0.28 };
-
-      shader.vertexShader = shader.vertexShader.replace(
-        "#include <common>",
-        `#include <common>
-varying vec3 vCausticWorldPos;`
-      );
-      shader.vertexShader = shader.vertexShader.replace(
-        "#include <worldpos_vertex>",
-        `#include <worldpos_vertex>
-vCausticWorldPos = worldPosition.xyz;`
-      );
-
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <common>",
-        `#include <common>
-varying vec3 vCausticWorldPos;
-uniform float uCausticTime;
-uniform sampler2D uCausticTexA;
-uniform sampler2D uCausticTexB;
-uniform float uOceanBaseHeight;
-uniform float uWaveAmplitude;
-uniform float uWaveSpeed;
-uniform float uWaveLength;
-uniform float uCausticStrength;
-${OCEAN_GLSL_WAVE_FUNCTIONS}`
-      );
-
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <dithering_fragment>",
-        `float oceanY = sampleWaveHeightAt(
-vCausticWorldPos.xz,
-uOceanBaseHeight,
-max(0.0, uWaveAmplitude),
-max(0.0, uWaveSpeed),
-max(1.0, uWaveLength),
-uCausticTime
-);
-float underWater = step(vCausticWorldPos.y, oceanY - 0.05);
-float depth = clamp((oceanY - vCausticWorldPos.y) / 3.0, 0.0, 1.0);
-vec2 cUv = vCausticWorldPos.xz * 0.024;
-float cA = texture2D(uCausticTexA, cUv + vec2(uCausticTime * 0.037, -uCausticTime * 0.026)).r;
-float cB = texture2D(uCausticTexB, cUv * 1.67 + vec2(-uCausticTime * 0.031, uCausticTime * 0.039)).g;
-float caustic = pow(max(0.0, cA + cB - 0.96), 2.1) * underWater * (1.0 - depth);
-gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
-#include <dithering_fragment>`
-      );
-    };
-    material.customProgramCacheKey = () => "terrain-caustics-v2";
-    material.needsUpdate = true;
-    this.windUniformUpdaters.push((timeSeconds) => {
-      uTime.value = Number.isFinite(timeSeconds) ? timeSeconds : 0;
-    });
-    return true;
-  }
-
-  private createOceanSurface(config: RuntimeMapConfig): void {
-    const material = this.createOceanWaterMaterial(config);
-    const geometry = this.createOceanRingGeometry();
-    const mesh = new Mesh(geometry, material);
-    mesh.frustumCulled = false;
-    this.scene.add(mesh);
-    const firstLevel = OCEAN_RING_LEVELS[0];
-    const radialStep = firstLevel
-      ? Math.max(1, (firstLevel.outerHalf - firstLevel.innerHalf) / Math.max(1, firstLevel.radialSegments))
-      : 4;
-    this.oceanSurface = {
-      mesh,
-      snapSize: radialStep
-    };
-    this.deferredOceanUpgradePending = material instanceof MeshStandardMaterial;
-    this.updateOceanSurface(0);
-  }
-
-  private configureSkyEnvironment(): void {
-    const sky = new Sky();
-    sky.scale.setScalar(450000);
-    const uniforms = sky.material.uniforms as Record<string, { value: unknown } | undefined>;
-    if (uniforms.turbidity) uniforms.turbidity.value = 3.6;
-    if (uniforms.rayleigh) uniforms.rayleigh.value = 1.35;
-    if (uniforms.mieCoefficient) uniforms.mieCoefficient.value = 0.0022;
-    if (uniforms.mieDirectionalG) uniforms.mieDirectionalG.value = 0.82;
-    if (uniforms.sunPosition && uniforms.sunPosition.value instanceof Vector3) {
-      uniforms.sunPosition.value.copy(this.sunDirection.clone().multiplyScalar(5000));
-    }
-    this.skyDome = sky;
-    this.scene.add(sky);
-
-    const pmremGenerator = new PMREMGenerator(this.renderer);
-    const skyScene = new Scene();
-    const skyClone = sky.clone();
-    skyScene.add(skyClone);
-    const env = pmremGenerator.fromScene(skyScene);
-    this.scene.environment = env.texture;
-    this.scene.environmentIntensity = 0.46;
-    pmremGenerator.dispose();
-    env.dispose();
-  }
-
-  private createOceanRingGeometry(): BufferGeometry {
-    const positions: number[] = [];
-    const uvs: number[] = [];
-    const indices: number[] = [];
-    const angularSegments = Math.max(16, OCEAN_RING_ANGULAR_SEGMENTS);
-    const fullTurn = Math.PI * 2;
-
-    let firstBandOuterStart = -1;
-    let firstBandOuterStride = 0;
-
-    for (let levelIndex = 0; levelIndex < OCEAN_RING_LEVELS.length; levelIndex += 1) {
-      const level = OCEAN_RING_LEVELS[levelIndex];
-      if (!level) {
-        continue;
-      }
-      const innerRadius = Math.max(0, level.innerHalf);
-      const outerRadius = Math.max(innerRadius + 0.001, level.outerHalf);
-      const radialSegments = Math.max(1, Math.floor(level.radialSegments));
-      const vertexBase = positions.length / 3;
-      const stride = angularSegments + 1;
-
-      if (innerRadius <= 0.0001) {
-        positions.push(0, 0, 0);
-        uvs.push(0.5, 0.5);
-        const centerIndex = vertexBase;
-        for (let radial = 1; radial <= radialSegments; radial += 1) {
-          const radialT = radial / radialSegments;
-          const radius = outerRadius * radialT;
-          for (let angular = 0; angular <= angularSegments; angular += 1) {
-            const angularT = angular / angularSegments;
-            const theta = angularT * fullTurn;
-            const x = Math.cos(theta) * radius;
-            const z = Math.sin(theta) * radius;
-            positions.push(x, 0, z);
-            uvs.push(angularT, radialT);
-          }
-        }
-
-        const firstRingStart = centerIndex + 1;
-        for (let angular = 0; angular < angularSegments; angular += 1) {
-          const a = firstRingStart + angular;
-          const b = firstRingStart + angular + 1;
-          indices.push(centerIndex, b, a);
-        }
-        for (let radial = 1; radial < radialSegments; radial += 1) {
-          const ringA = firstRingStart + (radial - 1) * stride;
-          const ringB = firstRingStart + radial * stride;
-          for (let angular = 0; angular < angularSegments; angular += 1) {
-            const a = ringA + angular;
-            const b = ringA + angular + 1;
-            const c = ringB + angular;
-            const d = ringB + angular + 1;
-            indices.push(a, b, c, b, d, c);
-          }
-        }
-        firstBandOuterStart = firstRingStart + (radialSegments - 1) * stride;
-        firstBandOuterStride = stride;
-        continue;
-      }
-
-      for (let radial = 0; radial <= radialSegments; radial += 1) {
-        const radialT = radial / radialSegments;
-        const radius = innerRadius + (outerRadius - innerRadius) * radialT;
-        for (let angular = 0; angular <= angularSegments; angular += 1) {
-          const angularT = angular / angularSegments;
-          const theta = angularT * fullTurn;
-          const x = Math.cos(theta) * radius;
-          const z = Math.sin(theta) * radius;
-          positions.push(x, 0, z);
-          uvs.push(angularT, radialT);
-        }
-      }
-      for (let radial = 0; radial < radialSegments; radial += 1) {
-        const ringA = vertexBase + radial * stride;
-        const ringB = vertexBase + (radial + 1) * stride;
-        for (let angular = 0; angular < angularSegments; angular += 1) {
-          const a = ringA + angular;
-          const b = ringA + angular + 1;
-          const c = ringB + angular;
-          const d = ringB + angular + 1;
-          indices.push(a, b, c, b, d, c);
-        }
-      }
-    }
-
-    if (firstBandOuterStart >= 0 && firstBandOuterStride > 0) {
-      const seamRadius = OCEAN_RING_LEVELS[0]?.outerHalf ?? 0;
-      const epsilon = Math.max(0.2, seamRadius * 0.00025);
-      const skirtBase = positions.length / 3;
-      for (let angular = 0; angular <= angularSegments; angular += 1) {
-        const sourceIndex = firstBandOuterStart + angular;
-        const x = positions[sourceIndex * 3] ?? 0;
-        const y = positions[sourceIndex * 3 + 1] ?? 0;
-        const z = positions[sourceIndex * 3 + 2] ?? 0;
-        const len = Math.hypot(x, z) || 1;
-        const ox = (x / len) * (len + epsilon);
-        const oz = (z / len) * (len + epsilon);
-        positions.push(ox, y, oz);
-        uvs.push((angular / angularSegments), 1);
-      }
-      for (let angular = 0; angular < angularSegments; angular += 1) {
-        const innerA = firstBandOuterStart + angular;
-        const innerB = firstBandOuterStart + angular + 1;
-        const outerA = skirtBase + angular;
-        const outerB = skirtBase + angular + 1;
-        indices.push(innerA, innerB, outerA, innerB, outerB, outerA);
-      }
-    }
-
-    const geometry = new BufferGeometry();
-    geometry.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
-    geometry.setAttribute("uv", new BufferAttribute(new Float32Array(uvs), 2));
-    const indexArray =
-      positions.length / 3 > 65_535 ? new Uint32Array(indices) : new Uint16Array(indices);
-    geometry.setIndex(new BufferAttribute(indexArray, 1));
-    geometry.computeBoundingSphere();
-    return geometry;
-  }
-
-  private createOceanWaterMaterial(
-    config: RuntimeMapConfig
-  ): ShaderMaterial | MeshStandardMaterial {
-    const waterNormalsA =
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_A_ASSET_ID) ??
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
-    const waterNormalsB =
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_B_ASSET_ID) ??
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
-    if (!waterNormalsA || !waterNormalsB) {
-      return new MeshStandardMaterial({
-        color: 0x2e78b8,
-        roughness: 0.35,
-        metalness: 0.05,
-        side: FrontSide
-      });
-    }
-    waterNormalsA.wrapS = RepeatWrapping;
-    waterNormalsA.wrapT = RepeatWrapping;
-    waterNormalsA.needsUpdate = true;
-    waterNormalsB.wrapS = RepeatWrapping;
-    waterNormalsB.wrapT = RepeatWrapping;
-    waterNormalsB.needsUpdate = true;
-    const sceneFog = this.scene.fog as Fog | null;
-    const fogColor = sceneFog?.color ?? new Color(0xb8e4ff);
-    const fogNear = sceneFog?.near ?? 9_999_999;
-    const fogFar = sceneFog?.far ?? 9_999_999;
+  private addVoidSkyboxRenderer(): void {
     const material = new ShaderMaterial({
+      name: "VoidCubemapBlendSkyMaterial",
       uniforms: {
-        uTime: { value: 0 },
-        uOceanBaseHeight: { value: config.oceanBaseHeight },
-        uWaveAmplitude: { value: config.oceanWaveAmplitude },
-        uWaveSpeed: { value: config.oceanWaveSpeed },
-        uWaveLength: { value: config.oceanWaveLength },
-        uNormalSamplerA: { value: waterNormalsA },
-        uNormalSamplerB: { value: waterNormalsB },
-        uSunDirection: { value: this.sunDirection.clone() },
-        uSunColor: { value: new Color(0xfff4df) },
-        uSkyHorizonColor: { value: new Color(0xa2c9ea) },
-        uSkyZenithColor: { value: new Color(0x4f7ca6) },
-        uWaterShallowColor: { value: new Color(0x4ea3cb) },
-        uWaterDeepColor: { value: new Color(0x0f3e64) },
-        uNormalScale: { value: 0.44 },
-        uNormalStrength: { value: 1.28 },
-        uOpacity: { value: 0.74 },
-        uCausticStrength: { value: 0.28 },
-        uFoamColor: { value: new Color(0xe8f6ff) },
-        uFoamStrength: { value: 0.33 },
-        uFogColor: { value: fogColor.clone() },
-        uFogNear: { value: fogNear },
-        uFogFar: { value: fogFar }
+        skybox0: { value: this.fallbackSkybox },
+        skybox1: { value: this.fallbackSkybox },
+        skybox2: { value: this.fallbackSkybox },
+        skybox3: { value: this.fallbackSkybox },
+        skybox4: { value: this.fallbackSkybox },
+        skyWeights0123: { value: new Vector4(0, 0, 0, 0) },
+        skyWeight4: { value: 1 },
+        skyIntensity: { value: 1 }
       },
-      vertexShader: `
-        uniform float uTime;
-        uniform float uOceanBaseHeight;
-        uniform float uWaveAmplitude;
-        uniform float uWaveSpeed;
-        uniform float uWaveLength;
-        varying vec3 vWorldPosition;
-        varying vec3 vViewPosition;
-        ${OCEAN_GLSL_WAVE_FUNCTIONS}
-
-        void main() {
-          vec4 worldBasePos = modelMatrix * vec4(position.x, 0.0, position.z, 1.0);
-          float waveY = sampleWaveHeightAt(
-            worldBasePos.xz,
-            uOceanBaseHeight,
-            max(0.0, uWaveAmplitude),
-            max(0.0, uWaveSpeed),
-            max(1.0, uWaveLength),
-            uTime
-          );
-          vec4 worldPos = vec4(worldBasePos.x, waveY, worldBasePos.z, 1.0);
-          vWorldPosition = worldPos.xyz;
-          vec4 mvPosition = viewMatrix * worldPos;
-          vViewPosition = -mvPosition.xyz;
-          gl_Position = projectionMatrix * mvPosition;
-        }
-      `,
-      fragmentShader: `
-        uniform float uTime;
-        uniform float uOceanBaseHeight;
-        uniform float uWaveAmplitude;
-        uniform float uWaveSpeed;
-        uniform float uWaveLength;
-        uniform sampler2D uNormalSamplerA;
-        uniform sampler2D uNormalSamplerB;
-        uniform vec3 uSunDirection;
-        uniform vec3 uSunColor;
-        uniform vec3 uSkyHorizonColor;
-        uniform vec3 uSkyZenithColor;
-        uniform vec3 uWaterShallowColor;
-        uniform vec3 uWaterDeepColor;
-        uniform float uNormalScale;
-        uniform float uNormalStrength;
-        uniform float uOpacity;
-        uniform float uCausticStrength;
-        uniform vec3 uFoamColor;
-        uniform float uFoamStrength;
-        uniform vec3 uFogColor;
-        uniform float uFogNear;
-        uniform float uFogFar;
-        varying vec3 vWorldPosition;
-        varying vec3 vViewPosition;
-
-        vec3 sampleNormalDetail(vec2 uv) {
-          vec3 n0 = texture2D(uNormalSamplerA, uv + vec2(uTime * 0.009, uTime * 0.011)).xyz * 2.0 - 1.0;
-          vec3 n1 = texture2D(uNormalSamplerB, uv * 1.27 + vec2(-uTime * 0.011, uTime * 0.008)).xyz * 2.0 - 1.0;
-          return normalize(n0 * 0.62 + n1 * 0.38);
-        }
-
-        void main() {
-          vec3 viewDir = normalize(vViewPosition);
-          vec3 dpdx = dFdx(vWorldPosition);
-          vec3 dpdy = dFdy(vWorldPosition);
-          vec3 geomNormal = normalize(cross(dpdx, dpdy));
-          if (!gl_FrontFacing) {
-            geomNormal = -geomNormal;
-          }
-          vec2 uv = vWorldPosition.xz * 0.0022;
-          vec3 nTex = sampleNormalDetail(uv);
-          vec3 tangentNormal = normalize(vec3(nTex.x, nTex.z * 0.42, nTex.y));
-          vec3 perturbed = normalize(geomNormal + tangentNormal * uNormalScale);
-
-          float ndv = clamp(dot(perturbed, viewDir), 0.0, 1.0);
-          float fresnel = 0.018 + (1.0 - 0.018) * pow(1.0 - ndv, 5.0);
-
-          vec3 sunDir = normalize(uSunDirection);
-          vec3 halfVector = normalize(viewDir + sunDir);
-          float nh = max(dot(perturbed, halfVector), 0.0);
-          float sunSpec = (pow(nh, 220.0) * 1.35 + pow(nh, 44.0) * 0.32) * uNormalStrength;
-          float subsurface = pow(max(dot(-viewDir, sunDir), 0.0), 2.1) * (1.0 - ndv) * 0.2;
-
-          vec3 reflectDir = reflect(-viewDir, perturbed);
-          float skyMix = clamp(reflectDir.y * 0.5 + 0.5, 0.0, 1.0);
-          vec3 skyReflection = mix(uSkyHorizonColor, uSkyZenithColor, pow(skyMix, 1.18));
-
-          float absorb = clamp(1.0 - ndv, 0.0, 1.0);
-          vec3 waterBody = mix(uWaterShallowColor, uWaterDeepColor, pow(absorb, 0.63));
-          float forwardScatter = max(dot(perturbed, sunDir), 0.0) * 0.07;
-          vec3 scatterTint = uWaterShallowColor * forwardScatter;
-
-          vec2 cUv = vWorldPosition.xz * 0.012;
-          float cA = texture2D(uNormalSamplerA, cUv + vec2(uTime * 0.026, -uTime * 0.022)).r;
-          float cB = texture2D(uNormalSamplerB, cUv * 1.42 + vec2(-uTime * 0.024, uTime * 0.029)).g;
-          float c = pow(max(0.0, cA + cB - 0.96), 2.2);
-          float causticMask = (1.0 - fresnel) * (0.28 + absorb * 0.72);
-          vec3 causticTint = uSunColor * c * uCausticStrength * causticMask;
-
-          float crest = pow(clamp(1.0 - perturbed.y, 0.0, 1.0), 2.25);
-          float foamNoise = texture2D(uNormalSamplerB, vWorldPosition.xz * 0.009 + vec2(uTime * 0.021, uTime * 0.017)).b;
-          float crestFoam = smoothstep(0.62, 0.94, crest + foamNoise * 0.34);
-          float foamMask = clamp(crestFoam * 0.72, 0.0, 1.0);
-          vec3 foamTint = uFoamColor * foamMask * uFoamStrength;
-
-          vec3 color = mix(waterBody + scatterTint, skyReflection, fresnel);
-          color += uSunColor * sunSpec;
-          color += uSunColor * subsurface;
-          color += causticTint;
-          color = mix(color, foamTint + color, foamMask * 0.46);
-
-          float dist = length(vViewPosition);
-          float fogFactor = smoothstep(uFogNear, uFogFar, dist);
-          vec3 finalColor = mix(color, uFogColor, fogFactor);
-
-          float waterAlpha = mix(0.5, uOpacity, fresnel * 0.86 + 0.14);
-          gl_FragColor = vec4(finalColor, waterAlpha);
-        }
-      `,
-      transparent: true,
+      vertexShader: VOID_SKY_VERTEX_SHADER,
+      fragmentShader: VOID_SKY_FRAGMENT_SHADER,
+      side: BackSide,
+      depthTest: false,
       depthWrite: false,
-      side: FrontSide,
       fog: false
     });
-    return material;
+    material.toneMapped = true;
+
+    const geometry = new BoxGeometry(1, 1, 1);
+    geometry.deleteAttribute("normal");
+    geometry.deleteAttribute("uv");
+    const mesh = new Mesh(geometry, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = VOID_SKY_RENDER_ORDER;
+    this.skyScene.add(mesh);
+    this.skyboxMesh = mesh;
+    this.skyboxMaterial = material;
   }
 
-  private updateOceanSurface(renderServerTimeSeconds: number): void {
-    if (!this.oceanMeshEnabled || !this.mapConfig) {
-      return;
+  private addEnvironmentVfxLayers(): void {
+    this.environmentVfxLayers.set("voidStars", this.createVoidReferenceStars());
+    this.environmentVfxLayers.set("heavenMist", this.createHeavenMistLayer());
+    this.environmentVfxLayers.set("infernalNebula", this.createInfernalNebulaLayer());
+    this.environmentVfxLayers.set("arcaneMotes", this.createArcaneMotesLayer());
+    for (const layer of this.environmentVfxLayers.values()) {
+      this.skyScene.add(layer.group);
     }
-    const time =
-      this.oceanWavesEnabled && Number.isFinite(renderServerTimeSeconds) ? renderServerTimeSeconds : 0;
-    const surface = this.oceanSurface;
-    if (!surface) {
-      return;
+  }
+
+  private createVoidReferenceStars(): EnvironmentVfxLayerVisual {
+    const group = new Group();
+    const starMaterial = new MeshBasicMaterial({
+      color: 0xb7d7ff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false
+    });
+    const geometry = new DodecahedronGeometry(1.8, 0);
+    for (let i = 0; i < 90; i += 1) {
+      const t = i * 12.9898;
+      const radius = 520 + (i % 17) * 34;
+      const theta = (Math.sin(t) * 0.5 + 0.5) * Math.PI * 2;
+      const phi = (Math.cos(t * 0.47) * 0.5 + 0.5) * Math.PI;
+      const star = new Mesh(geometry, starMaterial);
+      star.renderOrder = ENVIRONMENT_VFX_RENDER_ORDER;
+      star.position.set(
+        Math.cos(theta) * Math.sin(phi) * radius,
+        Math.cos(phi) * radius * 0.55 + 120,
+        Math.sin(theta) * Math.sin(phi) * radius
+      );
+      star.scale.setScalar(0.7 + (i % 5) * 0.18);
+      group.add(star);
     }
-    const snapToGrid = (value: number, snap: number): number => {
-      const step = Math.max(0.001, snap);
-      return Math.round(value / step) * step;
+    return {
+      group,
+      materials: [starMaterial],
+      anchorsToCamera: true
     };
-    surface.mesh.position.set(
-      snapToGrid(this.camera.position.x, surface.snapSize),
-      0,
-      snapToGrid(this.camera.position.z, surface.snapSize)
-    );
-    const oceanMaterial = surface.mesh.material;
-    if (oceanMaterial instanceof ShaderMaterial) {
-      const waterUniforms = oceanMaterial.uniforms;
-      if (waterUniforms?.uTime) {
-        waterUniforms.uTime.value = time;
+  }
+
+  private createHeavenMistLayer(): EnvironmentVfxLayerVisual {
+    const group = new Group();
+    const material = new MeshBasicMaterial({
+      color: 0xd9f2ff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: AdditiveBlending
+    });
+    const geometry = new SphereGeometry(1, 20, 12);
+    for (let i = 0; i < 9; i += 1) {
+      const mist = new Mesh(geometry, material);
+      mist.renderOrder = ENVIRONMENT_VFX_RENDER_ORDER;
+      const angle = i * 0.698 + 0.2;
+      mist.position.set(Math.cos(angle) * 360, 110 + (i % 3) * 52, Math.sin(angle) * 420);
+      mist.scale.set(180 + (i % 4) * 35, 34 + (i % 2) * 12, 86 + (i % 5) * 18);
+      group.add(mist);
+    }
+    return {
+      group,
+      materials: [material],
+      anchorsToCamera: true
+    };
+  }
+
+  private createInfernalNebulaLayer(): EnvironmentVfxLayerVisual {
+    const group = new Group();
+    const materials: MeshBasicMaterial[] = [];
+    const geometry = new DodecahedronGeometry(1, 1);
+    const colors = [0xff2f16, 0xff7a1f, 0x8b1024];
+    for (let i = 0; i < 14; i += 1) {
+      const material = new MeshBasicMaterial({
+        color: colors[i % colors.length] ?? 0xff2f16,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: AdditiveBlending,
+        wireframe: i % 3 === 0
+      });
+      materials.push(material);
+      const cloud = new Mesh(geometry, material);
+      cloud.renderOrder = ENVIRONMENT_VFX_RENDER_ORDER;
+      const angle = i * 0.921 + 1.4;
+      const radius = 430 + (i % 5) * 65;
+      cloud.position.set(Math.cos(angle) * radius, 45 + (i % 6) * 42, Math.sin(angle) * radius);
+      cloud.rotation.set(i * 0.31, angle, i * 0.17);
+      cloud.scale.set(70 + (i % 4) * 22, 42 + (i % 3) * 16, 118 + (i % 5) * 28);
+      group.add(cloud);
+    }
+    return {
+      group,
+      materials,
+      anchorsToCamera: true
+    };
+  }
+
+  private createArcaneMotesLayer(): EnvironmentVfxLayerVisual {
+    const group = new Group();
+    const material = new MeshBasicMaterial({
+      color: 0x69f6ff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: AdditiveBlending
+    });
+    const geometry = new DodecahedronGeometry(0.8, 0);
+    for (let i = 0; i < 120; i += 1) {
+      const t = i * 8.314;
+      const radius = 260 + (i % 23) * 24;
+      const theta = (Math.sin(t) * 0.5 + 0.5) * Math.PI * 2;
+      const phi = (Math.cos(t * 0.63) * 0.5 + 0.5) * Math.PI;
+      const mote = new Mesh(geometry, material);
+      mote.renderOrder = ENVIRONMENT_VFX_RENDER_ORDER;
+      mote.position.set(
+        Math.cos(theta) * Math.sin(phi) * radius,
+        Math.cos(phi) * radius * 0.44 + 120,
+        Math.sin(theta) * Math.sin(phi) * radius
+      );
+      mote.scale.setScalar(1.2 + (i % 6) * 0.22);
+      group.add(mote);
+    }
+    return {
+      group,
+      materials: [material],
+      anchorsToCamera: true
+    };
+  }
+
+  private updateEnvironment(
+    localPose: PlayerPose,
+    locationRoots: readonly LocationRootState[]
+  ): void {
+    copyEnvironmentPreset(this.targetEnvironment, requireEnvironmentPreset(DEFAULT_ENVIRONMENT_PRESET_ID));
+    const influences: EnvironmentInfluence[] = [];
+
+    for (const volume of VOID_ENVIRONMENT_VOLUME_DEFINITIONS) {
+      const preset = ENVIRONMENT_PRESETS.get(volume.environmentPresetId);
+      const weight = getEnvironmentVolumeWeight(volume, localPose);
+      if (!preset || weight <= 0) {
+        continue;
       }
-      if (waterUniforms?.uSunDirection && waterUniforms.uSunDirection.value instanceof Vector3) {
-        waterUniforms.uSunDirection.value.copy(this.sunDirection);
+      influences.push({
+        priority: volume.priority,
+        weight,
+        preset
+      });
+    }
+
+    for (const root of locationRoots) {
+      const definition = getLocationDefinitionByArchetypeId(root.locationArchetypeId);
+      for (const childVolume of definition?.environmentVolumes ?? []) {
+        const volume = transformLocationEnvironmentVolume(root, childVolume);
+        const preset = ENVIRONMENT_PRESETS.get(volume.environmentPresetId);
+        const weight = getEnvironmentVolumeWeight(volume, localPose);
+        if (!preset || weight <= 0) {
+          continue;
+        }
+        influences.push({
+          priority: volume.priority,
+          weight,
+          preset
+        });
       }
-      if (waterUniforms?.uWaveAmplitude) {
-        waterUniforms.uWaveAmplitude.value = this.mapConfig.oceanWaveAmplitude;
+    }
+
+    applyPrioritizedEnvironmentInfluences(this.targetEnvironment, influences);
+    copyEnvironmentPreset(this.currentEnvironment, this.targetEnvironment);
+
+    if (this.headlessLite) {
+      if (this.scene.background instanceof Color) {
+        this.scene.background.copy(this.currentEnvironment.background);
+      } else {
+        this.scene.background = this.currentEnvironment.background.clone();
       }
-      if (waterUniforms?.uWaveSpeed) {
-        waterUniforms.uWaveSpeed.value = this.mapConfig.oceanWaveSpeed;
+    } else {
+      this.scene.background = null;
+    }
+
+    if (this.scene.fog instanceof Fog) {
+      this.scene.fog.color.copy(this.currentEnvironment.fogColor);
+      this.scene.fog.near = this.currentEnvironment.fogNear;
+      this.scene.fog.far = this.currentEnvironment.fogFar;
+    } else {
+      this.scene.fog = new Fog(
+        this.currentEnvironment.fogColor.clone(),
+        this.currentEnvironment.fogNear,
+        this.currentEnvironment.fogFar
+      );
+    }
+
+    if (this.ambientLight) {
+      this.ambientLight.color.copy(this.currentEnvironment.ambientColor);
+      this.ambientLight.intensity = this.currentEnvironment.ambientIntensity;
+    }
+    if (this.sunLight) {
+      this.sunLight.color.copy(this.currentEnvironment.sunColor);
+      this.sunLight.intensity = this.currentEnvironment.sunIntensity;
+    }
+    this.renderer.toneMappingExposure = this.currentEnvironment.exposure;
+    this.applyVoidSky(this.currentEnvironment.sky);
+    this.applyEnvironmentVfx(this.currentEnvironment.vfx);
+  }
+
+  private applyVoidSky(weights: VoidSkyWeights): void {
+    if (!this.skyboxMaterial || !this.skyboxMesh) {
+      return;
+    }
+    const skyWeights0123 = this.skyboxMaterial.uniforms.skyWeights0123?.value;
+    if (skyWeights0123 instanceof Vector4) {
+      skyWeights0123.set(
+        Math.max(0, weights.skybox1),
+        Math.max(0, weights.skybox2),
+        Math.max(0, weights.skybox3),
+        Math.max(0, weights.skybox4)
+      );
+    }
+    const skyWeight4 = this.skyboxMaterial.uniforms.skyWeight4;
+    if (skyWeight4) {
+      skyWeight4.value = Math.max(0, weights.skybox5);
+    }
+    this.skyboxMesh.visible =
+      Math.max(
+        weights.skybox1,
+        weights.skybox2,
+        weights.skybox3,
+        weights.skybox4,
+        weights.skybox5
+      ) > 0.001;
+  }
+
+  private updateVoidSkyPosition(): void {
+    if (this.skyboxMesh) {
+      this.skyboxMesh.position.copy(this.camera.position);
+    }
+  }
+
+  private requestSkyboxAssets(): void {
+    if (this.skyboxRequestsIssued) {
+      return;
+    }
+    this.skyboxRequestsIssued = true;
+    for (const layer of VOID_SKY_LAYERS) {
+      void ensureAsset(layer.assetId, "near")
+        .then((asset) => {
+          if (isCubeTextureAsset(asset)) {
+            this.applySkyboxTexture(layer, asset);
+          }
+        })
+        .catch((error) => {
+          console.warn(`[skybox] failed to load ${layer.assetId}`, error);
+        });
+    }
+  }
+
+  private applySkyboxTexture(layer: VoidSkyLayerDefinition, texture: CubeTexture): void {
+    this.skyboxLayerTextures.set(layer.id, texture);
+    if (!this.skyboxMaterial) {
+      return;
+    }
+    const uniform = this.skyboxMaterial.uniforms[layer.uniformName];
+    if (uniform) {
+      uniform.value = texture;
+    }
+  }
+
+  private updateAnchoredEnvironmentVfx(): void {
+    for (const layer of this.environmentVfxLayers.values()) {
+      if (layer.anchorsToCamera) {
+        layer.group.position.copy(this.camera.position);
       }
-      if (waterUniforms?.uWaveLength) {
-        waterUniforms.uWaveLength.value = this.mapConfig.oceanWaveLength;
+    }
+  }
+
+  private applyEnvironmentVfx(weights: EnvironmentVfxWeights): void {
+    for (const [id, layer] of this.environmentVfxLayers.entries()) {
+      const weight = Math.max(0, Math.min(1, weights[id]));
+      layer.group.visible = weight > 0.01;
+      for (const material of layer.materials) {
+        material.opacity = weight;
       }
     }
   }
@@ -970,12 +1051,7 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
       return;
     }
     this.worldTextureRequestsIssued = true;
-    const textureAssetIds = [
-      WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID,
-      WORLD_WATER_NORMALS_ASSET_ID,
-      WORLD_WATER_NORMALS_A_ASSET_ID,
-      WORLD_WATER_NORMALS_B_ASSET_ID
-    ];
+    const textureAssetIds = [WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID];
     for (const assetId of textureAssetIds) {
       void ensureAsset(assetId, "near")
         .then(() => {
@@ -988,40 +1064,7 @@ gl_FragColor.rgb += vec3(0.42, 0.66, 0.85) * caustic * uCausticStrength;
   }
 
   private maybeApplyDeferredVisuals(): void {
-    this.tryApplyTerrainCaustics();
-    this.tryUpgradeOceanMaterial();
     this.tryAddGrassInstances();
-  }
-
-  private tryApplyTerrainCaustics(): void {
-    if (!this.deferredTerrainCausticsPending || !this.groundMaterial || !this.mapConfig) {
-      return;
-    }
-    if (this.configureTerrainCaustics(this.groundMaterial, this.mapConfig)) {
-      this.deferredTerrainCausticsPending = false;
-    }
-  }
-
-  private tryUpgradeOceanMaterial(): void {
-    if (!this.deferredOceanUpgradePending || !this.mapConfig || !this.oceanSurface) {
-      return;
-    }
-    const waterNormalsA =
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_A_ASSET_ID) ??
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
-    const waterNormalsB =
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_B_ASSET_ID) ??
-      getLoadedAsset<Texture>(WORLD_WATER_NORMALS_ASSET_ID);
-    if (!waterNormalsA || !waterNormalsB) {
-      return;
-    }
-    const previousMaterial = this.oceanSurface.mesh.material;
-    const upgradedMaterial = this.createOceanWaterMaterial(this.mapConfig);
-    this.oceanSurface.mesh.material = upgradedMaterial;
-    this.deferredOceanUpgradePending = upgradedMaterial instanceof MeshStandardMaterial;
-    if (previousMaterial !== upgradedMaterial) {
-      previousMaterial.dispose();
-    }
   }
 
   private tryAddGrassInstances(): void {
@@ -1153,4 +1196,263 @@ diffuseColor.a *= grassFade;`
     };
   }
 
+}
+
+function requireEnvironmentPreset(id: number): EnvironmentPreset {
+  const preset = ENVIRONMENT_PRESETS.get(id);
+  return preset ?? ENVIRONMENT_PRESETS.get(DEFAULT_ENVIRONMENT_PRESET_ID)!;
+}
+
+function transformLocationEnvironmentVolume(
+  root: LocationRootState,
+  childVolume: LocationEnvironmentVolumeDefinition
+): EnvironmentVolumeDefinition {
+  return {
+    id: `${root.nid}:${childVolume.id}`,
+    kind: "location",
+    priority: ENVIRONMENT_PRIORITY_LOCATION,
+    environmentPresetId: childVolume.environmentPresetId,
+    x: root.x + childVolume.localX,
+    y: root.y + childVolume.localY,
+    z: root.z + childVolume.localZ,
+    halfX: childVolume.halfX,
+    halfY: childVolume.halfY,
+    halfZ: childVolume.halfZ,
+    blendDistance: childVolume.blendDistance
+  };
+}
+
+function cloneEnvironmentPreset(preset: EnvironmentPreset): EnvironmentPreset {
+  return {
+    background: preset.background.clone(),
+    fogColor: preset.fogColor.clone(),
+    fogNear: preset.fogNear,
+    fogFar: preset.fogFar,
+    ambientColor: preset.ambientColor.clone(),
+    ambientIntensity: preset.ambientIntensity,
+    sunColor: preset.sunColor.clone(),
+    sunIntensity: preset.sunIntensity,
+    exposure: preset.exposure,
+    vfx: cloneVfxWeights(preset.vfx),
+    sky: cloneSkyWeights(preset.sky)
+  };
+}
+
+function copyEnvironmentPreset(target: EnvironmentPreset, source: EnvironmentPreset): void {
+  target.background.copy(source.background);
+  target.fogColor.copy(source.fogColor);
+  target.fogNear = source.fogNear;
+  target.fogFar = source.fogFar;
+  target.ambientColor.copy(source.ambientColor);
+  target.ambientIntensity = source.ambientIntensity;
+  target.sunColor.copy(source.sunColor);
+  target.sunIntensity = source.sunIntensity;
+  target.exposure = source.exposure;
+  copyVfxWeights(target.vfx, source.vfx);
+  copySkyWeights(target.sky, source.sky);
+}
+
+function applyPrioritizedEnvironmentInfluences(
+  target: EnvironmentPreset,
+  influences: readonly EnvironmentInfluence[]
+): void {
+  const orderedInfluences = [...influences].sort((a, b) => a.priority - b.priority);
+  let index = 0;
+  while (index < orderedInfluences.length) {
+    const priority = orderedInfluences[index]?.priority ?? 0;
+    const groupInfluences: EnvironmentInfluence[] = [];
+    index += 1;
+    const firstInfluence = orderedInfluences[index - 1];
+    if (firstInfluence) {
+      groupInfluences.push(firstInfluence);
+    }
+    while (index < orderedInfluences.length && orderedInfluences[index]?.priority === priority) {
+      const influence = orderedInfluences[index];
+      if (influence) {
+        groupInfluences.push(influence);
+      }
+      index += 1;
+    }
+    const groupBlend = createWeightedEnvironmentBlend(groupInfluences);
+    if (groupBlend) {
+      blendEnvironment(target, target, groupBlend.preset, groupBlend.coverage);
+    }
+  }
+}
+
+function createWeightedEnvironmentBlend(
+  influences: readonly EnvironmentInfluence[]
+): { preset: EnvironmentPreset; coverage: number } | null {
+  const weightedInfluences = influences
+    .map((influence) => ({
+      preset: influence.preset,
+      weight: Math.max(0, Math.min(1, influence.weight))
+    }))
+    .filter((influence) => influence.weight > 0);
+  const totalWeight = weightedInfluences.reduce((sum, influence) => sum + influence.weight, 0);
+  if (totalWeight <= 0) {
+    return null;
+  }
+
+  const invTotalWeight = 1 / totalWeight;
+  const firstPreset = weightedInfluences[0]?.preset ?? requireEnvironmentPreset(DEFAULT_ENVIRONMENT_PRESET_ID);
+  const preset = cloneEnvironmentPreset(firstPreset);
+  preset.background.setRGB(0, 0, 0);
+  preset.fogColor.setRGB(0, 0, 0);
+  preset.fogNear = 0;
+  preset.fogFar = 0;
+  preset.ambientColor.setRGB(0, 0, 0);
+  preset.ambientIntensity = 0;
+  preset.sunColor.setRGB(0, 0, 0);
+  preset.sunIntensity = 0;
+  preset.exposure = 0;
+  copyVfxWeights(preset.vfx, ZERO_VFX_WEIGHTS);
+  copySkyWeights(preset.sky, ZERO_SKY_WEIGHTS);
+
+  for (const influence of weightedInfluences) {
+    const weight = influence.weight * invTotalWeight;
+    addWeightedColor(preset.background, influence.preset.background, weight);
+    addWeightedColor(preset.fogColor, influence.preset.fogColor, weight);
+    preset.fogNear += influence.preset.fogNear * weight;
+    preset.fogFar += influence.preset.fogFar * weight;
+    addWeightedColor(preset.ambientColor, influence.preset.ambientColor, weight);
+    preset.ambientIntensity += influence.preset.ambientIntensity * weight;
+    addWeightedColor(preset.sunColor, influence.preset.sunColor, weight);
+    preset.sunIntensity += influence.preset.sunIntensity * weight;
+    preset.exposure += influence.preset.exposure * weight;
+    addWeightedVfxWeights(preset.vfx, influence.preset.vfx, weight);
+    addWeightedSkyWeights(preset.sky, influence.preset.sky, weight);
+  }
+
+  return {
+    preset,
+    coverage: Math.max(0, Math.min(1, totalWeight))
+  };
+}
+
+function addWeightedColor(out: Color, color: Color, weight: number): void {
+  out.r += color.r * weight;
+  out.g += color.g * weight;
+  out.b += color.b * weight;
+}
+
+function blendEnvironment(
+  out: EnvironmentPreset,
+  a: EnvironmentPreset,
+  b: EnvironmentPreset,
+  t: number
+): void {
+  const alpha = Math.max(0, Math.min(1, t));
+  out.background.copy(a.background).lerp(b.background, alpha);
+  out.fogColor.copy(a.fogColor).lerp(b.fogColor, alpha);
+  out.fogNear = lerpNumber(a.fogNear, b.fogNear, alpha);
+  out.fogFar = lerpNumber(a.fogFar, b.fogFar, alpha);
+  out.ambientColor.copy(a.ambientColor).lerp(b.ambientColor, alpha);
+  out.ambientIntensity = lerpNumber(
+    a.ambientIntensity,
+    b.ambientIntensity,
+    alpha
+  );
+  out.sunColor.copy(a.sunColor).lerp(b.sunColor, alpha);
+  out.sunIntensity = lerpNumber(a.sunIntensity, b.sunIntensity, alpha);
+  out.exposure = lerpNumber(a.exposure, b.exposure, alpha);
+  blendVfxWeights(out.vfx, a.vfx, b.vfx, alpha);
+  blendSkyWeights(out.sky, a.sky, b.sky, alpha);
+}
+
+function lerpNumber(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function cloneVfxWeights(weights: EnvironmentVfxWeights): EnvironmentVfxWeights {
+  return {
+    ...ZERO_VFX_WEIGHTS,
+    ...weights
+  };
+}
+
+function copyVfxWeights(target: EnvironmentVfxWeights, source: EnvironmentVfxWeights): void {
+  for (const id of Object.keys(ZERO_VFX_WEIGHTS) as EnvironmentVfxLayerId[]) {
+    target[id] = source[id] ?? 0;
+  }
+}
+
+function blendVfxWeights(
+  out: EnvironmentVfxWeights,
+  a: EnvironmentVfxWeights,
+  b: EnvironmentVfxWeights,
+  t: number
+): void {
+  for (const id of Object.keys(ZERO_VFX_WEIGHTS) as EnvironmentVfxLayerId[]) {
+    out[id] = lerpNumber(a[id] ?? 0, b[id] ?? 0, t);
+  }
+}
+
+function addWeightedVfxWeights(
+  out: EnvironmentVfxWeights,
+  source: EnvironmentVfxWeights,
+  weight: number
+): void {
+  for (const id of Object.keys(ZERO_VFX_WEIGHTS) as EnvironmentVfxLayerId[]) {
+    out[id] += (source[id] ?? 0) * weight;
+  }
+}
+
+function cloneSkyWeights(weights: VoidSkyWeights): VoidSkyWeights {
+  return {
+    ...ZERO_SKY_WEIGHTS,
+    ...weights
+  };
+}
+
+function copySkyWeights(target: VoidSkyWeights, source: VoidSkyWeights): void {
+  for (const id of Object.keys(ZERO_SKY_WEIGHTS) as VoidSkyLayerId[]) {
+    target[id] = source[id] ?? 0;
+  }
+}
+
+function blendSkyWeights(
+  out: VoidSkyWeights,
+  a: VoidSkyWeights,
+  b: VoidSkyWeights,
+  t: number
+): void {
+  for (const id of Object.keys(ZERO_SKY_WEIGHTS) as VoidSkyLayerId[]) {
+    out[id] = lerpNumber(a[id] ?? 0, b[id] ?? 0, t);
+  }
+}
+
+function addWeightedSkyWeights(
+  out: VoidSkyWeights,
+  source: VoidSkyWeights,
+  weight: number
+): void {
+  for (const id of Object.keys(ZERO_SKY_WEIGHTS) as VoidSkyLayerId[]) {
+    out[id] += (source[id] ?? 0) * weight;
+  }
+}
+
+function createSolidCubeTexture(hexColor: number): CubeTexture {
+  const color = new Color(hexColor);
+  const images = Array.from({ length: 6 }, () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d");
+    if (context) {
+      context.fillStyle = `rgb(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(
+        color.b * 255
+      )})`;
+      context.fillRect(0, 0, 1, 1);
+    }
+    return canvas;
+  });
+  const texture = new CubeTexture(images);
+  texture.colorSpace = SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function isCubeTextureAsset(value: unknown): value is CubeTexture {
+  return Boolean(value && typeof value === "object" && (value as { isCubeTexture?: unknown }).isCubeTexture === true);
 }

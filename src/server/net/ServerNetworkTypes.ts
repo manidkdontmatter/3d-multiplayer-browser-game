@@ -23,6 +23,14 @@ export type ServerNetworkUser = {
     halfHeight: number;
     halfDepth: number;
   };
+  farView?: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  };
 };
 
 export type ServerNetworkQueueEvent = {

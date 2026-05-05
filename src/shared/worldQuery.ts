@@ -1,5 +1,4 @@
-// Shared world-query helpers that unify terrain/biome/ocean sampling for gameplay systems.
-import { sampleOceanHeightAt } from "./ocean";
+// Shared world-query helpers that unify terrain/biome sampling for gameplay systems.
 import {
   sampleBiomeWeightsAt,
   sampleDominantBiomeAt,
@@ -41,24 +40,4 @@ export function sampleWorldDominantBiome(
   height?: number
 ) {
   return sampleDominantBiomeAt(mapConfig, x, z, height);
-}
-
-export function sampleWorldOceanHeight(
-  mapConfig: RuntimeMapConfig,
-  x: number,
-  z: number,
-  timeSeconds: number
-): number {
-  return sampleOceanHeightAt(mapConfig, x, z, timeSeconds);
-}
-
-export function isPointUnderwater(
-  mapConfig: RuntimeMapConfig,
-  x: number,
-  y: number,
-  z: number,
-  timeSeconds: number
-): boolean {
-  const waterHeight = sampleOceanHeightAt(mapConfig, x, z, timeSeconds);
-  return y < waterHeight;
 }

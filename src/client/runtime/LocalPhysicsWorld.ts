@@ -3,7 +3,9 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
   configurePlayerCharacterController,
+  createLocationKinematicCollider,
   createStaticWorldColliders,
+  DEFAULT_VOID_SPAWN_ANCHOR,
   GROUND_CONTACT_MIN_NORMAL_Y,
   MOVEMENT_MODE_FLYING,
   MOVEMENT_MODE_GROUNDED,
@@ -16,15 +18,16 @@ import {
   PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
   resolveRuntimeMapConfig,
-  sampleOceanHeightAt,
-  sampleTerrainHeightAt,
   resolveGroundSupportColliderHandle,
+  sampleLocationTransform,
   samplePlatformTransform,
   stepFlyingMovement,
   stepKinematicCharacterController,
   stepHorizontalMovement,
   toggleMovementMode,
+  VOID_LOCATION_DEFINITIONS,
 } from "../../shared/index";
+import type { LocationRootDefinition } from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
 import type { MovementInput, PlayerPose } from "./types";
 
@@ -52,6 +55,19 @@ interface LocalPlatformBody {
   yaw: number;
 }
 
+interface LocalMovingLocationBody {
+  definition: LocationRootDefinition;
+  body: RAPIER.RigidBody;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  prevX: number;
+  prevY: number;
+  prevZ: number;
+  prevYaw: number;
+}
+
 export class LocalPhysicsWorld {
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly playerBody: RAPIER.RigidBody;
@@ -59,6 +75,7 @@ export class LocalPhysicsWorld {
   private readonly world: RAPIER.World;
   private readonly platformBodies = new Map<number, LocalPlatformBody>();
   private readonly platformPidByColliderHandle = new Map<number, number>();
+  private readonly movingLocationBodies = new Map<number, LocalMovingLocationBody>();
   private readonly runtimeMapConfig = resolveRuntimeMapConfig();
   private grounded = false;
   private groundedPlatformPid: number | null = null;
@@ -87,11 +104,14 @@ export class LocalPhysicsWorld {
     const characterController = world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
     configurePlayerCharacterController(characterController);
     createStaticWorldColliders(world);
-    const runtimeMapConfig = resolveRuntimeMapConfig();
-    const spawnBodyY = sampleTerrainHeightAt(runtimeMapConfig, 0, 0) + PLAYER_BODY_CENTER_HEIGHT;
+    const spawnBodyY = DEFAULT_VOID_SPAWN_ANCHOR.y - PLAYER_CAMERA_OFFSET_Y;
 
     const playerBody = world.createRigidBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, spawnBodyY, 0)
+      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
+        DEFAULT_VOID_SPAWN_ANCHOR.x,
+        spawnBodyY,
+        DEFAULT_VOID_SPAWN_ANCHOR.z
+      )
     );
     const playerCollider = world.createCollider(
       RAPIER.ColliderDesc.capsule(PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS).setFriction(0.0),
@@ -99,9 +119,9 @@ export class LocalPhysicsWorld {
     );
 
     const local = new LocalPhysicsWorld(world, playerBody, playerCollider, characterController);
-    local.pose.x = 0;
-    local.pose.y = spawnBodyY + PLAYER_CAMERA_OFFSET_Y;
-    local.pose.z = 0;
+    local.pose.x = DEFAULT_VOID_SPAWN_ANCHOR.x;
+    local.pose.y = DEFAULT_VOID_SPAWN_ANCHOR.y;
+    local.pose.z = DEFAULT_VOID_SPAWN_ANCHOR.z;
     for (const platformDef of PLATFORM_DEFINITIONS) {
       const platformPose = samplePlatformTransform(platformDef, 0);
       const platformBody = world.createRigidBody(
@@ -129,7 +149,27 @@ export class LocalPhysicsWorld {
       });
       local.platformPidByColliderHandle.set(platformCollider.handle, platformDef.pid);
     }
+    for (const definition of VOID_LOCATION_DEFINITIONS) {
+      if (definition.motion === "static") {
+        continue;
+      }
+      const pose = sampleLocationTransform(definition, 0);
+      const moving = createLocationKinematicCollider(world, definition, pose);
+      local.movingLocationBodies.set(definition.pid, {
+        definition,
+        body: moving.body,
+        x: pose.x,
+        y: pose.y,
+        z: pose.z,
+        yaw: pose.yaw,
+        prevX: pose.x,
+        prevY: pose.y,
+        prevZ: pose.z,
+        prevYaw: pose.yaw
+      });
+    }
     local.syncPlatformBodies(0);
+    local.syncMovingLocationBodies(0, 0);
 
     return local;
   }
@@ -140,6 +180,7 @@ export class LocalPhysicsWorld {
     const previousSimulationSeconds = this.simulationSeconds;
     this.simulationSeconds += dt;
     this.syncPlatformBodies(this.simulationSeconds);
+    this.syncMovingLocationBodies(previousSimulationSeconds, this.simulationSeconds);
 
     if (movement.toggleFlyPressed) {
       this.movementMode = toggleMovementMode(this.movementMode);
@@ -190,6 +231,7 @@ export class LocalPhysicsWorld {
     }
 
     const carry = this.samplePlatformCarry(previousSimulationSeconds, this.simulationSeconds);
+    const frameCarry = this.sampleMovingLocationCarry();
     const next = stepKinematicCharacterController({
       state: {
         movementMode: this.movementMode,
@@ -201,15 +243,18 @@ export class LocalPhysicsWorld {
         groundedPlatformPid: this.groundedPlatformPid
       },
       deltaSeconds: dt,
-      carry: { x: carry.x, y: carry.y, z: carry.z, yaw: 0 },
+      carry: {
+        x: carry.x + frameCarry.x,
+        y: carry.y + frameCarry.y,
+        z: carry.z + frameCarry.z,
+        yaw: frameCarry.yaw
+      },
       body: this.playerBody,
       collider: this.playerCollider,
       characterController: this.characterController,
       playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
       groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y,
       simulationSeconds: this.simulationSeconds,
-      sampleOceanSurfaceY: (x, z, simulationSeconds) =>
-        sampleOceanHeightAt(this.runtimeMapConfig, x, z, simulationSeconds),
       resolveGroundSupportColliderHandle: (groundedByQuery) =>
         resolveGroundSupportColliderHandle({
           groundedByQuery,
@@ -309,7 +354,8 @@ export class LocalPhysicsWorld {
     this.horizontalVelocity.vz = state.vz;
     if (typeof state.serverTimeSeconds === "number" && Number.isFinite(state.serverTimeSeconds)) {
       this.simulationSeconds = Math.max(0, state.serverTimeSeconds);
-      this.syncPlatformBodies(this.simulationSeconds);
+    this.syncPlatformBodies(this.simulationSeconds);
+    this.syncMovingLocationBodies(this.simulationSeconds, this.simulationSeconds);
     }
 
     const bodyY = state.y - PLAYER_CAMERA_OFFSET_Y;
@@ -367,5 +413,45 @@ export class LocalPhysicsWorld {
 
   private clampStepDelta(delta: number): number {
     return Math.max(1 / 120, Math.min(delta, 1 / 20));
+  }
+
+  private syncMovingLocationBodies(previousSeconds: number, seconds: number): void {
+    for (const location of this.movingLocationBodies.values()) {
+      const previousPose = sampleLocationTransform(location.definition, previousSeconds);
+      const pose = sampleLocationTransform(location.definition, seconds);
+      location.prevX = previousPose.x;
+      location.prevY = previousPose.y;
+      location.prevZ = previousPose.z;
+      location.prevYaw = previousPose.yaw;
+      location.x = pose.x;
+      location.y = pose.y;
+      location.z = pose.z;
+      location.yaw = pose.yaw;
+      location.body.setTranslation({ x: pose.x, y: pose.y, z: pose.z }, true);
+      location.body.setRotation(
+        { x: 0, y: Math.sin(pose.yaw * 0.5), z: 0, w: Math.cos(pose.yaw * 0.5) },
+        true
+      );
+    }
+  }
+
+  private sampleMovingLocationCarry(): { x: number; y: number; z: number; yaw: number } {
+    const bodyPos = this.playerBody.translation();
+    for (const location of this.movingLocationBodies.values()) {
+      const dx = bodyPos.x - location.x;
+      const dy = bodyPos.y - location.y;
+      const dz = bodyPos.z - location.z;
+      const radius = location.definition.influenceRadius;
+      if (dx * dx + dy * dy + dz * dz > radius * radius) {
+        continue;
+      }
+      return {
+        x: location.x - location.prevX,
+        y: location.y - location.prevY,
+        z: location.z - location.prevZ,
+        yaw: location.yaw - location.prevYaw
+      };
+    }
+    return { x: 0, y: 0, z: 0, yaw: 0 };
   }
 }

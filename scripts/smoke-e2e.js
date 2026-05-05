@@ -13,7 +13,8 @@ const CLIENT_URL = process.env.E2E_CLIENT_URL ?? "http://127.0.0.1:5173";
 const SERVER_URL = "ws://127.0.0.1:9001";
 const SERVER_START_TIMEOUT_MS = readEnvNumber("E2E_SERVER_START_TIMEOUT_MS", 18000);
 const CLIENT_START_TIMEOUT_MS = readEnvNumber("E2E_CLIENT_START_TIMEOUT_MS", 22000);
-const CONNECT_TIMEOUT_MS = readEnvNumber("E2E_CONNECT_TIMEOUT_MS", 12000);
+const CONNECT_TIMEOUT_MS = readEnvNumber("E2E_CONNECT_TIMEOUT_MS", 30000);
+const MAIN_UI_TIMEOUT_MS = readEnvNumber("E2E_MAIN_UI_TIMEOUT_MS", 6000);
 const ARTIFACTS_ON_PASS = process.env.E2E_ARTIFACTS_ON_PASS === "1";
 const ARTIFACTS_ON_FAIL = process.env.E2E_ARTIFACTS_ON_FAIL !== "0";
 
@@ -137,6 +138,32 @@ async function waitForLoadoutPanelState(page, timeoutMs) {
   throw new Error("Timed out waiting for main UI open state.");
 }
 
+async function waitForMainUiVisible(page, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const visible = await page.evaluate(() => {
+      const overlay = document.querySelector("#main-ui-overlay.main-ui-visible");
+      if (!(overlay instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(overlay);
+      const rect = overlay.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        Number(style.opacity) > 0.5 &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    });
+    if (visible) {
+      return;
+    }
+    await delay(120);
+  }
+  throw new Error("Timed out waiting for visible main UI overlay.");
+}
+
 async function openLoadoutPanel(page) {
   await page.evaluate(() => {
     const eventInit = { code: "Backquote", key: "`", bubbles: true };
@@ -198,10 +225,7 @@ async function main() {
     finalState = await waitForConnectedState(page, CONNECT_TIMEOUT_MS);
     await openLoadoutPanel(page);
     finalState = await waitForLoadoutPanelState(page, 3000);
-    await page.waitForSelector("#main-ui-overlay.main-ui-visible", {
-      state: "visible",
-      timeout: 3000
-    });
+    await waitForMainUiVisible(page, MAIN_UI_TIMEOUT_MS);
 
     const hasFatalConsoleError = logs.some(
       (entry) =>

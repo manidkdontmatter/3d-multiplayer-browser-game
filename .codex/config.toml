@@ -42,8 +42,8 @@ sandbox_mode = "read-only"
 web_search = "cached"
 
 [features]
-memory_tool = true
-sqlite = true
+memories = false
+sqlite = false
 
 [memories]
 # Balanced productivity defaults: good recall without excessive churn.

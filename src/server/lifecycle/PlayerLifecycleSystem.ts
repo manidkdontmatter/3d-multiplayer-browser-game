@@ -23,6 +23,14 @@ export interface LifecycleUser {
     halfHeight: number;
     halfDepth: number;
   };
+  farView?: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  };
 }
 
 export interface LifecyclePlayer {
@@ -59,7 +67,8 @@ export interface LifecyclePlayer {
 export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlayer extends LifecyclePlayer> {
   readonly world: RAPIER.World;
   readonly globalChannel: BroadcastSubscriptionChannel<TUser>;
-  readonly spatialChannel: SpatialSubscriptionChannel<TUser, TUser["view"]>;
+  readonly nearChannel: SpatialSubscriptionChannel<TUser, TUser["view"]>;
+  readonly farChannel: SpatialSubscriptionChannel<TUser, TUser["farView"]>;
   readonly createUserView: (position: {
     x: number;
     y: number;
@@ -117,6 +126,9 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly viewHalfWidth: number;
   readonly viewHalfHeight: number;
   readonly viewHalfDepth: number;
+  readonly farViewHalfWidth: number;
+  readonly farViewHalfHeight: number;
+  readonly farViewHalfDepth: number;
   readonly onPlayerAdded?: (user: TUser, player: TPlayer) => void;
   readonly onPlayerRemoved?: (user: TUser, player: TPlayer) => void;
 }
@@ -187,7 +199,18 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       halfDepth: this.options.viewHalfDepth
     });
     user.view = view;
-    this.options.spatialChannel.subscribe(user, view);
+    this.options.nearChannel.subscribe(user, view);
+
+    const farView = this.options.createUserView({
+      x: player.x,
+      y: player.y,
+      z: player.z,
+      halfWidth: this.options.farViewHalfWidth,
+      halfHeight: this.options.farViewHalfHeight,
+      halfDepth: this.options.farViewHalfDepth
+    });
+    user.farView = farView;
+    this.options.farChannel.subscribe(user, farView);
 
     this.options.queueIdentityMessage(user, player.nid);
     this.options.sendInitialReplicationState(user, player);

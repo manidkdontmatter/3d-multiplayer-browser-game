@@ -3,6 +3,7 @@ import { NType } from "../../../shared/netcode";
 import {
   MOVEMENT_MODE_GROUNDED,
   sanitizeMovementMode,
+  LOCATION_KIND_NONE,
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
   MODEL_ID_PLAYER,
@@ -10,6 +11,7 @@ import {
   MODEL_ID_TRAINING_DUMMY
 } from "../../../shared/index";
 import type {
+  LocationRootState,
   PlatformState,
   ProjectileState,
   RemotePlayerState,
@@ -115,6 +117,21 @@ export class SnapshotStore {
     return output;
   }
 
+  public getLocationRoots(): LocationRootState[] {
+    const output: LocationRootState[] = [];
+    for (const rawEntity of this.entities.values()) {
+      if (rawEntity.ntype !== NType.LocationRootEntity) {
+        continue;
+      }
+      const location = this.toLocationRootState(rawEntity);
+      if (!location) {
+        continue;
+      }
+      output.push(location);
+    }
+    return output;
+  }
+
   public getProjectiles(): ProjectileState[] {
     const output: ProjectileState[] = [];
     for (const rawEntity of this.entities.values()) {
@@ -201,6 +218,51 @@ export class SnapshotStore {
     return {
       nid,
       modelId,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      rotation
+    };
+  }
+
+  private toLocationRootState(raw: Record<string, unknown>): LocationRootState | null {
+    const locationKind = raw.locationKind;
+    if (typeof locationKind !== "number" || locationKind <= LOCATION_KIND_NONE) {
+      return null;
+    }
+    const modelId = raw.modelId;
+    const nid = raw.nid;
+    const position = this.readPosition(raw.position);
+    const rotation = this.readRotation(raw.rotation);
+    const locationArchetypeId = raw.locationArchetypeId;
+    const locationSeed = raw.locationSeed;
+    const locationEnvironmentId = raw.locationEnvironmentId;
+    const locationStreamingRadius = raw.locationStreamingRadius;
+    const locationInfluenceRadius = raw.locationInfluenceRadius;
+
+    if (
+      typeof nid !== "number" ||
+      typeof modelId !== "number" ||
+      typeof locationArchetypeId !== "number" ||
+      typeof locationSeed !== "number" ||
+      typeof locationEnvironmentId !== "number" ||
+      typeof locationStreamingRadius !== "number" ||
+      typeof locationInfluenceRadius !== "number" ||
+      position === null ||
+      rotation === null
+    ) {
+      return null;
+    }
+
+    return {
+      nid,
+      modelId,
+      locationKind,
+      locationArchetypeId,
+      locationSeed,
+      locationEnvironmentId,
+      locationStreamingRadius,
+      locationInfluenceRadius,
       x: position.x,
       y: position.y,
       z: position.z,

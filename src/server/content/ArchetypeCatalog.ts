@@ -1,6 +1,7 @@
+// Loads and validates server-only archetype data while using shared catalogs for cross-runtime content.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { PlatformDefinition, PlatformKind } from "../../shared/platforms";
+import { PLATFORM_DEFINITIONS, type PlatformDefinition } from "../../shared/platforms";
 
 type Vec3Yaw = {
   x: number;
@@ -44,7 +45,6 @@ function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog 
 
   const playerRaw = asRecord(root.player, "player");
   const dummyRaw = asRecord(root.trainingDummy, "trainingDummy");
-  const platformsRaw = root.platforms;
   const spawnsRaw = dummyRaw.spawns;
   if (!Array.isArray(spawnsRaw)) {
     throw new Error("trainingDummy.spawns must be an array.");
@@ -63,9 +63,6 @@ function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog 
   if (spawns.length === 0) {
     throw new Error("trainingDummy.spawns must include at least one spawn point.");
   }
-  if (!Array.isArray(platformsRaw) || platformsRaw.length === 0) {
-    throw new Error("platforms must be a non-empty array.");
-  }
   const projectileKindsRaw = root.projectileKinds;
   if (!Array.isArray(projectileKindsRaw) || projectileKindsRaw.length === 0) {
     throw new Error("projectileKinds must be a non-empty array.");
@@ -79,32 +76,6 @@ function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog 
   const dummyMaxHealth = asNumber(dummyRaw.maxHealth, "trainingDummy.maxHealth");
   if (dummyMaxHealth <= 0) {
     throw new Error("trainingDummy.maxHealth must be > 0.");
-  }
-  const platforms: PlatformDefinition[] = platformsRaw.map((platform, index) => {
-    const record = asRecord(platform, `platforms[${index}]`);
-    return {
-      pid: asInt(record.pid, `platforms[${index}].pid`),
-      kind: asPlatformKind(record.kind, `platforms[${index}].kind`),
-      halfX: asPositiveNumber(record.halfX, `platforms[${index}].halfX`),
-      halfY: asPositiveNumber(record.halfY, `platforms[${index}].halfY`),
-      halfZ: asPositiveNumber(record.halfZ, `platforms[${index}].halfZ`),
-      baseX: asNumber(record.baseX, `platforms[${index}].baseX`),
-      baseY: asNumber(record.baseY, `platforms[${index}].baseY`),
-      baseZ: asNumber(record.baseZ, `platforms[${index}].baseZ`),
-      baseYaw: asNumber(record.baseYaw, `platforms[${index}].baseYaw`),
-      amplitudeX: asNumber(record.amplitudeX, `platforms[${index}].amplitudeX`),
-      amplitudeY: asNumber(record.amplitudeY, `platforms[${index}].amplitudeY`),
-      frequency: asNonNegativeNumber(record.frequency, `platforms[${index}].frequency`),
-      phase: asNumber(record.phase, `platforms[${index}].phase`),
-      angularSpeed: asNumber(record.angularSpeed, `platforms[${index}].angularSpeed`)
-    };
-  });
-  const pidSet = new Set<number>();
-  for (const platform of platforms) {
-    if (pidSet.has(platform.pid)) {
-      throw new Error(`platforms contains duplicate pid ${platform.pid}`);
-    }
-    pidSet.add(platform.pid);
   }
   const projectileKinds = new Map<number, { modelId: number }>();
   for (let index = 0; index < projectileKindsRaw.length; index += 1) {
@@ -129,7 +100,7 @@ function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog 
       capsuleRadius: asNumber(dummyRaw.capsuleRadius, "trainingDummy.capsuleRadius"),
       spawns
     },
-    platforms,
+    platforms: PLATFORM_DEFINITIONS,
     projectiles: projectileKinds
   };
 
@@ -153,28 +124,4 @@ function asNumber(value: unknown, label: string): number {
 function asInt(value: unknown, label: string): number {
   const numberValue = asNumber(value, label);
   return Math.max(0, Math.floor(numberValue));
-}
-
-function asNonNegativeNumber(value: unknown, label: string): number {
-  const numberValue = asNumber(value, label);
-  if (numberValue < 0) {
-    throw new Error(`${label} must be >= 0.`);
-  }
-  return numberValue;
-}
-
-function asPositiveNumber(value: unknown, label: string): number {
-  const numberValue = asNumber(value, label);
-  if (numberValue <= 0) {
-    throw new Error(`${label} must be > 0.`);
-  }
-  return numberValue;
-}
-
-function asPlatformKind(value: unknown, label: string): PlatformKind {
-  const numberValue = asInt(value, label);
-  if (numberValue !== 1 && numberValue !== 2) {
-    throw new Error(`${label} must be 1 or 2.`);
-  }
-  return numberValue as PlatformKind;
 }

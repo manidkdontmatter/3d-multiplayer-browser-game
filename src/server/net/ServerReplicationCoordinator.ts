@@ -16,10 +16,14 @@ interface ServerReplicationCoordinatorOptions<
   TUser extends ReplicationUser,
   TPlayer extends ReplicationPlayer
 > {
-  readonly spatialChannel: {
+  readonly nearChannel: {
     addEntity: (entity: unknown) => void;
     removeEntity: (entity: unknown) => void;
     addMessage: (message: unknown) => void;
+  };
+  readonly farChannel: {
+    addEntity: (entity: unknown) => void;
+    removeEntity: (entity: unknown) => void;
   };
   readonly getTickNumber: () => number;
   readonly getUserById: (userId: number) => TUser | undefined;
@@ -35,11 +39,11 @@ export class ServerReplicationCoordinator<
   private readonly replicationMessaging: ReplicationMessagingSystem<TUser, TPlayer>;
 
   public constructor(options: ServerReplicationCoordinatorOptions<TUser, TPlayer>) {
-    this.replicationBridge = new NetReplicationBridge(options.spatialChannel);
+    this.replicationBridge = new NetReplicationBridge(options.nearChannel, options.farChannel);
     this.replicationMessaging = new ReplicationMessagingSystem<TUser, TPlayer>({
       getTickNumber: options.getTickNumber,
       getUserById: options.getUserById,
-      queueSpatialMessage: (message) => options.spatialChannel.addMessage(message),
+      queueSpatialMessage: (message) => options.nearChannel.addMessage(message),
       sanitizeHotbarSlot: options.sanitizeHotbarSlot,
       getAbilityDefinitionById: options.getAbilityDefinitionById
     });
@@ -66,7 +70,13 @@ export class ServerReplicationCoordinator<
     grounded: boolean,
     movementMode: MovementMode,
     health: number,
-    maxHealth: number
+    maxHealth: number,
+    locationKind: number,
+    locationArchetypeId: number,
+    locationSeed: number,
+    locationEnvironmentId: number,
+    locationStreamingRadius: number,
+    locationInfluenceRadius: number
   ): void {
     this.replicationBridge.syncFromValues(
       simEid,
@@ -81,7 +91,13 @@ export class ServerReplicationCoordinator<
       grounded,
       movementMode,
       health,
-      maxHealth
+      maxHealth,
+      locationKind,
+      locationArchetypeId,
+      locationSeed,
+      locationEnvironmentId,
+      locationStreamingRadius,
+      locationInfluenceRadius
     );
   }
 

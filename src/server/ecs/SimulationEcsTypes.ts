@@ -11,6 +11,12 @@ export type SimObject = {
   maxHealth: number;
   grounded: boolean;
   movementMode?: MovementMode;
+  locationKind?: number;
+  locationArchetypeId?: number;
+  locationSeed?: number;
+  locationEnvironmentId?: number;
+  locationStreamingRadius?: number;
+  locationInfluenceRadius?: number;
 };
 
 export type PlayerObject = SimObject & {
@@ -70,6 +76,12 @@ export type WorldWithComponents = {
     Rotation: { x: number[]; y: number[]; z: number[]; w: number[] };
     Velocity: { x: number[]; y: number[]; z: number[] };
     Health: { value: number[]; max: number[] };
+    LocationKind: { value: number[] };
+    LocationArchetypeId: { value: number[] };
+    LocationSeed: { value: number[] };
+    LocationEnvironmentId: { value: number[] };
+    LocationStreamingRadius: { value: number[] };
+    LocationInfluenceRadius: { value: number[] };
     Grounded: { value: number[] };
     MovementMode: { value: number[] };
     GroundedPlatformPid: { value: number[] };
@@ -113,5 +125,6 @@ export type WorldWithComponents = {
     PlatformTag: number[];
     ProjectileTag: number[];
     DummyTag: number[];
+    LocationRootTag: number[];
   };
 };

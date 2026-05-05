@@ -53,10 +53,15 @@ export class WorldRenderer {
     });
     this.remoteCharacters.syncRemotePlayers(snapshot.remotePlayers, snapshot.frameDeltaSeconds);
     this.audioEventBridge.applyAbilityUseEvents(snapshot.abilityUseEvents);
+    this.worldEntities.syncLocationRoots(snapshot.locationRoots);
     this.worldEntities.syncPlatforms(snapshot.platforms);
     this.worldEntities.syncTrainingDummies(snapshot.trainingDummies);
     this.projectileVisuals.syncProjectiles(snapshot.projectiles, snapshot.frameDeltaSeconds);
-    this.environment.render(snapshot.localPose, snapshot.renderServerTimeSeconds);
+    this.environment.render(
+      snapshot.localPose,
+      snapshot.renderServerTimeSeconds,
+      snapshot.locationRoots
+    );
   }
 
   public getForwardDirection(): Vector3 {

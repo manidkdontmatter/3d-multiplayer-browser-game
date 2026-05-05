@@ -6,6 +6,7 @@ import {
   clampHotbarSlotIndex,
   configurePlayerCharacterController,
   DEFAULT_HOTBAR_ABILITY_IDS,
+  DEFAULT_VOID_SPAWN_ANCHOR,
   DEFAULT_UNLOCKED_ABILITY_IDS,
   HOTBAR_SLOT_COUNT,
   PLAYER_BODY_CENTER_HEIGHT,
@@ -16,9 +17,6 @@ import {
   PLAYER_CAPSULE_RADIUS,
   quaternionFromYawPitchRoll,
   resolveRuntimeMapConfig,
-  sampleOceanHeightAt,
-  sampleWorldHeight,
-  sampleWorldSlopeDegrees,
   type MovementMode,
   SERVER_TICK_SECONDS
 } from "../shared/index";
@@ -42,6 +40,7 @@ import { MeleeCombatSystem } from "./combat/melee/MeleeCombatSystem";
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 import { InputSystem } from "./input/InputSystem";
 import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
+import { LocationRootSystem } from "./location/LocationRootSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { AbilityCommandHandler } from "./net/AbilityCommandHandler";
 import { AbilityCreatorSystem } from "./abilityCreator/AbilityCreatorSystem";
@@ -66,6 +65,14 @@ type UserLike = {
     halfHeight: number;
     halfDepth: number;
   };
+  farView?: {
+    x: number;
+    y: number;
+    z: number;
+    halfWidth: number;
+    halfHeight: number;
+    halfDepth: number;
+  };
 };
 
 type GlobalChannelLike = {
@@ -73,10 +80,16 @@ type GlobalChannelLike = {
 };
 
 type SpatialChannelLike = {
-  subscribe: (user: UserLike, view: NonNullable<UserLike["view"]>) => void;
+  subscribe: (user: UserLike, view: NonNullable<UserLike["view"] | UserLike["farView"]>) => void;
   addEntity: (entity: any) => any;
   removeEntity: (entity: any) => any;
   addMessage: (message: unknown) => void;
+};
+
+type FarSpatialChannelLike = {
+  subscribe: (user: UserLike, view: NonNullable<UserLike["farView"]>) => void;
+  addEntity: (entity: any) => any;
+  removeEntity: (entity: any) => any;
 };
 
 type CreateUserView = (position: {
@@ -164,6 +177,7 @@ export class GameSimulation {
   private readonly abilityCommandHandler: AbilityCommandHandler<UserLike>;
   private readonly abilityCreatorSystem: AbilityCreatorSystem;
   private readonly platformSystem: PlatformSystem;
+  private readonly locationRootSystem: LocationRootSystem;
   private readonly playerMovementSystem: PlayerMovementSystem<RuntimePlayerState>;
   private readonly archetypes: ServerArchetypeCatalog;
   private readonly runtimeMapConfig = resolveRuntimeMapConfig();
@@ -177,7 +191,8 @@ export class GameSimulation {
 
   public constructor(
     private readonly globalChannel: GlobalChannelLike,
-    private readonly spatialChannel: SpatialChannelLike,
+    private readonly nearChannel: SpatialChannelLike,
+    private readonly farChannel: FarSpatialChannelLike,
     private readonly persistence: PersistenceService,
     private readonly createUserView: CreateUserView
   ) {
@@ -188,7 +203,8 @@ export class GameSimulation {
     this.loadTestGridRows = this.resolveLoadTestGridRows();
     this.abilityCreatorSystem = new AbilityCreatorSystem(this.persistence);
     this.replication = new ServerReplicationCoordinator<UserLike, RuntimePlayerState>({
-      spatialChannel: this.spatialChannel,
+      nearChannel: this.nearChannel,
+      farChannel: this.farChannel,
       getTickNumber: () => this.tickNumber,
       getUserById: (userId) => this.usersById.get(userId),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
@@ -304,6 +320,19 @@ export class GameSimulation {
         this.simulationEcs.syncPlatform(platform);
       }
     });
+    this.locationRootSystem = new LocationRootSystem({
+      world: this.world,
+      onLocationAdded: (location) => {
+        this.simulationEcs.registerLocationRoot(location);
+        const eid = this.requireEid(location);
+        const nid = this.replication.spawnEntity(eid, this.toReplicationSnapshot(location));
+        location.nid = nid;
+        this.simulationEcs.setEntityNidByEid(eid, nid);
+      },
+      onLocationUpdated: (location) => {
+        this.simulationEcs.syncLocationRoot(location);
+      }
+    });
     this.abilityCommandHandler = new AbilityCommandHandler<UserLike>({
       getAbilityStateByUserId: (userId) => this.simulationEcs.getPlayerAbilityStateByUserId(userId),
       setPlayerHotbarAbilityByUserId: (userId, slot, abilityId) =>
@@ -337,11 +366,18 @@ export class GameSimulation {
           this.abilityExecutionSystem.tryUseSecondaryMouseAbility(player);
         }
       },
-      samplePlayerPlatformCarry: (player) => this.platformSystem.samplePlayerPlatformCarry(player),
+      samplePlayerPlatformCarry: (player) => {
+        const platformCarry = this.platformSystem.samplePlayerPlatformCarry(player);
+        const frameCarry = this.locationRootSystem.sampleFrameCarry(player);
+        return {
+          x: platformCarry.x + frameCarry.x,
+          y: platformCarry.y + frameCarry.y,
+          z: platformCarry.z + frameCarry.z,
+          yaw: platformCarry.yaw + frameCarry.yaw
+        };
+      },
       resolvePlatformPidByColliderHandle: (colliderHandle) =>
         this.platformSystem.resolvePlatformPidByColliderHandle(colliderHandle),
-      sampleOceanSurfaceY: (x, z, simulationSeconds) =>
-        sampleOceanHeightAt(this.runtimeMapConfig, x, z, simulationSeconds),
       onPlayerStepped: (userId, player) => {
         this.simulationEcs.applyPlayerRuntimeStateByUserId(userId, player);
         const ackState = this.simulationEcs.getPlayerInputAckStateByUserId(userId);
@@ -370,6 +406,7 @@ export class GameSimulation {
       registerDummyCollider: (colliderHandle, eid) =>
         this.damageSystem.registerDummyCollider(colliderHandle, eid)
     });
+    this.locationRootSystem.initializeLocations();
   }
 
   public addUser(user: UserLike): void {
@@ -523,11 +560,33 @@ export class GameSimulation {
     this.elapsedSeconds += delta;
     this.world.integrationParameters.dt = delta;
     this.platformSystem.updatePlatforms(previousElapsedSeconds, this.elapsedSeconds);
+    this.locationRootSystem.updateLocations(previousElapsedSeconds, this.elapsedSeconds);
     this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta, this.elapsedSeconds);
 
     this.projectileSystem.step(delta);
     this.simulationEcs.forEachReplicatedState(
-      (eid, _nid, modelId, x, y, z, rx, ry, rz, rw, grounded, movementMode, health, maxHealth) => {
+      (
+        eid,
+        _nid,
+        modelId,
+        x,
+        y,
+        z,
+        rx,
+        ry,
+        rz,
+        rw,
+        grounded,
+        movementMode,
+        health,
+        maxHealth,
+        locationKind,
+        locationArchetypeId,
+        locationSeed,
+        locationEnvironmentId,
+        locationStreamingRadius,
+        locationInfluenceRadius
+      ) => {
         this.replication.syncEntityFromValues(
           eid,
           modelId,
@@ -541,7 +600,13 @@ export class GameSimulation {
           grounded,
           movementMode,
           health,
-          maxHealth
+          maxHealth,
+          locationKind,
+          locationArchetypeId,
+          locationSeed,
+          locationEnvironmentId,
+          locationStreamingRadius,
+          locationInfluenceRadius
         );
       }
     );
@@ -692,6 +757,12 @@ export class GameSimulation {
     movementMode?: MovementMode;
     health: number;
     maxHealth: number;
+    locationKind?: number;
+    locationArchetypeId?: number;
+    locationSeed?: number;
+    locationEnvironmentId?: number;
+    locationStreamingRadius?: number;
+    locationInfluenceRadius?: number;
   }): {
     nid: number;
     modelId: number;
@@ -701,6 +772,12 @@ export class GameSimulation {
     movementMode: MovementMode;
     health: number;
     maxHealth: number;
+    locationKind: number;
+    locationArchetypeId: number;
+    locationSeed: number;
+    locationEnvironmentId: number;
+    locationStreamingRadius: number;
+    locationInfluenceRadius: number;
   } {
     return {
       nid: entity.nid,
@@ -710,7 +787,13 @@ export class GameSimulation {
       grounded: entity.grounded,
       movementMode: entity.movementMode ?? MOVEMENT_MODE_GROUNDED,
       health: entity.health,
-      maxHealth: entity.maxHealth
+      maxHealth: entity.maxHealth,
+      locationKind: entity.locationKind ?? 0,
+      locationArchetypeId: entity.locationArchetypeId ?? 0,
+      locationSeed: entity.locationSeed ?? 0,
+      locationEnvironmentId: entity.locationEnvironmentId ?? 0,
+      locationStreamingRadius: entity.locationStreamingRadius ?? 0,
+      locationInfluenceRadius: entity.locationInfluenceRadius ?? 0
     };
   }
 
@@ -722,6 +805,8 @@ export class GameSimulation {
 
     const minSeparation = PLAYER_CAPSULE_RADIUS * 4;
     const minSeparationSq = minSeparation * minSeparation;
+    const baseX = DEFAULT_VOID_SPAWN_ANCHOR.x;
+    const baseZ = DEFAULT_VOID_SPAWN_ANCHOR.z;
     const baseRadius = 2.25;
     const ringStep = 1.5;
     const maxRings = 64;
@@ -734,8 +819,8 @@ export class GameSimulation {
 
       for (let slot = 0; slot < slots; slot += 1) {
         const angle = (slot / slots) * Math.PI * 2 + angleOffset;
-        const candidateX = Math.cos(angle) * radius;
-        const candidateZ = Math.sin(angle) * radius;
+        const candidateX = baseX + Math.cos(angle) * radius;
+        const candidateZ = baseZ + Math.sin(angle) * radius;
         let intersectsExisting = false;
 
         for (const position of occupied) {
@@ -756,7 +841,7 @@ export class GameSimulation {
       }
     }
 
-    return { x: baseRadius + (maxRings + 1) * ringStep, z: 0 };
+    return { x: baseX + baseRadius + (maxRings + 1) * ringStep, z: baseZ };
   }
 
   private getLoadTestGridSpawnPosition(index: number): { x: number; z: number } {
@@ -774,16 +859,15 @@ export class GameSimulation {
   }
 
   private getSpawnBodyY(x: number, z: number): number {
-    return sampleWorldHeight(this.runtimeMapConfig, x, z) + PLAYER_BODY_CENTER_HEIGHT;
+    void x;
+    void z;
+    return DEFAULT_VOID_SPAWN_ANCHOR.y - PLAYER_CAMERA_OFFSET_Y;
   }
 
   private isSpawnCandidateValid(x: number, z: number): boolean {
-    const height = sampleWorldHeight(this.runtimeMapConfig, x, z);
-    if (height <= this.runtimeMapConfig.oceanBaseHeight + 0.35) {
-      return false;
-    }
-    const slopeDegrees = sampleWorldSlopeDegrees(this.runtimeMapConfig, x, z, 1.6);
-    return slopeDegrees <= 27;
+    void x;
+    void z;
+    return true;
   }
 
   private resolveLoadTestSpawnMode(): "default" | "grid" {
@@ -858,7 +942,8 @@ export class GameSimulation {
     return new PlayerLifecycleSystem<UserLike, PlayerEntity>({
       world: this.world,
       globalChannel: this.globalChannel,
-      spatialChannel: this.spatialChannel,
+      nearChannel: this.nearChannel,
+      farChannel: this.farChannel,
       createUserView: ({ x, y, z, halfWidth, halfHeight, halfDepth }) =>
         this.createUserView({ x, y, z, halfWidth, halfHeight, halfDepth }),
       usersById: this.usersById,
@@ -943,9 +1028,12 @@ export class GameSimulation {
       resolveOfflineSnapshotByAccountId: (accountId) => {
         return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId);
       },
-      viewHalfWidth: 128,
-      viewHalfHeight: 64,
-      viewHalfDepth: 128,
+      viewHalfWidth: 256,
+      viewHalfHeight: 128,
+      viewHalfDepth: 256,
+      farViewHalfWidth: 3200,
+      farViewHalfHeight: 1600,
+      farViewHalfDepth: 3200,
       onPlayerAdded: (user, player) => {
         this.simulationEcs.registerPlayer(player);
         const eid = this.requireEid(player);

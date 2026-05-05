@@ -15,7 +15,8 @@ export enum NType {
   AbilityCreatorCommand = 16,
   AbilityCreatorStateMessage = 17,
   MapTransferCommand = 18,
-  MapTransferMessage = 19
+  MapTransferMessage = 19,
+  LocationRootEntity = 20
 }
 
 export const inputCommandSchema = defineSchema({
@@ -80,6 +81,18 @@ export const baseEntitySchema = defineSchema({
   movementMode: Binary.UInt8,
   health: Binary.UInt8,
   maxHealth: Binary.UInt8
+});
+
+export const locationRootEntitySchema = defineSchema({
+  modelId: Binary.UInt16,
+  locationKind: Binary.UInt8,
+  locationArchetypeId: Binary.UInt16,
+  locationSeed: Binary.Int32,
+  locationEnvironmentId: Binary.UInt8,
+  locationStreamingRadius: Binary.Float32,
+  locationInfluenceRadius: Binary.Float32,
+  position: { type: Binary.Vector3, interp: true },
+  rotation: { type: Binary.Quaternion, interp: true }
 });
 
 export const identityMessageSchema = defineSchema({
@@ -192,12 +205,7 @@ export const mapTransferMessageSchema = defineSchema({
   seed: Binary.Int32,
   groundHalfExtent: Binary.Float32,
   groundHalfThickness: Binary.Float32,
-  cubeCount: Binary.UInt16,
-  oceanBaseHeight: Binary.Float32,
-  oceanEdgeDepth: Binary.Float32,
-  oceanWaveAmplitude: Binary.Float32,
-  oceanWaveSpeed: Binary.Float32,
-  oceanWaveLength: Binary.Float32
+  cubeCount: Binary.UInt16
 });
 
 export const ncontext = new Context();
@@ -205,6 +213,7 @@ ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCommand, abilityCommandSchema);
 ncontext.register(NType.AbilityCreatorCommand, abilityCreatorCommandSchema);
 ncontext.register(NType.BaseEntity, baseEntitySchema);
+ncontext.register(NType.LocationRootEntity, locationRootEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
 ncontext.register(NType.InputAckMessage, inputAckMessageSchema);
 ncontext.register(NType.AbilityDefinitionMessage, abilityDefinitionMessageSchema);
@@ -284,6 +293,20 @@ export interface BaseEntity {
   movementMode: number;
   health: number;
   maxHealth: number;
+}
+
+export interface LocationRootEntity {
+  nid: number;
+  ntype: NType.LocationRootEntity;
+  modelId: number;
+  locationKind: number;
+  locationArchetypeId: number;
+  locationSeed: number;
+  locationEnvironmentId: number;
+  locationStreamingRadius: number;
+  locationInfluenceRadius: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
 }
 
 export interface IdentityMessage {
@@ -406,9 +429,4 @@ export interface MapTransferMessage {
   groundHalfExtent: number;
   groundHalfThickness: number;
   cubeCount: number;
-  oceanBaseHeight: number;
-  oceanEdgeDepth: number;
-  oceanWaveAmplitude: number;
-  oceanWaveSpeed: number;
-  oceanWaveLength: number;
 }

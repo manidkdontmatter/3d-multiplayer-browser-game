@@ -1,4 +1,4 @@
-# Browser Game
+# Praeterspace / Noctis Mundus
 
 Authoritative server/browser-client scaffold using:
 
@@ -50,7 +50,7 @@ Authoritative server/browser-client scaffold using:
   - Client output: `dist/` (static files, including generated runtime manifests/assets).
   - Server output: `dist/server/` (orchestrator + server entrypoints).
 - Example Nginx config:
-  - `deploy/nginx.browser-game.example.conf`
+  - `deploy/nginx.praeterspace-noctis-mundus.example.conf`
 - Run orchestrator/map runtime behind Nginx:
   - Nginx serves static files from `dist/`.
   - Nginx proxies `/bootstrap` (and optional `/health`) to orchestrator HTTP on `127.0.0.1:9000`.

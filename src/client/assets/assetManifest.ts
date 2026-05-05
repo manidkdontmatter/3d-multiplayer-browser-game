@@ -1,10 +1,11 @@
 // Canonical asset ids and build-time source catalog for runtime-manifest generation.
-export type AssetKind = "gltf" | "vrma" | "texture" | "audio" | "binary";
+export type AssetKind = "gltf" | "vrma" | "texture" | "cubemap" | "audio" | "binary";
 export type AssetPriorityHint = "critical" | "near" | "background";
 
 export interface AssetCatalogDefinition {
   id: string;
-  sourceUrl: string;
+  sourceUrl?: string;
+  sourceUrls?: string[];
   kind: AssetKind;
   label?: string;
   groups: string[];
@@ -15,6 +16,7 @@ export interface AssetCatalogDefinition {
 export interface RuntimeAssetDefinition {
   id: string;
   url: string;
+  urls?: string[];
   kind: AssetKind;
   hash: string;
   bytes: number;
@@ -42,6 +44,7 @@ export interface RuntimeManifestBootstrap {
 export const RUNTIME_ASSET_BOOTSTRAP_URL = "/runtime-manifests/runtime-bootstrap.json";
 export const ASSET_GROUP_CORE = "core";
 export const ASSET_GROUP_WORLD_DEFAULT = "world:default";
+export const ASSET_GROUP_WORLD_SKYBOXES = "world:skyboxes";
 export const ASSET_GROUP_SFX = "sfx";
 
 export const CHARACTER_MALE_ASSET_ID = "character.male";
@@ -52,9 +55,17 @@ export const CHARACTER_ANIM_JUMP_ASSET_ID = "character.anim.jump";
 export const CHARACTER_ANIM_PUNCH_ASSET_ID = "character.anim.punch";
 export const SFX_HIT_ASSET_ID = "sfx.hit";
 export const WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID = "world.foliage.grass.plain";
-export const WORLD_WATER_NORMALS_ASSET_ID = "world.water.normals";
-export const WORLD_WATER_NORMALS_A_ASSET_ID = "world.water.normals.a";
-export const WORLD_WATER_NORMALS_B_ASSET_ID = "world.water.normals.b";
+export const WORLD_SKYBOX_1_ASSET_ID = "world.skybox.1";
+export const WORLD_SKYBOX_2_ASSET_ID = "world.skybox.2";
+export const WORLD_SKYBOX_3_ASSET_ID = "world.skybox.3";
+export const WORLD_SKYBOX_4_ASSET_ID = "world.skybox.4";
+export const WORLD_SKYBOX_5_ASSET_ID = "world.skybox.5";
+
+function skyboxFaceUrls(folder: string): string[] {
+  return ["px", "nx", "py", "ny", "pz", "nz"].map(
+    (face) => `/assets/textures/skyboxes/${folder}/${face}.png`
+  );
+}
 
 export const ASSET_CATALOG: AssetCatalogDefinition[] = [
   {
@@ -114,27 +125,43 @@ export const ASSET_CATALOG: AssetCatalogDefinition[] = [
     priorityHint: "near"
   },
   {
-    id: WORLD_WATER_NORMALS_ASSET_ID,
-    label: "Water Normal Texture",
-    kind: "texture",
-    sourceUrl: "/assets/textures/water/waternormals.jpg",
-    groups: [ASSET_GROUP_WORLD_DEFAULT],
+    id: WORLD_SKYBOX_1_ASSET_ID,
+    label: "Skybox 1 Cubemap",
+    kind: "cubemap",
+    sourceUrls: skyboxFaceUrls("skybox1"),
+    groups: [ASSET_GROUP_WORLD_DEFAULT, ASSET_GROUP_WORLD_SKYBOXES],
     priorityHint: "near"
   },
   {
-    id: WORLD_WATER_NORMALS_A_ASSET_ID,
-    label: "Water Normal Texture A",
-    kind: "texture",
-    sourceUrl: "/assets/textures/water/water-normal-a.jpg",
-    groups: [ASSET_GROUP_WORLD_DEFAULT],
+    id: WORLD_SKYBOX_2_ASSET_ID,
+    label: "Skybox 2 Cubemap",
+    kind: "cubemap",
+    sourceUrls: skyboxFaceUrls("skybox2"),
+    groups: [ASSET_GROUP_WORLD_DEFAULT, ASSET_GROUP_WORLD_SKYBOXES],
     priorityHint: "near"
   },
   {
-    id: WORLD_WATER_NORMALS_B_ASSET_ID,
-    label: "Water Normal Texture B",
-    kind: "texture",
-    sourceUrl: "/assets/textures/water/water-normal-b.jpg",
-    groups: [ASSET_GROUP_WORLD_DEFAULT],
+    id: WORLD_SKYBOX_3_ASSET_ID,
+    label: "Skybox 3 Cubemap",
+    kind: "cubemap",
+    sourceUrls: skyboxFaceUrls("skybox3"),
+    groups: [ASSET_GROUP_WORLD_DEFAULT, ASSET_GROUP_WORLD_SKYBOXES],
+    priorityHint: "near"
+  },
+  {
+    id: WORLD_SKYBOX_4_ASSET_ID,
+    label: "Skybox 4 Cubemap",
+    kind: "cubemap",
+    sourceUrls: skyboxFaceUrls("skybox4"),
+    groups: [ASSET_GROUP_WORLD_DEFAULT, ASSET_GROUP_WORLD_SKYBOXES],
+    priorityHint: "near"
+  },
+  {
+    id: WORLD_SKYBOX_5_ASSET_ID,
+    label: "Skybox 5 Cubemap",
+    kind: "cubemap",
+    sourceUrls: skyboxFaceUrls("skybox5"),
+    groups: [ASSET_GROUP_WORLD_DEFAULT, ASSET_GROUP_WORLD_SKYBOXES],
     priorityHint: "near"
   },
   {

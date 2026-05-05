@@ -50,7 +50,8 @@ async function checkNeedsBuild(): Promise<boolean> {
   const inputPaths = [
     path.join(repoRoot, "scripts", "build-asset-manifest.ts"),
     path.join(repoRoot, "src", "client", "assets", "assetManifest.ts"),
-    ...ASSET_CATALOG.map((entry) => path.join(repoRoot, "public", normalizePublicPath(entry.sourceUrl)))
+    ...ASSET_CATALOG.flatMap((entry) => getEntrySourceUrls(entry))
+      .map((sourceUrl) => path.join(repoRoot, "public", normalizePublicPath(sourceUrl)))
   ];
 
   for (const inputPath of inputPaths) {
@@ -64,6 +65,13 @@ async function checkNeedsBuild(): Promise<boolean> {
   }
 
   return false;
+}
+
+function getEntrySourceUrls(entry: { sourceUrl?: string; sourceUrls?: string[] }): string[] {
+  if (Array.isArray(entry.sourceUrls) && entry.sourceUrls.length > 0) {
+    return entry.sourceUrls;
+  }
+  return entry.sourceUrl ? [entry.sourceUrl] : [];
 }
 
 function normalizePublicPath(value: string): string {

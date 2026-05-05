@@ -96,6 +96,12 @@ async function main(): Promise<void> {
 }
 
 async function buildRuntimeDefinition(entry: AssetCatalogDefinition): Promise<RuntimeAssetDefinition> {
+  if (entry.kind === "cubemap") {
+    return await buildCubemapRuntimeDefinition(entry);
+  }
+  if (!entry.sourceUrl) {
+    throw new Error(`Asset "${entry.id}" is missing sourceUrl.`);
+  }
   const sourceRelativePath = normalizeSourcePath(entry.sourceUrl);
   const sourceAbsolutePath = path.join(publicDir, sourceRelativePath);
   const sourceStats = await stat(sourceAbsolutePath);
@@ -123,6 +129,55 @@ async function buildRuntimeDefinition(entry: AssetCatalogDefinition): Promise<Ru
     kind: entry.kind,
     hash,
     bytes: transformed.bytes.byteLength,
+    label: entry.label,
+    deps: entry.deps ?? [],
+    groups: entry.groups,
+    priorityHint: entry.priorityHint ?? "near"
+  };
+}
+
+async function buildCubemapRuntimeDefinition(entry: AssetCatalogDefinition): Promise<RuntimeAssetDefinition> {
+  const sourceUrls = entry.sourceUrls ?? [];
+  if (sourceUrls.length !== 6) {
+    throw new Error(`Cubemap asset "${entry.id}" must define exactly 6 sourceUrls.`);
+  }
+
+  const targetUrls: string[] = [];
+  const hashInputParts: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  for (const sourceUrl of sourceUrls) {
+    const sourceRelativePath = normalizeSourcePath(sourceUrl);
+    const sourceAbsolutePath = path.join(publicDir, sourceRelativePath);
+    const sourceStats = await stat(sourceAbsolutePath);
+    if (!sourceStats.isFile()) {
+      throw new Error(`Cubemap source path is not a file: ${sourceUrl}`);
+    }
+
+    const sourceBytes = await readFile(sourceAbsolutePath);
+    const faceHash = shortHash(sourceBytes);
+    const parsed = path.parse(sourceRelativePath);
+    const targetRelativePath = path.posix.join(
+      "runtime-assets",
+      parsed.dir,
+      `${parsed.name}.${faceHash}${parsed.ext}`
+    );
+    const targetAbsolutePath = path.join(publicDir, targetRelativePath);
+    await mkdir(path.dirname(targetAbsolutePath), { recursive: true });
+    await writeFile(targetAbsolutePath, sourceBytes);
+    targetUrls.push(toPublicUrl(targetRelativePath));
+    hashInputParts.push(sourceBytes);
+    totalBytes += sourceBytes.byteLength;
+  }
+
+  const combinedHash = shortHash(Buffer.concat(hashInputParts));
+  return {
+    id: entry.id,
+    url: targetUrls[0] ?? "",
+    urls: targetUrls,
+    kind: entry.kind,
+    hash: combinedHash,
+    bytes: totalBytes,
     label: entry.label,
     deps: entry.deps ?? [],
     groups: entry.groups,

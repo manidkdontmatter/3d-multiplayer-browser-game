@@ -1,5 +1,15 @@
 // Centralized client asset manager with runtime manifest loading, request deduplication, and prioritized on-demand fetches.
-import { AudioLoader, FileLoader, Group, LoadingManager, Texture, TextureLoader, type WebGLRenderer } from "three";
+import {
+  AudioLoader,
+  CubeTexture,
+  CubeTextureLoader,
+  FileLoader,
+  Group,
+  LoadingManager,
+  Texture,
+  TextureLoader,
+  type WebGLRenderer
+} from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
@@ -15,7 +25,7 @@ import {
   type RuntimeManifestBootstrap
 } from "./assetManifest";
 
-export type LoadedAsset = ArrayBuffer | AudioBuffer | Texture | GLTF | Group;
+export type LoadedAsset = ArrayBuffer | AudioBuffer | Texture | CubeTexture | GLTF | Group;
 export type AssetLoadPriority = AssetPriorityHint;
 
 export interface AssetPreloadProgress {
@@ -46,6 +56,7 @@ class AssetManager {
   private readonly groupIndex = new Map<string, string[]>();
   private readonly loaderManager = new LoadingManager();
   private readonly textureLoader = new TextureLoader(this.loaderManager);
+  private readonly cubeTextureLoader = new CubeTextureLoader(this.loaderManager);
   private readonly ktx2Loader = new KTX2Loader(this.loaderManager);
   private readonly audioLoader = new AudioLoader(this.loaderManager);
   private readonly gltfLoader = new GLTFLoader(this.loaderManager);
@@ -238,13 +249,14 @@ class AssetManager {
     if (
       typeof raw.id !== "string" ||
       raw.id.length === 0 ||
-      typeof raw.url !== "string" ||
-      raw.url.length === 0
+      (raw.kind !== "cubemap" && (typeof raw.url !== "string" || raw.url.length === 0))
     ) {
       throw new Error("Runtime asset definition missing id/url.");
     }
     return {
       ...raw,
+      url: typeof raw.url === "string" ? raw.url : "",
+      urls: Array.isArray(raw.urls) ? raw.urls.filter((url) => typeof url === "string") : undefined,
       deps: Array.isArray(raw.deps) ? raw.deps.filter((dep) => typeof dep === "string") : [],
       groups: Array.isArray(raw.groups) ? raw.groups.filter((group) => typeof group === "string") : [],
       priorityHint:
@@ -270,6 +282,8 @@ class AssetManager {
             return await this.ktx2Loader.loadAsync(definition.url);
           }
           return await this.textureLoader.loadAsync(definition.url);
+        case "cubemap":
+          return await this.loadCubemapAsset(definition);
         case "audio":
           return await this.audioLoader.loadAsync(definition.url);
         case "binary":
@@ -298,6 +312,14 @@ class AssetManager {
       return copy.buffer;
     }
     throw new Error(`Expected binary ArrayBuffer for "${url}"`);
+  }
+
+  private async loadCubemapAsset(definition: RuntimeAssetDefinition): Promise<CubeTexture> {
+    const urls = definition.urls ?? [];
+    if (urls.length !== 6 || urls.some((url) => url.length === 0)) {
+      throw new Error(`Cubemap asset "${definition.id}" must have exactly 6 runtime URLs.`);
+    }
+    return await this.cubeTextureLoader.loadAsync(urls);
   }
 }
 

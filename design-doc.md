@@ -16,7 +16,13 @@
 - Character customization and starter stat allocation happen in-game after spawn, not as a blocking front-loaded character creator.
 
 # Setting
-- TBD
+- The main game world is a paranormal void dimension informally understood as an otherspace/praeterspace rather than outer space. It is void-centric: players fly between sparse floating places instead of traveling across a mainland.
+- The void contains regions with radically different atmospheres, from hellish and hostile to heavenly and peaceful. These regions are defined by complete environment presets rather than skyboxes alone: sky, fog, lighting, nebula layers, particle fields, post-processing, and later ambience audio.
+- Environment appearance is resolved by priority layers. The neutral void is the fallback, large authored void-region volumes define the broad area aesthetic, and smaller location/interior volumes override the broader region while blending smoothly at their boundaries.
+- Environment volume blending is distance-based. Broad void-region and location atmosphere changes should fade over large distances so flying between areas feels gradual rather than snapping after a short threshold.
+- The primary void sky should be a space/paranormal sky system with region-specific starfields and nebula colors, not a normal Earth-atmosphere sky. Blue-sky island bubbles can exist, but even those are environment presets that blend through the same client-only sky/fog/VFX resolver.
+- The game should not be built around a normal planet, Earth, or a large mainland. Terrain exists only as rare floating islands or realm fragments.
+- A strong working premise is that player characters are soul-forms or post-mortal beings given mutable bodies in this dimension. This supports respawning, transformations, flying, and self-authored powers without requiring a normal earthly origin.
 
 # Aesthetic
 - Low-poly/retro presentation with realistic proportions.
@@ -63,11 +69,19 @@
 - When you die you simply respawn fully healed
 
 # World
-- There is a terrain, which is probably around 2km x 2km
-- The terrain features grass, trees, rocks, bushes, water, and other features typical of a 3d terrain
-- The terrain is surrounded by an ocean. The ocean has procedural waves that are synced by the server because boats and characters and other floating objects will have to float on the waves.
-- There are biomes
-- There are animals and other NPCs, some peaceful some aggressive, some never attack even if attacked, some are peaceful until attacked
+- The primary world is one huge void map composed of authored floating locations. A location can be a terrain island, castle, shrine, ruin, arena, mothership, airship, mobile base, platform cluster, or other large object.
+- There is no canonical mainland and no ocean-surrounded default terrain. Old mainland/ocean assumptions are deprecated unless a specific modded map intentionally uses them.
+- The void map is authored as a sparse set of major location roots, likely tens rather than thousands of major places. These roots are replicated and interest-managed so clients discover and stream nearby locations.
+- Interest management uses separate near and far spatial channels. Near spatial replication is for players, NPCs, projectiles, pickups, and normal interactables; far spatial replication is for large distant roots such as locations, landmarks, major ships, and other objects that should be visible from much farther away.
+- A location root is a lightweight authoritative object. Its children can be local/generated/rendered content such as model pieces, procedural terrain, crystal bowls, collision proxies, visual effects, and environment volumes.
+- Authored environment volumes are not inherently location-specific. Large void-region volumes are map-authored areas in empty space; location-specific volumes are smaller high-priority child volumes attached to islands, castles, ships, interiors, or other places. Locations may define multiple child volumes, such as a long box for a ship hull, smaller boxes for towers/rooms, and spheres for loose outdoor atmosphere.
+- Terrain islands are optional location children. For prototyping they can use square/rectangular procedural terrain. Final terrain islands will often be circular and may use crystal/glass bowl undersides so flying underneath looks intentional.
+- Large model-based locations such as castles and motherships should usually be authored assets or primitive prototype kitbashes, not terrain.
+- Static locations can be fixed in void space. Moving locations are freely movable world objects and are not limited to rail/platform motion.
+- The current small moving platform concept remains useful for elevators, slabs, arena pieces, and traversal tests, but it is not the foundation for moving castles, ships, or motherships.
+- Large moving locations use moving reference frames: one root transform, local child geometry, influence volumes, and occupants/entities that inherit the root motion while attached.
+- The void can still support multiple map processes for special maps, modded servers, arenas, admin maps, or future content, but the main fantasy is one enormous sparse void map.
+- Biomes remain useful for procedural terrain islands, but biome selection must be controllable per island rather than only globally derived from one terrain seed.
 
 # UI
 - A typical inventory system of an RPG where you have a menu of items/etc you possess.

@@ -60,11 +60,6 @@ declare global {
       groundHalfExtent: number;
       groundHalfThickness: number;
       cubeCount: number;
-      oceanBaseHeight: number;
-      oceanEdgeDepth: number;
-      oceanWaveAmplitude: number;
-      oceanWaveSpeed: number;
-      oceanWaveLength: number;
     };
   }
 
@@ -76,11 +71,6 @@ declare global {
         groundHalfExtent: number;
         groundHalfThickness: number;
         cubeCount: number;
-        oceanBaseHeight: number;
-        oceanEdgeDepth: number;
-        oceanWaveAmplitude: number;
-        oceanWaveSpeed: number;
-        oceanWaveLength: number;
       }
     | undefined;
 }

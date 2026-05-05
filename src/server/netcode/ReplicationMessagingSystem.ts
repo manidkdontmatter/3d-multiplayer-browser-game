@@ -14,6 +14,7 @@ export interface ReplicationUser {
   id: number;
   queueMessage: (message: unknown) => void;
   view?: { x: number; y: number; z: number };
+  farView?: { x: number; y: number; z: number };
 }
 
 export interface ReplicationPlayer {
@@ -81,12 +82,19 @@ export class ReplicationMessagingSystem<
 
   public syncUserViewPosition(userId: number, x: number, y: number, z: number): void {
     const user = this.options.getUserById(userId);
-    if (!user?.view) {
+    if (!user) {
       return;
     }
-    user.view.x = x;
-    user.view.y = y;
-    user.view.z = z;
+    if (user.view) {
+      user.view.x = x;
+      user.view.y = y;
+      user.view.z = z;
+    }
+    if (user.farView) {
+      user.farView.x = x;
+      user.farView.y = y;
+      user.farView.z = z;
+    }
   }
 
   public queueInputAck(userId: number, player: TPlayer): void {

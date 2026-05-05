@@ -23,6 +23,12 @@ export class SimulationEcsStore {
       Rotation: { x: [] as number[], y: [] as number[], z: [] as number[], w: [] as number[] },
       Velocity: { x: [] as number[], y: [] as number[], z: [] as number[] },
       Health: { value: [] as number[], max: [] as number[] },
+      LocationKind: { value: [] as number[] },
+      LocationArchetypeId: { value: [] as number[] },
+      LocationSeed: { value: [] as number[] },
+      LocationEnvironmentId: { value: [] as number[] },
+      LocationStreamingRadius: { value: [] as number[] },
+      LocationInfluenceRadius: { value: [] as number[] },
       Grounded: { value: [] as number[] },
       MovementMode: { value: [] as number[] },
       GroundedPlatformPid: { value: [] as number[] },
@@ -65,7 +71,8 @@ export class SimulationEcsStore {
       PlayerTag: [] as number[],
       PlatformTag: [] as number[],
       ProjectileTag: [] as number[],
-      DummyTag: [] as number[]
+      DummyTag: [] as number[],
+      LocationRootTag: [] as number[]
     }
   }) as WorldWithComponents;
 
@@ -99,6 +106,12 @@ export class SimulationEcsStore {
   public registerPlatformComponents(eid: number): void {
     this.ensureBaseComponents(eid);
     addComponent(this.world, eid, this.world.components.PlatformTag);
+  }
+
+  public registerLocationRootComponents(eid: number): void {
+    this.ensureBaseComponents(eid);
+    addComponent(this.world, eid, this.world.components.ReplicatedTag);
+    addComponent(this.world, eid, this.world.components.LocationRootTag);
   }
 
   public registerDummyComponents(eid: number): void {
@@ -176,6 +189,12 @@ export class SimulationEcsStore {
     );
     this.world.components.Health.value[eid] = Math.max(0, Math.floor(entity.health));
     this.world.components.Health.max[eid] = Math.max(0, Math.floor(entity.maxHealth));
+    this.world.components.LocationKind.value[eid] = Math.max(0, Math.floor(entity.locationKind ?? 0));
+    this.world.components.LocationArchetypeId.value[eid] = Math.max(0, Math.floor(entity.locationArchetypeId ?? 0));
+    this.world.components.LocationSeed.value[eid] = Math.floor(entity.locationSeed ?? 0);
+    this.world.components.LocationEnvironmentId.value[eid] = Math.max(0, Math.floor(entity.locationEnvironmentId ?? 0));
+    this.world.components.LocationStreamingRadius.value[eid] = Math.max(0, entity.locationStreamingRadius ?? 0);
+    this.world.components.LocationInfluenceRadius.value[eid] = Math.max(0, entity.locationInfluenceRadius ?? 0);
   }
 
   public syncPlayerFromObject(eid: number, player: PlayerObject): void {
@@ -252,6 +271,10 @@ export class SimulationEcsStore {
     this.syncBaseFromObject(eid, platform);
   }
 
+  public syncLocationRootFromObject(eid: number, location: SimObject): void {
+    this.syncBaseFromObject(eid, location);
+  }
+
   public syncDummyFromObject(eid: number, dummy: DummyObject): void {
     this.syncBaseFromObject(eid, dummy);
   }
@@ -282,6 +305,10 @@ export class SimulationEcsStore {
 
   public getDummyTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.DummyTag]));
+  }
+
+  public getLocationRootTagEids(): number[] {
+    return Array.from(query(this.world, [this.world.components.LocationRootTag]));
   }
 
   public getReplicatedTagEids(): number[] {
@@ -367,5 +394,11 @@ export class SimulationEcsStore {
     addComponent(this.world, eid, this.world.components.Grounded);
     addComponent(this.world, eid, this.world.components.MovementMode);
     addComponent(this.world, eid, this.world.components.Health);
+    addComponent(this.world, eid, this.world.components.LocationKind);
+    addComponent(this.world, eid, this.world.components.LocationArchetypeId);
+    addComponent(this.world, eid, this.world.components.LocationSeed);
+    addComponent(this.world, eid, this.world.components.LocationEnvironmentId);
+    addComponent(this.world, eid, this.world.components.LocationStreamingRadius);
+    addComponent(this.world, eid, this.world.components.LocationInfluenceRadius);
   }
 }

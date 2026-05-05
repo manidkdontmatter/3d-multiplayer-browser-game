@@ -1,7 +1,7 @@
 {
-  "name": "browser-game",
+  "name": "praeterspace-noctis-mundus",
   "version": "0.1.0",
-  "description": "Authoritative first-person browser game scaffold (Three.js + Rapier + nengi 2.0)",
+  "description": "Praeterspace / Noctis Mundus authoritative first-person browser game scaffold (Three.js + Rapier + nengi 2.0)",
   "private": true,
   "scripts": {
     "assets:build:manifest": "tsx scripts/build-asset-manifest.ts",

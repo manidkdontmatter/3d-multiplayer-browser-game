@@ -2,7 +2,6 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { GRAVITY } from "../config";
 import { MOVEMENT_MODE_FLYING, type MovementMode } from "../movementMode";
-import { OCEAN_BUOYANCY_ACCEL, OCEAN_VERTICAL_DRAG } from "../ocean";
 import { normalizeYaw } from "../platforms";
 
 export interface PlatformCarryDelta {
@@ -104,7 +103,6 @@ export function resolveKinematicPostStepState(options: {
   deltaSeconds: number;
   playerCameraOffsetY: number;
   simulationSeconds: number;
-  sampleOceanSurfaceY?: (x: number, z: number, simulationSeconds: number) => number;
 }): KinematicPostStepResult {
   if (options.previous.movementMode === MOVEMENT_MODE_FLYING) {
     return {
@@ -126,20 +124,7 @@ export function resolveKinematicPostStepState(options: {
       vy = 0;
     }
   } else {
-    const cameraY = options.movedBody.y + options.playerCameraOffsetY;
-    const oceanSurfaceY = options.sampleOceanSurfaceY?.(
-      options.movedBody.x,
-      options.movedBody.z,
-      options.simulationSeconds
-    );
-    const isUnderwater = Number.isFinite(oceanSurfaceY) && cameraY < (oceanSurfaceY as number);
-    if (isUnderwater) {
-      vy += OCEAN_BUOYANCY_ACCEL * options.deltaSeconds;
-      const drag = Math.max(0, 1 - OCEAN_VERTICAL_DRAG * options.deltaSeconds);
-      vy *= drag;
-    } else {
-      vy += GRAVITY * options.deltaSeconds;
-    }
+    vy += GRAVITY * options.deltaSeconds;
   }
 
   return {
@@ -254,7 +239,6 @@ export function stepKinematicCharacterController(options: {
   playerCameraOffsetY: number;
   groundContactMinNormalY: number;
   simulationSeconds: number;
-  sampleOceanSurfaceY?: (x: number, z: number, simulationSeconds: number) => number;
   resolveGroundSupportColliderHandle: (groundedByQuery: boolean) => GroundSupportHit;
   resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
 }): KinematicControllerStepResult {
@@ -309,8 +293,7 @@ export function stepKinematicCharacterController(options: {
     groundedPlatformPid,
     deltaSeconds: options.deltaSeconds,
     playerCameraOffsetY: options.playerCameraOffsetY,
-    simulationSeconds: options.simulationSeconds,
-    sampleOceanSurfaceY: options.sampleOceanSurfaceY
+    simulationSeconds: options.simulationSeconds
   });
   return {
     ...next,

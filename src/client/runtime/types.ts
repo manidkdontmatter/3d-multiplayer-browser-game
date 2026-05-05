@@ -40,6 +40,21 @@ export interface PlatformState {
   rotation: { x: number; y: number; z: number; w: number };
 }
 
+export interface LocationRootState {
+  nid: number;
+  modelId: number;
+  locationKind: number;
+  locationArchetypeId: number;
+  locationSeed: number;
+  locationEnvironmentId: number;
+  locationStreamingRadius: number;
+  locationInfluenceRadius: number;
+  x: number;
+  y: number;
+  z: number;
+  rotation: { x: number; y: number; z: number; w: number };
+}
+
 export interface ProjectileState {
   nid: number;
   modelId: number;
@@ -75,6 +90,7 @@ export interface RenderFrameSnapshot {
   localPlayerNid: number | null;
   remotePlayers: RemotePlayerState[];
   abilityUseEvents: AbilityUseEvent[];
+  locationRoots: LocationRootState[];
   platforms: PlatformState[];
   projectiles: ProjectileState[];
   trainingDummies: TrainingDummyState[];

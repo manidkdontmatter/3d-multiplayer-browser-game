@@ -11,11 +11,17 @@ export interface ReplicatedSnapshot {
   movementMode: MovementMode;
   health: number;
   maxHealth: number;
+  locationKind: number;
+  locationArchetypeId: number;
+  locationSeed: number;
+  locationEnvironmentId: number;
+  locationStreamingRadius: number;
+  locationInfluenceRadius: number;
 }
 
 type NetEntity = {
   nid: number;
-  ntype: NType.BaseEntity;
+  ntype: NType.BaseEntity | NType.LocationRootEntity;
   x: number;
   y: number;
   z: number;
@@ -26,22 +32,33 @@ type NetEntity = {
   movementMode: MovementMode;
   health: number;
   maxHealth: number;
+  locationKind: number;
+  locationArchetypeId: number;
+  locationSeed: number;
+  locationEnvironmentId: number;
+  locationStreamingRadius: number;
+  locationInfluenceRadius: number;
+};
+
+type EntityChannel = {
+  addEntity: (entity: unknown) => void;
+  removeEntity: (entity: unknown) => void;
 };
 
 export class NetReplicationBridge {
   private readonly netBySimEid = new Map<number, NetEntity>();
+  private readonly channelBySimEid = new Map<number, EntityChannel>();
 
   public constructor(
-    private readonly spatialChannel: {
-      addEntity: (entity: unknown) => void;
-      removeEntity: (entity: unknown) => void;
-    }
+    private readonly nearChannel: EntityChannel,
+    private readonly farChannel: EntityChannel
   ) {}
 
   public spawn(simEid: number, snapshot: ReplicatedSnapshot): number {
+    const isLocationRoot = snapshot.locationKind > 0 && snapshot.locationArchetypeId > 0;
     const netEntity: NetEntity = {
       nid: 0,
-      ntype: NType.BaseEntity,
+      ntype: isLocationRoot ? NType.LocationRootEntity : NType.BaseEntity,
       x: snapshot.position.x,
       y: snapshot.position.y,
       z: snapshot.position.z,
@@ -60,10 +77,18 @@ export class NetReplicationBridge {
       grounded: snapshot.grounded,
       movementMode: snapshot.movementMode,
       health: snapshot.health,
-      maxHealth: snapshot.maxHealth
+      maxHealth: snapshot.maxHealth,
+      locationKind: snapshot.locationKind,
+      locationArchetypeId: snapshot.locationArchetypeId,
+      locationSeed: snapshot.locationSeed,
+      locationEnvironmentId: snapshot.locationEnvironmentId,
+      locationStreamingRadius: snapshot.locationStreamingRadius,
+      locationInfluenceRadius: snapshot.locationInfluenceRadius
     };
-    this.spatialChannel.addEntity(netEntity);
+    const channel = isLocationRoot ? this.farChannel : this.nearChannel;
+    channel.addEntity(netEntity);
     this.netBySimEid.set(simEid, netEntity);
+    this.channelBySimEid.set(simEid, channel);
     return netEntity.nid;
   }
 
@@ -80,7 +105,13 @@ export class NetReplicationBridge {
       grounded: snapshot.grounded,
       movementMode: snapshot.movementMode,
       health: snapshot.health,
-      maxHealth: snapshot.maxHealth
+      maxHealth: snapshot.maxHealth,
+      locationKind: snapshot.locationKind,
+      locationArchetypeId: snapshot.locationArchetypeId,
+      locationSeed: snapshot.locationSeed,
+      locationEnvironmentId: snapshot.locationEnvironmentId,
+      locationStreamingRadius: snapshot.locationStreamingRadius,
+      locationInfluenceRadius: snapshot.locationInfluenceRadius
     });
   }
 
@@ -99,6 +130,12 @@ export class NetReplicationBridge {
       movementMode: MovementMode;
       health: number;
       maxHealth: number;
+      locationKind: number;
+      locationArchetypeId: number;
+      locationSeed: number;
+      locationEnvironmentId: number;
+      locationStreamingRadius: number;
+      locationInfluenceRadius: number;
     }
   ): void {
     this.syncFromValues(
@@ -114,7 +151,13 @@ export class NetReplicationBridge {
       state.grounded,
       state.movementMode,
       state.health,
-      state.maxHealth
+      state.maxHealth,
+      state.locationKind,
+      state.locationArchetypeId,
+      state.locationSeed,
+      state.locationEnvironmentId,
+      state.locationStreamingRadius,
+      state.locationInfluenceRadius
     );
   }
 
@@ -131,7 +174,13 @@ export class NetReplicationBridge {
     grounded: boolean,
     movementMode: MovementMode,
     health: number,
-    maxHealth: number
+    maxHealth: number,
+    locationKind: number,
+    locationArchetypeId: number,
+    locationSeed: number,
+    locationEnvironmentId: number,
+    locationStreamingRadius: number,
+    locationInfluenceRadius: number
   ): void {
     const netEntity = this.netBySimEid.get(simEid);
     if (!netEntity) {
@@ -152,6 +201,12 @@ export class NetReplicationBridge {
     netEntity.movementMode = movementMode;
     netEntity.health = health;
     netEntity.maxHealth = maxHealth;
+    netEntity.locationKind = locationKind;
+    netEntity.locationArchetypeId = locationArchetypeId;
+    netEntity.locationSeed = locationSeed;
+    netEntity.locationEnvironmentId = locationEnvironmentId;
+    netEntity.locationStreamingRadius = locationStreamingRadius;
+    netEntity.locationInfluenceRadius = locationInfluenceRadius;
   }
 
   public despawn(simEid: number): void {
@@ -159,7 +214,11 @@ export class NetReplicationBridge {
     if (!netEntity) {
       return;
     }
-    this.spatialChannel.removeEntity(netEntity);
+    const channel = this.channelBySimEid.get(simEid);
+    if (channel) {
+      channel.removeEntity(netEntity);
+    }
     this.netBySimEid.delete(simEid);
+    this.channelBySimEid.delete(simEid);
   }
 }

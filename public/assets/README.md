@@ -8,6 +8,9 @@ This directory contains source runtime assets used by the asset build pipeline.
   - `CoolAlien.vrm`
 - `animations/mixamo/`
   - `Idle.fbx`, `Walking.fbx`, `Running.fbx`, `Jump.fbx`, `Punching.fbx`
+- `textures/skyboxes/<skybox-id>/`
+  - Cubemap faces named `px.png`, `nx.png`, `py.png`, `ny.png`, `pz.png`, `nz.png`
+  - Face order is intended for Three.js `CubeTextureLoader`: positive X, negative X, positive Y, negative Y, positive Z, negative Z.
 
 ## Rules
 
@@ -19,3 +22,4 @@ This directory contains source runtime assets used by the asset build pipeline.
   - `public/runtime-assets/**`
 - Prefer canonical filenames referenced by the `.gltf`; avoid duplicate alias copies unless required for compatibility.
 - Keep mod-friendly texture formats (`.png` / `.jpg`); do not introduce WebP in this project.
+- Normalize cubemap skybox face names before registering them; do not keep source-pack naming variants like `front/back`, `ft/bk`, or localized direction initials in runtime folders.

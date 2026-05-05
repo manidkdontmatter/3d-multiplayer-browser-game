@@ -1,3 +1,6 @@
+// Shared deterministic platform definitions and math used by server authority and client prediction/rendering.
+import platformArchetypesRaw from "../../data/archetypes/platform-archetypes.json";
+
 export type PlatformKind = 1 | 2;
 
 export interface PlatformDefinition {
@@ -32,40 +35,14 @@ export interface PlatformPose extends PlatformTransform {
   halfZ: number;
 }
 
-export const PLATFORM_DEFINITIONS: PlatformDefinition[] = [
-  {
-    pid: 1,
-    kind: 1,
-    halfX: 2.25,
-    halfY: 0.35,
-    halfZ: 2.25,
-    baseX: 8,
-    baseY: 0.9,
-    baseZ: 0,
-    baseYaw: 0,
-    amplitudeX: 4.5,
-    amplitudeY: 1.2,
-    frequency: 0.55,
-    phase: 0,
-    angularSpeed: 0
-  },
-  {
-    pid: 2,
-    kind: 2,
-    halfX: 2.8,
-    halfY: 0.35,
-    halfZ: 2.8,
-    baseX: -10,
-    baseY: 1.1,
-    baseZ: -6,
-    baseYaw: 0,
-    amplitudeX: 0,
-    amplitudeY: 0,
-    frequency: 0,
-    phase: 0,
-    angularSpeed: Math.PI * 0.45
-  }
-];
+interface PlatformArchetypeCatalog {
+  version: unknown;
+  platforms: unknown;
+}
+
+export const PLATFORM_DEFINITIONS: readonly PlatformDefinition[] = Object.freeze(
+  parsePlatformArchetypeCatalog(platformArchetypesRaw as PlatformArchetypeCatalog)
+);
 
 export function samplePlatformTransform(definition: PlatformDefinition, seconds: number): PlatformTransform {
   let x = definition.baseX;
@@ -129,4 +106,88 @@ export function normalizeYaw(value: number): number {
   while (yaw > Math.PI) yaw -= Math.PI * 2;
   while (yaw < -Math.PI) yaw += Math.PI * 2;
   return yaw;
+}
+
+function parsePlatformArchetypeCatalog(raw: PlatformArchetypeCatalog): PlatformDefinition[] {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("platform-archetypes catalog must be an object.");
+  }
+  const version = asNumber(raw.version, "platform-archetypes.version");
+  if (version !== 1) {
+    throw new Error(`Unsupported platform-archetypes version: ${version}`);
+  }
+  if (!Array.isArray(raw.platforms) || raw.platforms.length === 0) {
+    throw new Error("platform-archetypes.platforms must be a non-empty array.");
+  }
+
+  const pidSet = new Set<number>();
+  const platforms = raw.platforms.map((platform, index) => {
+    const record = asRecord(platform, `platform-archetypes.platforms[${index}]`);
+    const definition: PlatformDefinition = {
+      pid: asInt(record.pid, `platform-archetypes.platforms[${index}].pid`),
+      kind: asPlatformKind(record.kind, `platform-archetypes.platforms[${index}].kind`),
+      halfX: asPositiveNumber(record.halfX, `platform-archetypes.platforms[${index}].halfX`),
+      halfY: asPositiveNumber(record.halfY, `platform-archetypes.platforms[${index}].halfY`),
+      halfZ: asPositiveNumber(record.halfZ, `platform-archetypes.platforms[${index}].halfZ`),
+      baseX: asNumber(record.baseX, `platform-archetypes.platforms[${index}].baseX`),
+      baseY: asNumber(record.baseY, `platform-archetypes.platforms[${index}].baseY`),
+      baseZ: asNumber(record.baseZ, `platform-archetypes.platforms[${index}].baseZ`),
+      baseYaw: asNumber(record.baseYaw, `platform-archetypes.platforms[${index}].baseYaw`),
+      amplitudeX: asNumber(record.amplitudeX, `platform-archetypes.platforms[${index}].amplitudeX`),
+      amplitudeY: asNumber(record.amplitudeY, `platform-archetypes.platforms[${index}].amplitudeY`),
+      frequency: asNonNegativeNumber(record.frequency, `platform-archetypes.platforms[${index}].frequency`),
+      phase: asNumber(record.phase, `platform-archetypes.platforms[${index}].phase`),
+      angularSpeed: asNumber(record.angularSpeed, `platform-archetypes.platforms[${index}].angularSpeed`)
+    };
+    if (pidSet.has(definition.pid)) {
+      throw new Error(`platform-archetypes contains duplicate pid ${definition.pid}`);
+    }
+    pidSet.add(definition.pid);
+    return Object.freeze(definition);
+  });
+
+  return platforms;
+}
+
+function asRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function asNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number.`);
+  }
+  return value;
+}
+
+function asInt(value: unknown, label: string): number {
+  const numberValue = asNumber(value, label);
+  return Math.max(0, Math.floor(numberValue));
+}
+
+function asNonNegativeNumber(value: unknown, label: string): number {
+  const numberValue = asNumber(value, label);
+  if (numberValue < 0) {
+    throw new Error(`${label} must be >= 0.`);
+  }
+  return numberValue;
+}
+
+function asPositiveNumber(value: unknown, label: string): number {
+  const numberValue = asNumber(value, label);
+  if (numberValue <= 0) {
+    throw new Error(`${label} must be > 0.`);
+  }
+  return numberValue;
+}
+
+function asPlatformKind(value: unknown, label: string): PlatformKind {
+  const numberValue = asInt(value, label);
+  if (numberValue !== 1 && numberValue !== 2) {
+    throw new Error(`${label} must be 1 or 2.`);
+  }
+  return numberValue as PlatformKind;
 }

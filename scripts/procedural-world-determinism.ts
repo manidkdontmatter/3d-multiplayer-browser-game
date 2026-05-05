@@ -46,12 +46,7 @@ function buildConfig(seed: number): RuntimeMapConfig {
     seed,
     groundHalfExtent: 384,
     groundHalfThickness: 0.5,
-    cubeCount: 0,
-    oceanBaseHeight: 2,
-    oceanEdgeDepth: 10,
-    oceanWaveAmplitude: 1.8,
-    oceanWaveSpeed: 6,
-    oceanWaveLength: 60
+    cubeCount: 0
   };
 }
 

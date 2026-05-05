@@ -135,12 +135,7 @@ export class ServerNetworkEventRouter {
       seed: transfer.mapConfig.seed,
       groundHalfExtent: transfer.mapConfig.groundHalfExtent,
       groundHalfThickness: transfer.mapConfig.groundHalfThickness,
-      cubeCount: transfer.mapConfig.cubeCount,
-      oceanBaseHeight: transfer.mapConfig.oceanBaseHeight,
-      oceanEdgeDepth: transfer.mapConfig.oceanEdgeDepth,
-      oceanWaveAmplitude: transfer.mapConfig.oceanWaveAmplitude,
-      oceanWaveSpeed: transfer.mapConfig.oceanWaveSpeed,
-      oceanWaveLength: transfer.mapConfig.oceanWaveLength
+      cubeCount: transfer.mapConfig.cubeCount
     });
     this.scheduleTransferDisconnect(user, targetMapInstanceId);
   }
