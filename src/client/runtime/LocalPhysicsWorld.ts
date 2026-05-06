@@ -3,13 +3,18 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
   configurePlayerCharacterController,
+  createLocationCarrierSensorColliders,
   createLocationKinematicCollider,
   createStaticWorldColliders,
   DEFAULT_VOID_SPAWN_ANCHOR,
+  getReferenceFrameCarryDelta,
   GROUND_CONTACT_MIN_NORMAL_Y,
+  hasCarrierVolumesContainingPoint,
   MOVEMENT_MODE_FLYING,
   MOVEMENT_MODE_GROUNDED,
   normalizeYaw,
+  PHYSICS_GROUP_CHARACTER,
+  PHYSICS_GROUP_SOLID,
   PLATFORM_DEFINITIONS,
   PLAYER_CHARACTER_CONTROLLER_OFFSET,
   PLAYER_BODY_CENTER_HEIGHT,
@@ -114,7 +119,10 @@ export class LocalPhysicsWorld {
       )
     );
     const playerCollider = world.createCollider(
-      RAPIER.ColliderDesc.capsule(PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS).setFriction(0.0),
+      RAPIER.ColliderDesc.capsule(PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS)
+        .setFriction(0.0)
+        .setCollisionGroups(PHYSICS_GROUP_CHARACTER)
+        .setSolverGroups(PHYSICS_GROUP_CHARACTER),
       playerBody
     );
 
@@ -132,7 +140,9 @@ export class LocalPhysicsWorld {
         )
       );
       const platformCollider = world.createCollider(
-        RAPIER.ColliderDesc.cuboid(platformDef.halfX, platformDef.halfY, platformDef.halfZ),
+        RAPIER.ColliderDesc.cuboid(platformDef.halfX, platformDef.halfY, platformDef.halfZ)
+          .setCollisionGroups(PHYSICS_GROUP_SOLID)
+          .setSolverGroups(PHYSICS_GROUP_SOLID),
         platformBody
       );
       platformBody.setRotation(
@@ -155,6 +165,7 @@ export class LocalPhysicsWorld {
       }
       const pose = sampleLocationTransform(definition, 0);
       const moving = createLocationKinematicCollider(world, definition, pose);
+      createLocationCarrierSensorColliders(world, definition, moving.body);
       local.movingLocationBodies.set(definition.pid, {
         definition,
         body: moving.body,
@@ -438,19 +449,15 @@ export class LocalPhysicsWorld {
   private sampleMovingLocationCarry(): { x: number; y: number; z: number; yaw: number } {
     const bodyPos = this.playerBody.translation();
     for (const location of this.movingLocationBodies.values()) {
-      const dx = bodyPos.x - location.x;
-      const dy = bodyPos.y - location.y;
-      const dz = bodyPos.z - location.z;
-      const radius = location.definition.influenceRadius;
-      if (dx * dx + dy * dy + dz * dz > radius * radius) {
+      const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
+      if (!hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, current, bodyPos)) {
         continue;
       }
-      return {
-        x: location.x - location.prevX,
-        y: location.y - location.prevY,
-        z: location.z - location.prevZ,
-        yaw: location.yaw - location.prevYaw
-      };
+      return getReferenceFrameCarryDelta(
+        { x: location.prevX, y: location.prevY, z: location.prevZ, yaw: location.prevYaw },
+        current,
+        bodyPos
+      );
     }
     return { x: 0, y: 0, z: 0, yaw: 0 };
   }

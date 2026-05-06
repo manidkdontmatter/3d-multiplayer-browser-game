@@ -80,6 +80,10 @@
 - Static locations can be fixed in void space. Moving locations are freely movable world objects and are not limited to rail/platform motion.
 - The current small moving platform concept remains useful for elevators, slabs, arena pieces, and traversal tests, but it is not the foundation for moving castles, ships, or motherships.
 - Large moving locations use moving reference frames: one root transform, local child geometry, influence volumes, and occupants/entities that inherit the root motion while attached.
+- Large moving-location carry is determined by authored carrier/reference-frame volumes, not by the location's physical collision mesh. Collision geometry, carry detection, visual debug overlays, and child transform parenting are separate systems.
+- A moving location may have multiple local-space carrier volumes covering different parts of the structure. Independent occupants inside those volumes inherit the root transform delta, including rotation around the moving root.
+- Objects that are authored or parented as part of a moving location are already in that root's transform hierarchy and must not receive extra occupant carry.
+- Moving-reference-frame support must account for different actor motion models: kinematic character-controller actors such as players/NPCs require explicit deterministic carry in their movement step, while future dynamic physics bodies can use physics overlap/filtering paths.
 - The void can still support multiple map processes for special maps, modded servers, arenas, admin maps, or future content, but the main fantasy is one enormous sparse void map.
 - Biomes remain useful for procedural terrain islands, but biome selection must be controllable per island rather than only globally derived from one terrain seed.
 

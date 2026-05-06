@@ -1,5 +1,6 @@
 // Handles player connect/disconnect flow and runtime entity spawn/teardown wiring.
 import RAPIER from "@dimforge/rapier3d-compat";
+import { PHYSICS_GROUP_CHARACTER } from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
 import type { PlayerSnapshot } from "../persistence/PersistenceService";
 
@@ -158,7 +159,9 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     const collider = this.options.world.createCollider(
       RAPIER.ColliderDesc
         .capsule(this.options.playerCapsuleHalfHeight, this.options.playerCapsuleRadius)
-        .setFriction(0),
+        .setFriction(0)
+        .setCollisionGroups(PHYSICS_GROUP_CHARACTER)
+        .setSolverGroups(PHYSICS_GROUP_CHARACTER),
       body
     );
 

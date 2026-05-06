@@ -48,6 +48,10 @@
 - Heavily favor composition over inheritance where applicable.
 - Always put at the top of every script a comment explaining what it is, if an existing script doesn't have that yet, add it. This is to help humans understand the script's purpose, make the comment easy for them to understand.
 - Prefer Data Oriented Design where applicable
+- Keep semantic roles separated in architecture and code: solid collision, trigger/detection volumes, debug rendering, authority, ownership, and parent/child transform inheritance must not be conflated.
+- Use explicit filtering/layers/masks for broadly interacting systems such as physics, visibility, queries, and gameplay detection. Do not rely on default "everything interacts with everything" behavior.
+- Debug visualization must be a view of underlying data, not the gameplay mechanism itself. Rendering a wireframe/overlay must not create or alter gameplay behavior.
+- For kinematic actors such as players and NPCs, apply deterministic game movement/carry logic explicitly; do not assume passive physics overlap behavior covers controller-driven actors.
 - Netcode must be optimized for supporting the most amount of players on a single VPS, we are scaling entirely vertically, there will be no sharding/etc. We must support the most amount of players at once on the same map on one vps because these servers are player hosted and they can't be asked to host on more than one vps.
 
 ## Decision and Quality Heuristics
@@ -62,12 +66,16 @@
 - Challenge weak assumptions/instructions directly and propose better alternatives, but in the end the user can tell you to do it anyway.
 - Prefer high-quality existing solutions when appropriate (libraries etc); verify latest versions before package changes.
 - No stop-gap systems: do not ship temporary compatibility hacks for systems (animation, netcode, physics etc) when a production standard path exists.
+- Do not implement throwaway prototype architecture when the production-standard design is already known. Temporary diagnostic scaffolding is acceptable, but the actual system should be built on the correct foundation.
+- When a standard engine/library feature appears to behave incorrectly, assume our integration, filtering, lifecycle, or layering is wrong first. Investigate and fix the integration before abandoning the standard feature.
+- Do not roll custom domain systems when an established, mature, appropriate library or engine feature exists and fits the production architecture.
 - Suggesting full refactors/scrapping of systems is okay when appropriate, such as when the system is actual garbage or makes no sense or is pointless/redundant.
 - If you notice anything in this project is just straight up dumb, tell me.
 - No hacky crap, do real industry standard solutions with best practices, most problems/features/etc have known ideal solutions
 - Some requests, when appropriate, should be considered full refactors instead of trying to keep compatibility with existing systems/features/architecture, in which case make existing systems align with the request, instead of making the new system align with existing systems.
 - Make existing systems align with the current task, do not make the current task align with existing systems.
 - Prefer fast progress over safety, for example prefer large sweeping changes instead of 'safe' incremental changes when trying to complete a task.
+- When a complex authored feature is hard to debug, create a minimal diagnostic test case to isolate the behavior, then fix the underlying production system rather than keeping the diagnostic as a special-case solution.
 - If you do not know enough about a topic, use the internet to get accurate information, never just guess if your knowledge in a certain area is not extensive enough to do the task properly, because what happens if you often mess up the task instead of doing it correctly.
 - Do not be sycophantic ever. just be intelligent, a genius at software architecture and systems design who always wants to do things the correct way, you are obsessed with doing things properly.
 - If a system is fundamentally non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.

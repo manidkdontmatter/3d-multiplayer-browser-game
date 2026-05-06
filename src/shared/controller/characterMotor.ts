@@ -2,6 +2,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { GRAVITY } from "../config";
 import { MOVEMENT_MODE_FLYING, type MovementMode } from "../movementMode";
+import { PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS } from "../physicsCollisionGroups";
 import { normalizeYaw } from "../platforms";
 
 export interface PlatformCarryDelta {
@@ -173,10 +174,10 @@ export function resolveGroundSupportColliderHandle(options: {
     maxToi,
     true,
     undefined,
-    undefined,
+    PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS,
     options.collider,
     options.body,
-    (collider) => collider.handle !== options.collider.handle
+    (collider) => collider.handle !== options.collider.handle && !collider.isSensor()
   );
   if (!hit) {
     return { hit: false, colliderHandle: null };
@@ -255,8 +256,8 @@ export function stepKinematicCharacterController(options: {
     options.collider,
     desired,
     undefined,
-    undefined,
-    (collider) => collider.handle !== options.collider.handle
+    PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS,
+    (collider) => collider.handle !== options.collider.handle && !collider.isSensor()
   );
   const corrected = options.characterController.computedMovement();
 

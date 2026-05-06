@@ -1,7 +1,10 @@
 // Owns authoritative prototype void-location roots and moving-location frame carry.
 import type RAPIER from "@dimforge/rapier3d-compat";
 import {
+  createLocationCarrierSensorColliders,
   createLocationKinematicCollider,
+  getReferenceFrameCarryDelta,
+  hasCarrierVolumesContainingPoint,
   MOVEMENT_MODE_GROUNDED,
   sampleLocationTransform,
   VOID_LOCATION_DEFINITIONS,
@@ -36,6 +39,7 @@ export interface LocationRootEntity {
   definition: LocationRootDefinition;
   body: RAPIER.RigidBody | null;
   collider: RAPIER.Collider | null;
+  carrierSensorColliders: RAPIER.Collider[];
 }
 
 export interface LocationFrameActor {
@@ -43,6 +47,7 @@ export interface LocationFrameActor {
   y: number;
   z: number;
   body: RAPIER.RigidBody;
+  collider?: RAPIER.Collider;
 }
 
 export interface LocationRootSystemOptions {
@@ -53,6 +58,7 @@ export interface LocationRootSystemOptions {
 
 export class LocationRootSystem {
   private readonly locationsByPid = new Map<number, LocationRootEntity>();
+  private readonly locationPidByCarrierSensorHandle = new Map<number, number>();
 
   public constructor(private readonly options: LocationRootSystemOptions) {}
 
@@ -63,6 +69,10 @@ export class LocationRootSystem {
         definition.motion === "drift"
           ? createLocationKinematicCollider(this.options.world, definition, pose)
           : null;
+      const carrierSensorColliders =
+        kinematic?.body && definition.motion !== "static"
+          ? createLocationCarrierSensorColliders(this.options.world, definition, kinematic.body)
+          : [];
       const location: LocationRootEntity = {
         nid: 0,
         modelId: definition.modelId,
@@ -89,9 +99,13 @@ export class LocationRootSystem {
         prevYaw: pose.yaw,
         definition,
         body: kinematic?.body ?? null,
-        collider: kinematic?.collider ?? null
+        collider: kinematic?.collider ?? null,
+        carrierSensorColliders
       };
       this.locationsByPid.set(location.pid, location);
+      for (const sensor of carrierSensorColliders) {
+        this.locationPidByCarrierSensorHandle.set(sensor.handle, location.pid);
+      }
       this.options.onLocationAdded?.(location);
     }
   }
@@ -126,21 +140,64 @@ export class LocationRootSystem {
       if (location.definition.motion === "static") {
         continue;
       }
-      const dx = bodyPos.x - location.x;
-      const dy = bodyPos.y - location.y;
-      const dz = bodyPos.z - location.z;
-      const radius = location.definition.influenceRadius;
-      if (dx * dx + dy * dy + dz * dz > radius * radius) {
+      const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
+      if (!hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, current, bodyPos)) {
         continue;
       }
-      return {
-        x: location.x - location.prevX,
-        y: location.y - location.prevY,
-        z: location.z - location.prevZ,
-        yaw: location.yaw - location.prevYaw
-      };
+      return getReferenceFrameCarryDelta(
+        { x: location.prevX, y: location.prevY, z: location.prevZ, yaw: location.prevYaw },
+        current,
+        bodyPos
+      );
     }
     return { x: 0, y: 0, z: 0, yaw: 0 };
+  }
+
+  public sampleDynamicBodyFrameCarry(actor: Required<LocationFrameActor>): {
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+  } {
+    const bodyPos = actor.body.translation();
+    let carriedLocationPid: number | null = null;
+    this.options.world.intersectionPairsWith(actor.collider, (otherCollider) => {
+      const locationPid = this.resolveLocationPidByCarrierSensorHandle(otherCollider.handle);
+      if (locationPid === null) {
+        return;
+      }
+      const location = this.locationsByPid.get(locationPid);
+      if (!location || location.definition.motion === "static") {
+        return;
+      }
+      carriedLocationPid = location.pid;
+    });
+
+    const carriedLocation =
+      carriedLocationPid === null ? null : this.locationsByPid.get(carriedLocationPid) ?? null;
+    if (carriedLocation === null) {
+      return this.sampleFrameCarry(actor);
+    }
+
+    return getReferenceFrameCarryDelta(
+      {
+        x: carriedLocation.prevX,
+        y: carriedLocation.prevY,
+        z: carriedLocation.prevZ,
+        yaw: carriedLocation.prevYaw
+      },
+      {
+        x: carriedLocation.x,
+        y: carriedLocation.y,
+        z: carriedLocation.z,
+        yaw: carriedLocation.yaw
+      },
+      bodyPos
+    );
+  }
+
+  public resolveLocationPidByCarrierSensorHandle(colliderHandle: number): number | null {
+    return this.locationPidByCarrierSensorHandle.get(colliderHandle) ?? null;
   }
 }
 

@@ -1,13 +1,20 @@
 // Defines the authored void-location roots and local child content used by the prototype world.
 import {
   MODEL_ID_LOCATION_MOVING_CASTLE,
+  MODEL_ID_LOCATION_MOVING_TEST_PLATFORM,
   MODEL_ID_LOCATION_STATIC_CASTLE,
   MODEL_ID_LOCATION_TERRAIN_ISLAND,
   MODEL_ID_LOCATION_TEST_ARENA
 } from "./config";
+import type { CarrierVolumeDefinition } from "./movingReferenceFrames";
 import type { RuntimeMapConfig } from "./world";
 
-export type LocationKind = "terrainIsland" | "staticCastle" | "movingCastle" | "testArena";
+export type LocationKind =
+  | "terrainIsland"
+  | "staticCastle"
+  | "movingCastle"
+  | "movingTestPlatform"
+  | "testArena";
 export type LocationMotionKind = "static" | "drift";
 export type EnvironmentPresetId =
   | "void.neutral"
@@ -21,6 +28,7 @@ export const LOCATION_KIND_TERRAIN_ISLAND = 1;
 export const LOCATION_KIND_STATIC_CASTLE = 2;
 export const LOCATION_KIND_MOVING_CASTLE = 3;
 export const LOCATION_KIND_TEST_ARENA = 4;
+export const LOCATION_KIND_MOVING_TEST_PLATFORM = 5;
 
 export const ENVIRONMENT_PRESET_NONE = 0;
 export const ENVIRONMENT_PRESET_VOID_NEUTRAL = 1;
@@ -45,6 +53,7 @@ export interface LocationRootDefinition {
   environmentId: EnvironmentPresetId;
   environmentPresetId: number;
   environmentVolumes?: readonly LocationEnvironmentVolumeDefinition[];
+  carrierVolumes?: readonly CarrierVolumeDefinition[];
   motion: LocationMotionKind;
   driftX?: number;
   driftY?: number;
@@ -180,14 +189,99 @@ export const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = Obje
     baseZ: -420,
     baseYaw: -0.45,
     streamingRadius: 1050,
-    influenceRadius: 420,
+    influenceRadius: 84,
     environmentId: "void.arcane",
     environmentPresetId: ENVIRONMENT_PRESET_VOID_ARCANE,
     motion: "drift",
     driftX: 55,
     driftY: 16,
     driftZ: 34,
-    driftFrequency: 0.035
+    driftFrequency: 0.175,
+    carrierVolumes: [
+      {
+        id: "drifting-citadel.main-deck",
+        shape: "box",
+        localX: 0,
+        localY: 10,
+        localZ: 0,
+        halfX: 48,
+        halfY: 22,
+        halfZ: 36
+      },
+      {
+        id: "drifting-citadel.keep",
+        shape: "box",
+        localX: 0,
+        localY: 28,
+        localZ: 0,
+        halfX: 24,
+        halfY: 24,
+        halfZ: 18
+      },
+      {
+        id: "drifting-citadel.north-towers",
+        shape: "box",
+        localX: 0,
+        localY: 24,
+        localZ: -34,
+        halfX: 58,
+        halfY: 28,
+        halfZ: 12
+      },
+      {
+        id: "drifting-citadel.south-towers",
+        shape: "box",
+        localX: 0,
+        localY: 24,
+        localZ: 34,
+        halfX: 58,
+        halfY: 28,
+        halfZ: 12
+      },
+      {
+        id: "drifting-citadel.undercroft",
+        shape: "box",
+        localX: 0,
+        localY: -8,
+        localZ: 0,
+        halfX: 56,
+        halfY: 12,
+        halfZ: 40
+      }
+    ]
+  },
+  {
+    id: "single-volume-moving-slab",
+    pid: 10_005,
+    archetypeId: 5,
+    kind: "movingTestPlatform",
+    kindId: LOCATION_KIND_MOVING_TEST_PLATFORM,
+    modelId: MODEL_ID_LOCATION_MOVING_TEST_PLATFORM,
+    baseX: 96,
+    baseY: 58,
+    baseZ: 0,
+    baseYaw: 0,
+    streamingRadius: 650,
+    influenceRadius: 24,
+    environmentId: "void.neutral",
+    environmentPresetId: ENVIRONMENT_PRESET_VOID_NEUTRAL,
+    motion: "drift",
+    driftX: 28,
+    driftY: 0,
+    driftZ: 0,
+    driftFrequency: 0.32,
+    carrierVolumes: [
+      {
+        id: "single-volume-moving-slab.carrier",
+        shape: "box",
+        localX: 0,
+        localY: 4,
+        localZ: 0,
+        halfX: 80,
+        halfY: 40,
+        halfZ: 50
+      }
+    ]
   },
   {
     id: "combat-test-ring",
@@ -271,6 +365,7 @@ export function isLocationModelId(modelId: number): boolean {
     modelId === MODEL_ID_LOCATION_TERRAIN_ISLAND ||
     modelId === MODEL_ID_LOCATION_STATIC_CASTLE ||
     modelId === MODEL_ID_LOCATION_MOVING_CASTLE ||
+    modelId === MODEL_ID_LOCATION_MOVING_TEST_PLATFORM ||
     modelId === MODEL_ID_LOCATION_TEST_ARENA
   );
 }

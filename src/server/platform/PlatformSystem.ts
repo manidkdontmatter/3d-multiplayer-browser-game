@@ -3,6 +3,7 @@ import {
   applyPlatformCarry,
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
+  PHYSICS_GROUP_SOLID,
   samplePlatformTransform,
   normalizeYaw
 } from "../../shared/index";
@@ -62,7 +63,9 @@ export class PlatformSystem {
         RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pose.x, pose.y, pose.z)
       );
       const collider = this.options.world.createCollider(
-        RAPIER.ColliderDesc.cuboid(definition.halfX, definition.halfY, definition.halfZ),
+        RAPIER.ColliderDesc.cuboid(definition.halfX, definition.halfY, definition.halfZ)
+          .setCollisionGroups(PHYSICS_GROUP_SOLID)
+          .setSolverGroups(PHYSICS_GROUP_SOLID),
         body
       );
 

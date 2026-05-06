@@ -2,6 +2,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   createStaticWorldColliders,
   IDENTITY_QUATERNION,
+  PHYSICS_GROUP_SOLID,
   quaternionFromYaw
 } from "../../shared/index";
 
@@ -46,7 +47,9 @@ export class WorldBootstrapSystem {
         RAPIER.RigidBodyDesc.fixed().setTranslation(spawn.x, spawn.y, spawn.z)
       );
       const collider = this.options.world.createCollider(
-        RAPIER.ColliderDesc.capsule(capsuleHalfHeight, capsuleRadius),
+        RAPIER.ColliderDesc.capsule(capsuleHalfHeight, capsuleRadius)
+          .setCollisionGroups(PHYSICS_GROUP_SOLID)
+          .setSolverGroups(PHYSICS_GROUP_SOLID),
         body
       );
       const dummy: WorldBootstrapDummy = {

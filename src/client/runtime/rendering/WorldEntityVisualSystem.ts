@@ -1,3 +1,4 @@
+// Renders replicated world entities, deterministic platforms, and streamed location-root visuals.
 import {
   BoxGeometry,
   BufferAttribute,
@@ -6,8 +7,10 @@ import {
   DodecahedronGeometry,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   Quaternion,
+  SphereGeometry,
   type Scene
 } from "three";
 import {
@@ -17,6 +20,7 @@ import {
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING
 } from "../../../shared/index";
+import type { CarrierVolumeDefinition } from "../../../shared/index";
 import type { LocationRootState, PlatformState, TrainingDummyState } from "../types";
 
 const PLATFORM_VISUALS = {
@@ -25,6 +29,7 @@ const PLATFORM_VISUALS = {
 } as const;
 
 const LOCATION_CACHE_TTL_MS = 10 * 60 * 1000;
+const CARRIER_VOLUME_WIREFRAME_COLOR = 0x66e0ff;
 
 interface LocationVisual {
   group: Group;
@@ -195,6 +200,12 @@ export class WorldEntityVisualSystem {
     }
     if (definition.kind === "movingCastle") {
       this.addCastleChildren(group, 0x253d55, 0x75a7c4);
+      this.addCarrierVolumeDebug(group, definition.carrierVolumes);
+      return group;
+    }
+    if (definition.kind === "movingTestPlatform") {
+      this.addMovingTestPlatformChildren(group);
+      this.addCarrierVolumeDebug(group, definition.carrierVolumes);
       return group;
     }
     this.addArenaChildren(group);
@@ -252,6 +263,22 @@ export class WorldEntityVisualSystem {
     this.addBox(group, 0, -8, 0, 92, 5, 64, accentMaterial);
   }
 
+  private addMovingTestPlatformChildren(group: Group): void {
+    const slabMaterial = new MeshStandardMaterial({
+      color: 0x7fc7d9,
+      roughness: 0.72,
+      metalness: 0.08
+    });
+    const stripeMaterial = new MeshStandardMaterial({
+      color: 0xf2d16b,
+      roughness: 0.68,
+      metalness: 0.05
+    });
+    this.addBox(group, 0, 0, 0, 120, 1, 70, slabMaterial);
+    this.addBox(group, -40, 0.55, 0, 1.25, 0.1, 70.2, stripeMaterial);
+    this.addBox(group, 40, 0.55, 0, 1.25, 0.1, 70.2, stripeMaterial);
+  }
+
   private addArenaChildren(group: Group): void {
     const material = new MeshStandardMaterial({ color: 0x4e625f, roughness: 0.84, metalness: 0.08 });
     const accent = new MeshStandardMaterial({ color: 0xd8b691, roughness: 0.82, metalness: 0.1 });
@@ -272,6 +299,37 @@ export class WorldEntityVisualSystem {
     const mesh = new Mesh(new BoxGeometry(width, height, depth), material);
     mesh.position.set(x, y, z);
     group.add(mesh);
+  }
+
+  private addCarrierVolumeDebug(
+    group: Group,
+    volumes: readonly CarrierVolumeDefinition[] | undefined
+  ): void {
+    if (!volumes || volumes.length === 0) {
+      return;
+    }
+    for (const volume of volumes) {
+      const material = new MeshBasicMaterial({
+        color: CARRIER_VOLUME_WIREFRAME_COLOR,
+        transparent: true,
+        opacity: 0.22,
+        wireframe: true,
+        depthWrite: false
+      });
+      const geometry =
+        volume.shape === "sphere"
+          ? new SphereGeometry(Math.max(0, volume.radius ?? 0), 24, 12)
+          : new BoxGeometry(
+              Math.max(0, volume.halfX ?? 0) * 2,
+              Math.max(0, volume.halfY ?? 0) * 2,
+              Math.max(0, volume.halfZ ?? 0) * 2
+            );
+      const mesh = new Mesh(geometry, material);
+      mesh.name = `carrier-volume-debug.${volume.id}`;
+      mesh.position.set(volume.localX, volume.localY, volume.localZ);
+      mesh.rotation.y = volume.localYaw ?? 0;
+      group.add(mesh);
+    }
   }
 
   private disposeObjectTree(root: Group): void {

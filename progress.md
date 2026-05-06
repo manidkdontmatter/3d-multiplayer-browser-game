@@ -61,3 +61,40 @@ Progress:
   - Converted broad void regions and static location overrides to axis-aligned boxes with explicit blend distances.
   - Removed moving-citadel environment volumes so moving roots do not carry skybox/atmosphere overrides.
   - Validation: `npm run typecheck:client` and `npm run typecheck:server` passed.
+
+Progress:
+- Replaced the moving-location carrier prototype's single spherical radius check with authored local-space carrier volumes and shared moving-reference-frame math.
+- Added `src/shared/movingReferenceFrames.ts` for carrier volume containment and previous-root-to-current-root transform deltas, including correct occupant rotation around the moving root.
+- Updated the drifting test citadel to move 5x faster, shrink its legacy replicated influence radius 5x, and define five tight box carrier volumes covering deck/keep/towers/undercroft.
+- Created Rapier sensor colliders for moving-location carrier volumes on server and client physics worlds. Kinematic players still use deterministic local-space volume checks in the movement step; future dynamic rigid bodies can use the new server-side sensor-overlap carry sampler.
+- Updated moving-castle debug rendering from one wire sphere to the actual authored carrier boxes as cyan wireframes.
+- Validation: `npm run typecheck:client`, `npm run typecheck:server`, `npm run test:smoke`, and the `develop-web-game` Playwright client passed. Smoke reused already-running local services, so it did not prove a fresh server process loaded the new server code.
+
+Current moving-reference-frame TODO:
+- Wire `LocationRootSystem.sampleDynamicBodyFrameCarry` into future dynamic object/barrel/item physics systems when those actors exist.
+- Add automated gameplay validation that teleports/positions a player inside the drifting citadel carrier boxes and asserts both translation and yaw carry against expected root transform deltas.
+
+Progress:
+- Added a simpler moving-location carrier test case: `single-volume-moving-slab` near spawn at roughly `x=96, y=58, z=0`.
+- The slab is a flat rectangle with one authored local-space box carrier volume and one matching cyan wireframe debug box.
+- Added `MODEL_ID_LOCATION_MOVING_TEST_PLATFORM` and `LocationKind`/kind id support for the simple moving slab.
+- Added a flat slab visual and a matching simple kinematic cuboid collider path.
+- Validation: `npm run typecheck:client`, `npm run typecheck:server`, `npm run build:client`, and `npm run build:server` passed.
+- `npm run test:smoke` was attempted twice, but the harness timed out waiting for the Vite client on `127.0.0.1:5173`. The spawned server-side dev processes were stopped afterward.
+
+Progress:
+- Fixed carrier sensor volumes blocking the kinematic character controller. The controller sweep and ground-support ray now exclude Rapier sensor colliders, so carrier volumes should no longer suspend/trap the player or stop gravity.
+- Validation: `npm run typecheck:client`, `npm run typecheck:server`, `npm run build:client`, and `npm run build:server` passed.
+
+Progress:
+- User reported carrier wireframes still behaved as solid volumes after the sensor filter change.
+- Removed carrier volume creation from the Rapier character-controller physics worlds entirely. Carrier volumes are now authored/debug-rendered data only and use deterministic local-space containment checks for player carry.
+- Left `createLocationCarrierSensorColliders` available for a later dynamic-physics-only integration, but it is no longer invoked by server location roots or client local prediction.
+- Validation: `npm run typecheck:client`, `npm run typecheck:server`, `npm run build:client`, and `npm run build:server` passed.
+
+Progress:
+- Replaced the temporary no-sensor workaround with a proper Rapier collision-layer model.
+- Added shared physics collision groups for solids, characters, carrier triggers, and future dynamic bodies.
+- Assigned static world, platforms, moving-location solid colliders, player colliders, and carrier trigger sensors to explicit groups.
+- Restored carrier sensor creation on server and client local prediction, but character controller movement and ground ray queries now use a character-vs-solid-only query group so trigger sensors cannot block/suspend players.
+- Validation: `npm run typecheck:client`, `npm run typecheck:server`, `npm run build:client`, `npm run build:server`, and `npm run test:movement-parity` passed.
