@@ -7,6 +7,12 @@ import {
   getAllAbilityDefinitions,
   type AbilityDefinition
 } from "../../shared/abilities";
+import {
+  EQUIPMENT_SLOT_WIRE_VALUE,
+  getItemDefinitionById,
+  type EquipmentSlot,
+  type InventoryStateSnapshot
+} from "../../shared/items";
 import type { AbilityCreatorState } from "../runtime/network/types";
 import { AbilityCreatorPanel, type AbilityCreatorCommandInput } from "./AbilityCreatorPanel";
 
@@ -17,6 +23,10 @@ export interface AbilityHudOptions {
   onHotbarAssignmentChanged?: (slot: number, abilityId: number) => void;
   onAbilityForgotten?: (abilityId: number) => void;
   onAbilityCreatorCommand?: (command: AbilityCreatorCommandInput) => void;
+  onInventoryItemDropped?: (itemInstanceId: number) => void;
+  onInventoryItemUsed?: (itemInstanceId: number) => void;
+  onInventoryItemEquipped?: (itemInstanceId: number) => void;
+  onInventorySlotUnequipped?: (slot: EquipmentSlot) => void;
 }
 
 type SlotElements = {
@@ -36,12 +46,15 @@ export class AbilityHud {
   private readonly navButtons = new Map<MainUiSectionKey, HTMLButtonElement>();
   private readonly sectionPanels = new Map<MainUiSectionKey, HTMLElement>();
   private abilityBookGrid!: HTMLDivElement;
+  private inventoryList!: HTMLDivElement;
+  private equipmentList!: HTMLDivElement;
   private abilitySearchInput!: HTMLInputElement;
   private readonly abilityCards = new Map<number, HTMLDivElement>();
   private readonly slotElements: SlotElements[] = [];
   private readonly assignments = new Array<number>(HOTBAR_SLOT_COUNT).fill(ABILITY_ID_NONE);
   private readonly abilityCatalog = new Map<number, AbilityDefinition>();
   private readonly ownedAbilityIds = new Set<number>();
+  private inventoryState: InventoryStateSnapshot = { maxSlots: 32, items: [], equipment: {} };
   private abilityCreatorPanel!: AbilityCreatorPanel;
   private mainUiOpen = false;
   private activeSection: MainUiSectionKey = "ability-book";
@@ -155,6 +168,15 @@ export class AbilityHud {
     this.abilityCreatorPanel.setState(state);
   }
 
+  public setInventoryState(state: InventoryStateSnapshot): void {
+    this.inventoryState = {
+      maxSlots: state.maxSlots,
+      items: state.items.map((item) => ({ ...item })),
+      equipment: { ...state.equipment }
+    };
+    this.renderInventory();
+  }
+
   public upsertAbility(ability: AbilityDefinition): void {
     this.abilityCatalog.set(ability.id, ability);
     const existingCard = this.abilityCards.get(ability.id);
@@ -207,12 +229,7 @@ export class AbilityHud {
       "Character",
       "Character stats and profile UI will be implemented in this section."
     );
-    const inventoryPanel = this.createPlaceholderPanel(
-      documentRef,
-      "inventory",
-      "Inventory",
-      "Inventory UI will be implemented in this section."
-    );
+    const inventoryPanel = this.createInventoryPanel(documentRef);
     const abilityBookPanel = documentRef.createElement("section");
     abilityBookPanel.className = "main-ui-panel";
     abilityBookPanel.dataset.section = "ability-book";
@@ -285,6 +302,37 @@ export class AbilityHud {
     return wrapper;
   }
 
+  private createInventoryPanel(documentRef: Document): HTMLElement {
+    const panel = documentRef.createElement("section");
+    panel.className = "main-ui-panel";
+    panel.dataset.section = "inventory";
+    panel.append(this.createPanelHeading(documentRef, "Inventory", "Manage carried items and equipment."));
+
+    const layout = documentRef.createElement("div");
+    layout.className = "inventory-layout";
+
+    const inventoryColumn = documentRef.createElement("div");
+    inventoryColumn.className = "inventory-column";
+    const inventoryTitle = documentRef.createElement("h4");
+    inventoryTitle.textContent = "Items";
+    this.inventoryList = documentRef.createElement("div");
+    this.inventoryList.className = "inventory-list";
+    inventoryColumn.append(inventoryTitle, this.inventoryList);
+
+    const equipmentColumn = documentRef.createElement("div");
+    equipmentColumn.className = "inventory-column";
+    const equipmentTitle = documentRef.createElement("h4");
+    equipmentTitle.textContent = "Equipment";
+    this.equipmentList = documentRef.createElement("div");
+    this.equipmentList.className = "equipment-list";
+    equipmentColumn.append(equipmentTitle, this.equipmentList);
+
+    layout.append(inventoryColumn, equipmentColumn);
+    panel.append(layout);
+    this.renderInventory();
+    return panel;
+  }
+
   private createPlaceholderPanel(
     documentRef: Document,
     section: MainUiSectionKey,
@@ -311,6 +359,103 @@ export class AbilityHud {
       this.setActiveSection(section);
     });
     this.navButtons.set(section, button);
+    return button;
+  }
+
+  private renderInventory(): void {
+    if (!this.inventoryList || !this.equipmentList) {
+      return;
+    }
+    this.inventoryList.innerHTML = "";
+    this.equipmentList.innerHTML = "";
+
+    const sortedItems = [...this.inventoryState.items].sort((a, b) => a.slotIndex - b.slotIndex);
+    if (sortedItems.length === 0) {
+      const empty = this.root.ownerDocument.createElement("p");
+      empty.className = "inventory-empty";
+      empty.textContent = "No items carried.";
+      this.inventoryList.append(empty);
+    }
+    const equippedIds = new Set(Object.values(this.inventoryState.equipment).filter((id): id is number => typeof id === "number"));
+    for (const item of sortedItems) {
+      const definition = getItemDefinitionById(item.archetypeId);
+      const row = this.root.ownerDocument.createElement("div");
+      row.className = "inventory-item-row";
+      row.classList.toggle("inventory-item-equipped", equippedIds.has(item.itemInstanceId));
+
+      const main = this.root.ownerDocument.createElement("div");
+      main.className = "inventory-item-main";
+      const name = this.root.ownerDocument.createElement("span");
+      name.className = "inventory-item-name";
+      name.textContent = definition?.name ?? `Unknown Item ${item.archetypeId}`;
+      const meta = this.root.ownerDocument.createElement("span");
+      meta.className = "inventory-item-meta";
+      meta.textContent = `${definition?.category ?? "unknown"}${item.quantity > 1 ? ` x${item.quantity}` : ""}`;
+      main.append(name, meta);
+
+      const actions = this.root.ownerDocument.createElement("div");
+      actions.className = "inventory-item-actions";
+      if (definition?.use) {
+        actions.append(this.createInventoryActionButton("Use", () => {
+          this.options.onInventoryItemUsed?.(item.itemInstanceId);
+        }));
+      }
+      if (definition?.equipSlot) {
+        actions.append(this.createInventoryActionButton(
+          equippedIds.has(item.itemInstanceId) ? "Equipped" : "Equip",
+          () => {
+            if (!equippedIds.has(item.itemInstanceId)) {
+              this.options.onInventoryItemEquipped?.(item.itemInstanceId);
+            }
+          },
+          equippedIds.has(item.itemInstanceId)
+        ));
+      }
+      actions.append(this.createInventoryActionButton("Drop", () => {
+        this.options.onInventoryItemDropped?.(item.itemInstanceId);
+      }));
+
+      row.append(main, actions);
+      this.inventoryList.append(row);
+    }
+
+    for (const slot of Object.keys(EQUIPMENT_SLOT_WIRE_VALUE) as EquipmentSlot[]) {
+      const itemInstanceId = this.inventoryState.equipment[slot] ?? 0;
+      const item = sortedItems.find((entry) => entry.itemInstanceId === itemInstanceId);
+      const definition = item ? getItemDefinitionById(item.archetypeId) : null;
+      const row = this.root.ownerDocument.createElement("div");
+      row.className = "equipment-slot-row";
+      const label = this.root.ownerDocument.createElement("span");
+      label.className = "equipment-slot-label";
+      label.textContent = slot;
+      const value = this.root.ownerDocument.createElement("span");
+      value.className = "equipment-slot-value";
+      value.textContent = definition?.name ?? "Empty";
+      row.append(label, value);
+      if (itemInstanceId > 0) {
+        row.append(this.createInventoryActionButton("Unequip", () => {
+          this.options.onInventorySlotUnequipped?.(slot);
+        }));
+      }
+      this.equipmentList.append(row);
+    }
+  }
+
+  private createInventoryActionButton(
+    label: string,
+    onClick: () => void,
+    disabled = false
+  ): HTMLButtonElement {
+    const button = this.root.ownerDocument.createElement("button");
+    button.type = "button";
+    button.className = "inventory-action-button";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
     return button;
   }
 

@@ -6,7 +6,13 @@ import type { MovementMode } from "../../shared/index";
 import { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
 import { SimulationEcsProjectors } from "./SimulationEcsProjectors";
 import { SimulationEcsStore } from "./SimulationEcsStore";
-import type { DummyObject, PlayerObject, ProjectileCreateRequest, SimObject } from "./SimulationEcsTypes";
+import type {
+  CharacterObject,
+  DummyObject,
+  PlayerObject,
+  ProjectileCreateRequest,
+  SimObject
+} from "./SimulationEcsTypes";
 
 export class SimulationEcs {
   private readonly store = new SimulationEcsStore();
@@ -23,6 +29,18 @@ export class SimulationEcs {
   public syncPlayer(player: PlayerObject): void {
     const eid = this.indexes.getEid(player);
     this.store.syncPlayerFromObject(eid, player);
+  }
+
+  public registerNpcCharacter(character: CharacterObject): void {
+    const eid = this.indexes.getOrCreateEid(character, () => this.store.createEid());
+    this.store.registerNpcComponents(eid);
+    this.indexes.registerCharacterRuntimeRefs(eid, character.body, character.collider);
+    this.store.syncCharacterFromObject(eid, character);
+  }
+
+  public syncCharacter(character: CharacterObject): void {
+    const eid = this.indexes.getEid(character);
+    this.store.syncCharacterFromObject(eid, character);
   }
 
   public registerPlatform(platform: SimObject): void {
@@ -61,6 +79,17 @@ export class SimulationEcs {
   public syncDummy(dummy: DummyObject): void {
     const eid = this.indexes.getEid(dummy);
     this.store.syncDummyFromObject(eid, dummy);
+  }
+
+  public registerWorldItem(item: SimObject): void {
+    const eid = this.indexes.getOrCreateEid(item, () => this.store.createEid());
+    this.store.registerWorldItemComponents(eid);
+    this.store.syncWorldItemFromObject(eid, item);
+  }
+
+  public syncWorldItem(item: SimObject): void {
+    const eid = this.indexes.getEid(item);
+    this.store.syncWorldItemFromObject(eid, item);
   }
 
   public unregister(entity: object): void {
@@ -157,6 +186,14 @@ export class SimulationEcs {
     return this.indexes.getPlayerCollider(eid);
   }
 
+  public getCharacterColliderByNid(nid: number): RAPIER.Collider | undefined {
+    const eid = this.indexes.getCharacterEidByNid(nid);
+    if (typeof eid !== "number") {
+      return undefined;
+    }
+    return this.indexes.getCharacterCollider(eid);
+  }
+
   public getActiveProjectileEids(): number[] {
     return this.store.getProjectileTagEids();
   }
@@ -181,6 +218,8 @@ export class SimulationEcs {
     movementMode: MovementMode;
     health: number;
     maxHealth: number;
+    itemArchetypeId: number;
+    itemQuantity: number;
     locationKind: number;
     locationArchetypeId: number;
     locationSeed: number;
@@ -260,10 +299,13 @@ export class SimulationEcs {
     grounded: boolean;
     movementMode: MovementMode;
     groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
     lastProcessedSequence: number;
     lastPrimaryFireAtSeconds: number;
     primaryHeld: boolean;
     secondaryHeld: boolean;
+    health: number;
+    maxHealth: number;
     primaryMouseSlot: number;
     secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
@@ -290,9 +332,30 @@ export class SimulationEcs {
     grounded: boolean;
     movementMode: MovementMode;
     groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
     body: RAPIER.RigidBody;
   } | null {
     return this.projectors.getPlayerDamageStateByEid(eid);
+  }
+
+  public getCharacterDamageStateByEid(eid: number): {
+    accountId: number;
+    nid: number;
+    health: number;
+    maxHealth: number;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    grounded: boolean;
+    movementMode: MovementMode;
+    groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
+    body: RAPIER.RigidBody;
+  } | null {
+    return this.projectors.getCharacterDamageStateByEid(eid);
   }
 
   public applyPlayerDamageStateByEid(
@@ -309,6 +372,27 @@ export class SimulationEcs {
       grounded: boolean;
       movementMode: MovementMode;
       groundedPlatformPid: number | null;
+      carriedFramePid: number | null;
+    }
+  ): void {
+    this.applyCharacterDamageStateByEid(eid, state);
+  }
+
+  public applyCharacterDamageStateByEid(
+    eid: number,
+    state: {
+      health: number;
+      maxHealth: number;
+      x: number;
+      y: number;
+      z: number;
+      vx: number;
+      vy: number;
+      vz: number;
+      grounded: boolean;
+      movementMode: MovementMode;
+      groundedPlatformPid: number | null;
+      carriedFramePid: number | null;
     }
   ): void {
     const c = this.store.world.components;
@@ -324,6 +408,8 @@ export class SimulationEcs {
     c.MovementMode.value[eid] = state.movementMode;
     c.GroundedPlatformPid.value[eid] =
       state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
+    c.CarriedFramePid.value[eid] =
+      state.carriedFramePid === null ? -1 : Math.floor(state.carriedFramePid);
   }
 
   public getDummyDamageStateByEid(eid: number): { health: number; maxHealth: number } | null {
@@ -336,7 +422,7 @@ export class SimulationEcs {
     c.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
   }
 
-  public resolveCombatTargetRuntime(target: { kind: "player" | "dummy"; eid: number }): {
+  public resolveCombatTargetRuntime(target: { kind: "character" | "player" | "dummy"; eid: number }): {
     nid: number;
     body: RAPIER.RigidBody;
     collider: RAPIER.Collider;
@@ -358,6 +444,7 @@ export class SimulationEcs {
       grounded: boolean;
       movementMode: MovementMode;
       groundedPlatformPid: number | null;
+      carriedFramePid: number | null;
       lastProcessedSequence: number;
       lastPrimaryFireAtSeconds: number;
       primaryHeld: boolean;
@@ -384,6 +471,8 @@ export class SimulationEcs {
     c.MovementMode.value[eid] = state.movementMode;
     c.GroundedPlatformPid.value[eid] =
       state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
+    c.CarriedFramePid.value[eid] =
+      state.carriedFramePid === null ? -1 : Math.floor(state.carriedFramePid);
     c.LastProcessedSequence.value[eid] = Math.max(0, Math.floor(state.lastProcessedSequence));
     c.LastPrimaryFireAtSeconds.value[eid] = state.lastPrimaryFireAtSeconds;
     c.PrimaryHeld.value[eid] = state.primaryHeld ? 1 : 0;
@@ -410,6 +499,7 @@ export class SimulationEcs {
     grounded: boolean;
     movementMode: MovementMode;
     groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
   } | null {
     return this.projectors.getPlayerInputAckStateByUserId(userId);
   }
@@ -513,6 +603,19 @@ export class SimulationEcs {
     return changed;
   }
 
+  public setPlayerHealthByUserId(userId: number, health: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") {
+      return false;
+    }
+    const c = this.store.world.components;
+    const maxHealth = Math.max(0, Math.floor(c.Health.max[eid] ?? 0));
+    const nextHealth = Math.max(0, Math.min(maxHealth, Math.floor(Number.isFinite(health) ? health : 0)));
+    const previousHealth = Math.max(0, Math.floor(c.Health.value[eid] ?? 0));
+    c.Health.value[eid] = nextHealth;
+    return previousHealth !== nextHealth;
+  }
+
   public getPlayerPersistenceSnapshotByAccountId(accountId: number): {
     accountId: number;
     x: number;
@@ -541,25 +644,31 @@ export class SimulationEcs {
 
   public getStats(): {
     players: number;
+    npcs: number;
     platforms: number;
     locationRoots: number;
     projectiles: number;
+    worldItems: number;
     dummies: number;
     total: number;
   } {
     const world = this.store.world;
     const players = query(world, [world.components.PlayerTag]).length;
+    const npcs = query(world, [world.components.NpcTag]).length;
     const platforms = query(world, [world.components.PlatformTag]).length;
     const locationRoots = query(world, [world.components.LocationRootTag]).length;
     const projectiles = query(world, [world.components.ProjectileTag]).length;
     const dummies = query(world, [world.components.DummyTag]).length;
+    const worldItems = query(world, [world.components.WorldItemTag]).length;
     return {
       players,
+      npcs,
       platforms,
       locationRoots,
       projectiles,
+      worldItems,
       dummies,
-      total: players + platforms + locationRoots + projectiles + dummies
+      total: players + npcs + platforms + locationRoots + projectiles + worldItems + dummies
     };
   }
 
@@ -575,6 +684,8 @@ export class SimulationEcs {
         movementMode: MovementMode;
         health: number;
         maxHealth: number;
+        itemArchetypeId: number;
+        itemQuantity: number;
         locationKind: number;
         locationArchetypeId: number;
         locationSeed: number;
@@ -606,6 +717,8 @@ export class SimulationEcs {
       movementMode: MovementMode,
       health: number,
       maxHealth: number,
+      itemArchetypeId: number,
+      itemQuantity: number,
       locationKind: number,
       locationArchetypeId: number,
       locationSeed: number,
@@ -632,6 +745,8 @@ export class SimulationEcs {
         (c.MovementMode.value[eid] ?? 0) as MovementMode,
         c.Health.value[eid] ?? 0,
         c.Health.max[eid] ?? 0,
+        c.ItemArchetypeId.value[eid] ?? 0,
+        c.ItemQuantity.value[eid] ?? 0,
         c.LocationKind.value[eid] ?? 0,
         c.LocationArchetypeId.value[eid] ?? 0,
         c.LocationSeed.value[eid] ?? 0,

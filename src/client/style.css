@@ -211,6 +211,35 @@ body {
   line-height: 1.35;
 }
 
+#interact-prompt {
+  position: fixed;
+  z-index: 14;
+  left: 50%;
+  top: calc(50% + 72px);
+  transform: translateX(-50%);
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 12px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: rgba(8, 20, 32, 0.82);
+  color: var(--ui-text-strong);
+  box-shadow: 0 12px 28px rgba(3, 10, 18, 0.34);
+  backdrop-filter: blur(6px);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+  pointer-events: none;
+}
+
+.interact-prompt-hidden {
+  display: none;
+}
+
+.interact-prompt-visible {
+  display: block;
+}
+
 .auth-title {
   margin: 0;
   font-size: 12px;
@@ -485,6 +514,111 @@ body {
   gap: 10px;
   overflow: auto;
   padding-right: 4px;
+}
+
+.inventory-layout {
+  margin-top: 14px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(260px, 0.55fr);
+  gap: 14px;
+}
+
+.inventory-column {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inventory-column h4 {
+  margin: 0;
+  color: var(--ui-text-primary);
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.inventory-list,
+.equipment-list {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.inventory-empty {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+}
+
+.inventory-item-row,
+.equipment-slot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: var(--ui-radius-sm);
+  background: rgba(13, 32, 49, 0.82);
+}
+
+.inventory-item-equipped {
+  border-color: rgba(116, 242, 178, 0.62);
+}
+
+.inventory-item-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inventory-item-name,
+.equipment-slot-value {
+  color: var(--ui-text-strong);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.inventory-item-meta,
+.equipment-slot-label {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.inventory-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.inventory-action-button {
+  min-height: 28px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: var(--ui-radius-sm);
+  background: rgba(31, 58, 82, 0.9);
+  color: var(--ui-text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 8px;
+}
+
+.inventory-action-button:hover:not(:disabled) {
+  border-color: var(--ui-border-strong);
+}
+
+.inventory-action-button:disabled {
+  opacity: 0.58;
+  cursor: default;
 }
 
 .ability-card {
@@ -850,6 +984,10 @@ body {
   }
 
   .ability-creator-body {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-layout {
     grid-template-columns: 1fr;
   }
 }

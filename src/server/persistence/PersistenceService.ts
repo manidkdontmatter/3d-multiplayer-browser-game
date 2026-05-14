@@ -12,6 +12,9 @@ import {
   DEFAULT_HOTBAR_ABILITY_IDS,
   HOTBAR_SLOT_COUNT,
   PLAYER_MAX_HEALTH,
+  INVENTORY_MAX_SLOTS,
+  type EquipmentSlot,
+  type InventoryStateSnapshot,
   type AbilityCreatorType
 } from "../../shared/index";
 
@@ -80,6 +83,8 @@ export interface CriticalEventRecord {
   eventPayloadJson: string;
   eventAtMs: number;
 }
+
+export type PersistedInventoryState = InventoryStateSnapshot;
 
 export interface PersistedAbilityDefinitionRecord {
   abilityId: number;
@@ -712,6 +717,121 @@ export class PersistenceService {
     }
   }
 
+  public loadInventoryState(accountId: number): PersistedInventoryState {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return {
+        maxSlots: INVENTORY_MAX_SLOTS,
+        items: [],
+        equipment: {}
+      };
+    }
+
+    const itemRows = this.db
+      .prepare(
+        `SELECT item_instance_id AS itemInstanceId,
+                archetype_id AS archetypeId,
+                quantity AS quantity,
+                slot_index AS slotIndex
+         FROM player_inventory_items
+         WHERE player_id = ?
+         ORDER BY slot_index ASC, item_instance_id ASC`
+      )
+      .all(accountId) as Array<{
+      itemInstanceId: number;
+      archetypeId: number;
+      quantity: number;
+      slotIndex: number;
+    }>;
+    const equipmentRows = this.db
+      .prepare(
+        `SELECT equip_slot AS equipSlot,
+                item_instance_id AS itemInstanceId
+         FROM player_equipment_slots
+         WHERE player_id = ?`
+      )
+      .all(accountId) as Array<{
+      equipSlot: string;
+      itemInstanceId: number;
+    }>;
+
+    const equipment: Partial<Record<EquipmentSlot, number>> = {};
+    for (const row of equipmentRows) {
+      const slot = this.parseEquipmentSlot(row.equipSlot);
+      if (!slot) {
+        continue;
+      }
+      const itemInstanceId = this.clampInteger(row.itemInstanceId, 1, 0x7fffffff);
+      if (itemInstanceId > 0) {
+        equipment[slot] = itemInstanceId;
+      }
+    }
+
+    return {
+      maxSlots: INVENTORY_MAX_SLOTS,
+      items: itemRows
+        .map((row) => ({
+          itemInstanceId: this.clampInteger(row.itemInstanceId, 1, 0x7fffffff),
+          archetypeId: this.clampInteger(row.archetypeId, 1, 0xffff),
+          quantity: this.clampInteger(row.quantity, 1, 0xffff),
+          slotIndex: this.clampInteger(row.slotIndex, 0, INVENTORY_MAX_SLOTS - 1)
+        }))
+        .filter((item) => item.itemInstanceId > 0 && item.archetypeId > 0 && item.quantity > 0),
+      equipment
+    };
+  }
+
+  public saveInventoryState(accountId: number, state: InventoryStateSnapshot): void {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
+    }
+    const playerId = Math.max(1, this.clampInteger(accountId, 1, 0x7fffffff));
+    const tx = this.db.transaction((snapshot: InventoryStateSnapshot) => {
+      const now = Date.now();
+      this.db.prepare("DELETE FROM player_inventory_items WHERE player_id = ?").run(playerId);
+      this.db.prepare("DELETE FROM player_equipment_slots WHERE player_id = ?").run(playerId);
+      const insertItem = this.db.prepare(
+        `INSERT INTO player_inventory_items (
+           player_id, item_instance_id, archetype_id, quantity, slot_index, custom_json, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const item of snapshot.items) {
+        insertItem.run(
+          playerId,
+          this.clampInteger(item.itemInstanceId, 1, 0x7fffffff),
+          this.clampInteger(item.archetypeId, 1, 0xffff),
+          this.clampInteger(item.quantity, 1, 0xffff),
+          this.clampInteger(item.slotIndex, 0, INVENTORY_MAX_SLOTS - 1),
+          "{}",
+          now
+        );
+      }
+      const liveItemIds = new Set(snapshot.items.map((item) => this.clampInteger(item.itemInstanceId, 1, 0x7fffffff)));
+      const insertEquipment = this.db.prepare(
+        `INSERT INTO player_equipment_slots (player_id, equip_slot, item_instance_id, updated_at)
+         VALUES (?, ?, ?, ?)`
+      );
+      for (const [slot, rawItemInstanceId] of Object.entries(snapshot.equipment)) {
+        const equipmentSlot = this.parseEquipmentSlot(slot);
+        const itemInstanceId = this.clampInteger(Number(rawItemInstanceId), 1, 0x7fffffff);
+        if (!equipmentSlot || !liveItemIds.has(itemInstanceId)) {
+          continue;
+        }
+        insertEquipment.run(playerId, equipmentSlot, itemInstanceId, now);
+      }
+    });
+    tx(state);
+  }
+
+  public loadNextInventoryItemInstanceId(): number {
+    if (this.disablePersistenceWrites) {
+      return 1;
+    }
+    const row = this.db
+      .prepare("SELECT MAX(item_instance_id) AS maxItemInstanceId FROM player_inventory_items")
+      .get() as { maxItemInstanceId: number | null };
+    return Math.max(1, this.clampInteger((row.maxItemInstanceId ?? 0) + 1, 1, 0x7fffffff));
+  }
+
   public savePlayerSnapshot(snapshot: PlayerSnapshot): void {
     this.saveCharacterSnapshot(snapshot);
     this.saveAbilityStateSnapshot(snapshot);
@@ -862,6 +982,27 @@ export class PersistenceService {
         FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS player_inventory_items (
+        player_id INTEGER NOT NULL,
+        item_instance_id INTEGER NOT NULL,
+        archetype_id INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        slot_index INTEGER NOT NULL,
+        custom_json TEXT NOT NULL DEFAULT '{}',
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (player_id, item_instance_id),
+        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS player_equipment_slots (
+        player_id INTEGER NOT NULL,
+        equip_slot TEXT NOT NULL,
+        item_instance_id INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (player_id, equip_slot),
+        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS auth_audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts INTEGER NOT NULL,
@@ -881,6 +1022,9 @@ export class PersistenceService {
     `);
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_player_ability_ownership_player_id ON player_ability_ownership(player_id)"
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_player_inventory_items_player_id ON player_inventory_items(player_id)"
     );
     this.ensureCharacterColumn("active_hotbar_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("primary_mouse_slot", "INTEGER NOT NULL DEFAULT 0");
@@ -1115,6 +1259,19 @@ export class PersistenceService {
       rawType === "movement"
     ) {
       return rawType;
+    }
+    return null;
+  }
+
+  private parseEquipmentSlot(rawSlot: unknown): EquipmentSlot | null {
+    if (
+      rawSlot === "weapon" ||
+      rawSlot === "head" ||
+      rawSlot === "body" ||
+      rawSlot === "legs" ||
+      rawSlot === "accessory"
+    ) {
+      return rawSlot;
     }
     return null;
   }

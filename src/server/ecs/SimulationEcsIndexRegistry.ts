@@ -7,6 +7,10 @@ export class SimulationEcsIndexRegistry {
   private readonly playerEidByNid = new Map<number, number>();
   private readonly playerEidByAccountId = new Map<number, number>();
   private readonly playerEids = new Set<number>();
+  private readonly characterEids = new Set<number>();
+  private readonly characterEidByNid = new Map<number, number>();
+  private readonly characterBodyByEid = new Map<number, RAPIER.RigidBody>();
+  private readonly characterColliderByEid = new Map<number, RAPIER.Collider>();
   private readonly playerBodyByEid = new Map<number, RAPIER.RigidBody>();
   private readonly playerColliderByEid = new Map<number, RAPIER.Collider>();
   private readonly dummyBodyByEid = new Map<number, RAPIER.RigidBody>();
@@ -45,8 +49,15 @@ export class SimulationEcsIndexRegistry {
   }
 
   public registerPlayerRuntimeRefs(eid: number, body: RAPIER.RigidBody, collider: RAPIER.Collider): void {
+    this.registerCharacterRuntimeRefs(eid, body, collider);
     this.playerBodyByEid.set(eid, body);
     this.playerColliderByEid.set(eid, collider);
+  }
+
+  public registerCharacterRuntimeRefs(eid: number, body: RAPIER.RigidBody, collider: RAPIER.Collider): void {
+    this.characterEids.add(eid);
+    this.characterBodyByEid.set(eid, body);
+    this.characterColliderByEid.set(eid, collider);
   }
 
   public registerDummyRuntimeRefs(eid: number, body: RAPIER.RigidBody, collider: RAPIER.Collider): void {
@@ -62,6 +73,14 @@ export class SimulationEcsIndexRegistry {
     return this.playerColliderByEid.get(eid);
   }
 
+  public getCharacterBody(eid: number): RAPIER.RigidBody | undefined {
+    return this.characterBodyByEid.get(eid);
+  }
+
+  public getCharacterCollider(eid: number): RAPIER.Collider | undefined {
+    return this.characterColliderByEid.get(eid);
+  }
+
   public getDummyBody(eid: number): RAPIER.RigidBody | undefined {
     return this.dummyBodyByEid.get(eid);
   }
@@ -72,12 +91,14 @@ export class SimulationEcsIndexRegistry {
 
   public bindPlayerLookupIndexes(userId: number, eid: number, nid: number, accountId: number): void {
     this.playerEids.add(eid);
+    this.characterEids.add(eid);
     this.playerEidByUserId.set(userId, eid);
     this.playerEidByNid.set(Math.max(0, Math.floor(nid)), eid);
     this.playerEidByAccountId.set(Math.max(1, Math.floor(accountId)), eid);
   }
 
   public updatePlayerNidIndex(eid: number, previousNid: number, nextNid: number): void {
+    this.updateCharacterNidIndex(eid, previousNid, nextNid);
     if (!this.playerEids.has(eid)) {
       return;
     }
@@ -87,8 +108,19 @@ export class SimulationEcsIndexRegistry {
     this.playerEidByNid.set(Math.max(0, Math.floor(nextNid)), eid);
   }
 
+  public updateCharacterNidIndex(eid: number, previousNid: number, nextNid: number): void {
+    if (!this.characterEids.has(eid)) {
+      return;
+    }
+    if (previousNid !== nextNid) {
+      this.characterEidByNid.delete(Math.max(0, Math.floor(previousNid)));
+    }
+    this.characterEidByNid.set(Math.max(0, Math.floor(nextNid)), eid);
+  }
+
   public unbindPlayerLookupIndexesByEntity(userId: number, eid: number, nid: number, accountId: number): void {
     this.playerEids.delete(eid);
+    this.characterEids.delete(eid);
     this.playerEidByUserId.delete(userId);
     this.playerEidByNid.delete(Math.max(0, Math.floor(nid)));
     this.playerEidByAccountId.delete(Math.max(1, Math.floor(accountId)));
@@ -104,6 +136,10 @@ export class SimulationEcsIndexRegistry {
 
   public getPlayerEidByNid(nid: number): number | undefined {
     return this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
+  }
+
+  public getCharacterEidByNid(nid: number): number | undefined {
+    return this.characterEidByNid.get(Math.max(0, Math.floor(nid)));
   }
 
   public getPlayerEidByAccountId(accountId: number): number | undefined {
@@ -144,7 +180,16 @@ export class SimulationEcsIndexRegistry {
       }
     }
     this.playerEids.delete(eid);
+    this.characterEids.delete(eid);
+    for (const [nid, indexedEid] of this.characterEidByNid.entries()) {
+      if (indexedEid === eid) {
+        this.characterEidByNid.delete(nid);
+        break;
+      }
+    }
 
+    this.characterBodyByEid.delete(eid);
+    this.characterColliderByEid.delete(eid);
     this.playerBodyByEid.delete(eid);
     this.playerColliderByEid.delete(eid);
     this.dummyBodyByEid.delete(eid);

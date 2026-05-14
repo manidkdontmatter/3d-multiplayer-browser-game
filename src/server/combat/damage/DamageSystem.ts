@@ -2,7 +2,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { MOVEMENT_MODE_GROUNDED, type MovementMode } from "../../../shared/index";
 
-export interface DamageablePlayerState {
+export interface DamageableCharacterState {
   accountId: number;
   nid: number;
   health: number;
@@ -16,6 +16,7 @@ export interface DamageablePlayerState {
   grounded: boolean;
   movementMode: MovementMode;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
   body: RAPIER.RigidBody;
 }
 
@@ -25,6 +26,7 @@ export interface DamageableDummyState {
 }
 
 export type CombatTarget =
+  | { kind: "character"; eid: number }
   | { kind: "player"; eid: number }
   | { kind: "dummy"; eid: number };
 
@@ -34,12 +36,12 @@ export interface DamageSystemOptions {
   readonly playerCameraOffsetY: number;
   readonly getSpawnPosition: () => { x: number; z: number };
   readonly getSpawnBodyY: (x: number, z: number) => number;
-  readonly markPlayerDirtyByAccountId: (
+  readonly markCharacterDirtyByAccountId: (
     accountId: number,
     options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }
   ) => void;
-  readonly getPlayerStateByEid: (eid: number) => DamageablePlayerState | null;
-  readonly applyPlayerStateByEid: (eid: number, next: DamageablePlayerState) => void;
+  readonly getCharacterStateByEid: (eid: number) => DamageableCharacterState | null;
+  readonly applyCharacterStateByEid: (eid: number, next: DamageableCharacterState) => void;
   readonly getDummyStateByEid: (eid: number) => DamageableDummyState | null;
   readonly applyDummyStateByEid: (eid: number, next: DamageableDummyState) => void;
   readonly onPlayerDamaged?: (eid: number) => void;
@@ -52,7 +54,11 @@ export class DamageSystem {
   public constructor(private readonly options: DamageSystemOptions) {}
 
   public registerPlayerCollider(colliderHandle: number, eid: number): void {
-    this.targetsByColliderHandle.set(colliderHandle, { kind: "player", eid });
+    this.registerCharacterCollider(colliderHandle, eid);
+  }
+
+  public registerCharacterCollider(colliderHandle: number, eid: number): void {
+    this.targetsByColliderHandle.set(colliderHandle, { kind: "character", eid });
   }
 
   public registerDummyCollider(colliderHandle: number, eid: number): void {
@@ -76,21 +82,23 @@ export class DamageSystem {
     if (appliedDamage <= 0) {
       return;
     }
-    if (target.kind === "player") {
-      const player = this.options.getPlayerStateByEid(target.eid);
-      if (!player) {
+    if (target.kind === "character" || target.kind === "player") {
+      const character = this.options.getCharacterStateByEid(target.eid);
+      if (!character) {
         return;
       }
-      player.health = Math.max(0, player.health - appliedDamage);
-      this.options.markPlayerDirtyByAccountId(player.accountId, {
-        dirtyCharacter: true,
-        dirtyAbilityState: false
-      });
-      this.options.onPlayerDamaged?.(target.eid);
-      if (player.health <= 0) {
-        this.respawnPlayer(player);
+      character.health = Math.max(0, character.health - appliedDamage);
+      if (character.accountId > 0) {
+        this.options.markCharacterDirtyByAccountId(character.accountId, {
+          dirtyCharacter: true,
+          dirtyAbilityState: false
+        });
       }
-      this.options.applyPlayerStateByEid(target.eid, player);
+      this.options.onPlayerDamaged?.(target.eid);
+      if (character.health <= 0) {
+        this.resolveZeroHealth(character);
+      }
+      this.options.applyCharacterStateByEid(target.eid, character);
       return;
     }
     const dummy = this.options.getDummyStateByEid(target.eid);
@@ -105,25 +113,30 @@ export class DamageSystem {
     this.options.onDummyDamaged?.(target.eid);
   }
 
-  private respawnPlayer(player: DamageablePlayerState): void {
+  private resolveZeroHealth(character: DamageableCharacterState): void {
+    if (character.accountId <= 0) {
+      character.health = character.maxHealth;
+      return;
+    }
     const spawn = this.options.getSpawnPosition();
     const spawnBodyY = this.options.getSpawnBodyY(spawn.x, spawn.z);
-    player.body.setTranslation(
+    character.body.setTranslation(
       { x: spawn.x, y: spawnBodyY, z: spawn.z },
       true
     );
-    player.vx = 0;
-    player.vy = 0;
-    player.vz = 0;
-    player.grounded = true;
-    player.movementMode = MOVEMENT_MODE_GROUNDED;
-    player.groundedPlatformPid = null;
-    player.health = this.options.maxPlayerHealth;
-    player.maxHealth = this.options.maxPlayerHealth;
-    player.x = spawn.x;
-    player.y = spawnBodyY + this.options.playerCameraOffsetY;
-    player.z = spawn.z;
-    this.options.markPlayerDirtyByAccountId(player.accountId, {
+    character.vx = 0;
+    character.vy = 0;
+    character.vz = 0;
+    character.grounded = true;
+    character.movementMode = MOVEMENT_MODE_GROUNDED;
+    character.groundedPlatformPid = null;
+    character.carriedFramePid = null;
+    character.health = this.options.maxPlayerHealth;
+    character.maxHealth = this.options.maxPlayerHealth;
+    character.x = spawn.x;
+    character.y = spawnBodyY + this.options.playerCameraOffsetY;
+    character.z = spawn.z;
+    this.options.markCharacterDirtyByAccountId(character.accountId, {
       dirtyCharacter: true,
       dirtyAbilityState: false
     });

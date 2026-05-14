@@ -67,7 +67,7 @@ export class MeleeCombatSystem {
       if (!runtime) {
         continue;
       }
-      if (target.kind === "player" && runtime.nid === attacker.nid) {
+      if (runtime.nid === attacker.nid) {
         continue;
       }
 
@@ -174,13 +174,13 @@ export class MeleeCombatSystem {
   }
 
   private getCombatTargetRadius(target: CombatTarget): number {
-    return target.kind === "player" ? this.options.playerCapsuleRadius : this.options.dummyRadius;
+    return target.kind === "dummy" ? this.options.dummyRadius : this.options.playerCapsuleRadius;
   }
 
   private getCombatTargetHalfHeight(target: CombatTarget): number {
-    return target.kind === "player"
-      ? this.options.playerCapsuleHalfHeight
-      : this.options.dummyHalfHeight;
+    return target.kind === "dummy"
+      ? this.options.dummyHalfHeight
+      : this.options.playerCapsuleHalfHeight;
   }
 
   private segmentSegmentDistanceSq(

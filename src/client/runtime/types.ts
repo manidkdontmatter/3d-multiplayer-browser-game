@@ -1,6 +1,7 @@
 // Shared client runtime types for movement input, snapshots, and render handoff.
 import type { MovementMode } from "../../shared/index";
 import type { AbilityCategory } from "../../shared/index";
+import type { WorldItemState } from "../../shared/index";
 
 export interface MovementInput {
   forward: number;
@@ -74,6 +75,17 @@ export interface TrainingDummyState {
   maxHealth: number;
 }
 
+export interface NpcState {
+  nid: number;
+  modelId: number;
+  x: number;
+  y: number;
+  z: number;
+  rotation: { x: number; y: number; z: number; w: number };
+  health: number;
+  maxHealth: number;
+}
+
 export interface AbilityUseEvent {
   ownerNid: number;
   abilityId: number;
@@ -93,5 +105,7 @@ export interface RenderFrameSnapshot {
   locationRoots: LocationRootState[];
   platforms: PlatformState[];
   projectiles: ProjectileState[];
+  worldItems: WorldItemState[];
+  npcs: NpcState[];
   trainingDummies: TrainingDummyState[];
 }

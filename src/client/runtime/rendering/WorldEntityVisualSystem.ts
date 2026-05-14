@@ -17,11 +17,16 @@ import {
   buildLocationTerrainConfig,
   buildTerrainMeshData,
   getLocationDefinitionByArchetypeId,
+  getItemDefinitionById,
+  MODEL_ID_NPC_DOCILE_FLEE,
+  MODEL_ID_NPC_HOSTILE_GUARD,
+  MODEL_ID_NPC_WANDERER,
   MODEL_ID_PLATFORM_LINEAR,
-  MODEL_ID_PLATFORM_ROTATING
+  MODEL_ID_PLATFORM_ROTATING,
+  type WorldItemState
 } from "../../../shared/index";
 import type { CarrierVolumeDefinition } from "../../../shared/index";
-import type { LocationRootState, PlatformState, TrainingDummyState } from "../types";
+import type { LocationRootState, NpcState, PlatformState, TrainingDummyState } from "../types";
 
 const PLATFORM_VISUALS = {
   [MODEL_ID_PLATFORM_LINEAR]: { halfX: 2.25, halfY: 0.35, halfZ: 2.25, color: 0xd8b691 },
@@ -30,6 +35,11 @@ const PLATFORM_VISUALS = {
 
 const LOCATION_CACHE_TTL_MS = 10 * 60 * 1000;
 const CARRIER_VOLUME_WIREFRAME_COLOR = 0x66e0ff;
+const NPC_VISUAL_COLORS = {
+  [MODEL_ID_NPC_HOSTILE_GUARD]: 0xd9463e,
+  [MODEL_ID_NPC_DOCILE_FLEE]: 0xf2d34f,
+  [MODEL_ID_NPC_WANDERER]: 0x52c96b
+} as const;
 
 interface LocationVisual {
   group: Group;
@@ -39,6 +49,8 @@ interface LocationVisual {
 export class WorldEntityVisualSystem {
   private readonly platforms = new Map<number, Mesh>();
   private readonly trainingDummies = new Map<number, Mesh>();
+  private readonly npcs = new Map<number, Mesh>();
+  private readonly worldItems = new Map<number, Mesh>();
   private readonly locations = new Map<number, LocationVisual>();
   private readonly quatScratch = new Quaternion();
 
@@ -161,6 +173,73 @@ export class WorldEntityVisualSystem {
     }
   }
 
+  public syncNpcs(npcs: NpcState[]): void {
+    const activeNids = new Set<number>();
+    for (const npc of npcs) {
+      activeNids.add(npc.nid);
+      let mesh = this.npcs.get(npc.nid);
+      if (!mesh) {
+        mesh = new Mesh(
+          new CylinderGeometry(0.35, 0.35, 1.9, 14, 1),
+          new MeshStandardMaterial({
+            color: this.resolveNpcColor(npc.modelId),
+            roughness: 0.82,
+            metalness: 0.08
+          })
+        );
+        this.npcs.set(npc.nid, mesh);
+        this.scene.add(mesh);
+      }
+      const healthRatio =
+        npc.maxHealth > 0 ? Math.max(0, Math.min(1, npc.health / npc.maxHealth)) : 1;
+      const material = mesh.material as MeshStandardMaterial;
+      material.color.set(this.resolveNpcColor(npc.modelId)).multiplyScalar(0.45 + healthRatio * 0.55);
+      mesh.position.set(npc.x, npc.y, npc.z);
+      this.quatScratch.set(npc.rotation.x, npc.rotation.y, npc.rotation.z, npc.rotation.w);
+      mesh.setRotationFromQuaternion(this.quatScratch);
+    }
+
+    for (const [nid, mesh] of this.npcs) {
+      if (activeNids.has(nid)) {
+        continue;
+      }
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as MeshStandardMaterial).dispose();
+      this.npcs.delete(nid);
+    }
+  }
+
+  public syncWorldItems(items: WorldItemState[]): void {
+    const activeNids = new Set<number>();
+    for (const item of items) {
+      const definition = getItemDefinitionById(item.itemArchetypeId);
+      if (!definition) {
+        continue;
+      }
+      activeNids.add(item.nid);
+      let mesh = this.worldItems.get(item.nid);
+      if (!mesh) {
+        mesh = this.createWorldItemMesh(definition.modelId);
+        this.worldItems.set(item.nid, mesh);
+        this.scene.add(mesh);
+      }
+      mesh.position.set(item.x, item.y, item.z);
+      this.quatScratch.set(item.rotation.x, item.rotation.y, item.rotation.z, item.rotation.w);
+      mesh.setRotationFromQuaternion(this.quatScratch);
+    }
+
+    for (const [nid, mesh] of this.worldItems) {
+      if (activeNids.has(nid)) {
+        continue;
+      }
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as MeshStandardMaterial).dispose();
+      this.worldItems.delete(nid);
+    }
+  }
+
   public dispose(): void {
     for (const visual of this.locations.values()) {
       this.scene.remove(visual.group);
@@ -181,6 +260,46 @@ export class WorldEntityVisualSystem {
       (mesh.material as MeshStandardMaterial).dispose();
     }
     this.trainingDummies.clear();
+
+    for (const mesh of this.npcs.values()) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as MeshStandardMaterial).dispose();
+    }
+    this.npcs.clear();
+
+    for (const mesh of this.worldItems.values()) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as MeshStandardMaterial).dispose();
+    }
+    this.worldItems.clear();
+  }
+
+  private createWorldItemMesh(modelId: number): Mesh {
+    const color =
+      modelId === 40 ? 0x74f2b2 :
+      modelId === 41 ? 0xbfc7d5 :
+      modelId === 42 ? 0x8fb7ff :
+      0xe2d39a;
+    const geometry =
+      modelId === 41
+        ? new BoxGeometry(0.18, 0.9, 0.18)
+        : new DodecahedronGeometry(modelId === 42 ? 0.28 : 0.22, 0);
+    return new Mesh(
+      geometry,
+      new MeshStandardMaterial({
+        color,
+        roughness: 0.42,
+        metalness: modelId === 42 ? 0.2 : 0.06,
+        emissive: modelId === 40 || modelId === 42 ? color : 0x000000,
+        emissiveIntensity: modelId === 40 || modelId === 42 ? 0.28 : 0
+      })
+    );
+  }
+
+  private resolveNpcColor(modelId: number): number {
+    return NPC_VISUAL_COLORS[modelId as keyof typeof NPC_VISUAL_COLORS] ?? 0xd89572;
   }
 
   private createLocationGroup(root: LocationRootState): Group {

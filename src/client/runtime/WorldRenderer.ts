@@ -55,6 +55,8 @@ export class WorldRenderer {
     this.audioEventBridge.applyAbilityUseEvents(snapshot.abilityUseEvents);
     this.worldEntities.syncLocationRoots(snapshot.locationRoots);
     this.worldEntities.syncPlatforms(snapshot.platforms);
+    this.worldEntities.syncWorldItems(snapshot.worldItems);
+    this.worldEntities.syncNpcs(snapshot.npcs);
     this.worldEntities.syncTrainingDummies(snapshot.trainingDummies);
     this.projectileVisuals.syncProjectiles(snapshot.projectiles, snapshot.frameDeltaSeconds);
     this.environment.render(

@@ -51,6 +51,7 @@ export interface LifecyclePlayer {
   grounded: boolean;
   movementMode: MovementMode;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
   health: number;
   maxHealth: number;
   primaryMouseSlot: number;

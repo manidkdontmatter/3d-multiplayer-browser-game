@@ -16,7 +16,9 @@ export enum NType {
   AbilityCreatorStateMessage = 17,
   MapTransferCommand = 18,
   MapTransferMessage = 19,
-  LocationRootEntity = 20
+  LocationRootEntity = 20,
+  ItemCommand = 21,
+  InventoryStateMessage = 22
 }
 
 export const inputCommandSchema = defineSchema({
@@ -73,6 +75,14 @@ export const mapTransferCommandSchema = defineSchema({
   targetMapInstanceId: Binary.String
 });
 
+export const itemCommandSchema = defineSchema({
+  action: Binary.UInt8,
+  worldItemNid: Binary.UInt16,
+  itemInstanceId: Binary.UInt32,
+  quantity: Binary.UInt16,
+  equipmentSlot: Binary.UInt8
+});
+
 export const baseEntitySchema = defineSchema({
   modelId: Binary.UInt16,
   position: { type: Binary.Vector3, interp: true },
@@ -80,7 +90,9 @@ export const baseEntitySchema = defineSchema({
   grounded: Binary.Boolean,
   movementMode: Binary.UInt8,
   health: Binary.UInt8,
-  maxHealth: Binary.UInt8
+  maxHealth: Binary.UInt8,
+  itemArchetypeId: Binary.UInt16,
+  itemQuantity: Binary.UInt16
 });
 
 export const locationRootEntitySchema = defineSchema({
@@ -110,6 +122,7 @@ export const inputAckMessageSchema = defineSchema({
   vz: Binary.Float32,
   grounded: Binary.Boolean,
   groundedPlatformPid: Binary.Int16,
+  carriedFramePid: Binary.Int32,
   movementMode: Binary.UInt8
 });
 
@@ -208,10 +221,15 @@ export const mapTransferMessageSchema = defineSchema({
   cubeCount: Binary.UInt16
 });
 
+export const inventoryStateMessageSchema = defineSchema({
+  inventoryJson: Binary.String
+});
+
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCommand, abilityCommandSchema);
 ncontext.register(NType.AbilityCreatorCommand, abilityCreatorCommandSchema);
+ncontext.register(NType.ItemCommand, itemCommandSchema);
 ncontext.register(NType.BaseEntity, baseEntitySchema);
 ncontext.register(NType.LocationRootEntity, locationRootEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
@@ -224,6 +242,7 @@ ncontext.register(NType.AbilityOwnershipMessage, abilityOwnershipMessageSchema);
 ncontext.register(NType.AbilityCreatorStateMessage, abilityCreatorStateMessageSchema);
 ncontext.register(NType.MapTransferCommand, mapTransferCommandSchema);
 ncontext.register(NType.MapTransferMessage, mapTransferMessageSchema);
+ncontext.register(NType.InventoryStateMessage, inventoryStateMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -283,6 +302,15 @@ export interface MapTransferCommand {
   targetMapInstanceId: string;
 }
 
+export interface ItemCommand {
+  ntype: NType.ItemCommand;
+  action: number;
+  worldItemNid: number;
+  itemInstanceId: number;
+  quantity: number;
+  equipmentSlot: number;
+}
+
 export interface BaseEntity {
   nid: number;
   ntype: NType.BaseEntity;
@@ -293,6 +321,8 @@ export interface BaseEntity {
   movementMode: number;
   health: number;
   maxHealth: number;
+  itemArchetypeId: number;
+  itemQuantity: number;
 }
 
 export interface LocationRootEntity {
@@ -326,6 +356,7 @@ export interface InputAckMessage {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
+  carriedFramePid: number;
   movementMode: number;
 }
 
@@ -429,4 +460,9 @@ export interface MapTransferMessage {
   groundHalfExtent: number;
   groundHalfThickness: number;
   cubeCount: number;
+}
+
+export interface InventoryStateMessage {
+  ntype: NType.InventoryStateMessage;
+  inventoryJson: string;
 }

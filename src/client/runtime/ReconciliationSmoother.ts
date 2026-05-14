@@ -1,3 +1,4 @@
+// Smooths client prediction corrections while preserving offsets in moving frame-local space.
 import { normalizeYaw } from "../../shared/index";
 import type { PlayerPose } from "./types";
 
@@ -13,9 +14,18 @@ export interface PlatformTransform {
   yaw: number;
 }
 
+type CorrectionFrameKind = "platform" | "reference";
+
+interface CorrectionFrameKey {
+  kind: CorrectionFrameKind;
+  pid: number;
+}
+
 export interface ReconciliationSmootherOptions {
   getPlatformTransform: (pid: number) => PlatformTransform | null;
+  getReferenceFrameTransform: (pid: number) => PlatformTransform | null;
   getCurrentGroundedPlatformPid: () => number | null;
+  getCurrentCarriedFramePid: () => number | null;
 }
 
 export interface ReconciliationDiagnostics {
@@ -31,8 +41,8 @@ export interface ReconciliationDiagnostics {
 
 export class ReconciliationSmoother {
   private worldOffset = { x: 0, y: 0, z: 0 };
-  private platformPid: number | null = null;
-  private platformLocalOffset = { x: 0, z: 0 };
+  private correctionFrame: CorrectionFrameKey | null = null;
+  private frameLocalOffset = { x: 0, z: 0 };
   private lastPositionError = 0;
   private lastYawError = 0;
   private lastPitchError = 0;
@@ -46,7 +56,8 @@ export class ReconciliationSmoother {
     preReconciliationPose: PlayerPose,
     postReconciliationPose: PlayerPose,
     replayCount: number,
-    groundedPlatformPid: number | null
+    groundedPlatformPid: number | null,
+    carriedFramePid: number | null
   ): void {
     const currentOffset = this.getWorldOffset();
     const preRenderedPose = {
@@ -83,28 +94,31 @@ export class ReconciliationSmoother {
         y: preRenderedPose.y - postReconciliationPose.y,
         z: preRenderedPose.z - postReconciliationPose.z
       },
-      groundedPlatformPid
+      this.selectCorrectionFrame(groundedPlatformPid, carriedFramePid)
     );
   }
 
   public syncPlatformFrame(): void {
-    if (this.platformPid === null) {
+    if (this.correctionFrame === null) {
       return;
     }
 
-    const currentGroundedPlatformPid = this.options.getCurrentGroundedPlatformPid();
-    if (currentGroundedPlatformPid === this.platformPid) {
+    const currentFrame = this.selectCorrectionFrame(
+      this.options.getCurrentGroundedPlatformPid(),
+      this.options.getCurrentCarriedFramePid()
+    );
+    if (this.isSameCorrectionFrame(currentFrame, this.correctionFrame)) {
       return;
     }
 
     const worldOffset = this.getWorldOffset();
-    this.setOffsetFromWorld(worldOffset, currentGroundedPlatformPid);
+    this.setOffsetFromWorld(worldOffset, currentFrame);
   }
 
   public decay(deltaSeconds: number): void {
     const clampedDelta = Math.max(0, deltaSeconds);
     const positionDecay = Math.exp(-RECONCILE_POSITION_SMOOTH_RATE * clampedDelta);
-    if (this.platformPid === null) {
+    if (this.correctionFrame === null) {
       this.worldOffset.x *= positionDecay;
       this.worldOffset.z *= positionDecay;
       if (Math.abs(this.worldOffset.x) < RECONCILE_OFFSET_EPSILON) {
@@ -114,13 +128,13 @@ export class ReconciliationSmoother {
         this.worldOffset.z = 0;
       }
     } else {
-      this.platformLocalOffset.x *= positionDecay;
-      this.platformLocalOffset.z *= positionDecay;
-      if (Math.abs(this.platformLocalOffset.x) < RECONCILE_OFFSET_EPSILON) {
-        this.platformLocalOffset.x = 0;
+      this.frameLocalOffset.x *= positionDecay;
+      this.frameLocalOffset.z *= positionDecay;
+      if (Math.abs(this.frameLocalOffset.x) < RECONCILE_OFFSET_EPSILON) {
+        this.frameLocalOffset.x = 0;
       }
-      if (Math.abs(this.platformLocalOffset.z) < RECONCILE_OFFSET_EPSILON) {
-        this.platformLocalOffset.z = 0;
+      if (Math.abs(this.frameLocalOffset.z) < RECONCILE_OFFSET_EPSILON) {
+        this.frameLocalOffset.z = 0;
       }
     }
     this.worldOffset.y *= positionDecay;
@@ -131,26 +145,26 @@ export class ReconciliationSmoother {
 
   public reset(): void {
     this.worldOffset = { x: 0, y: 0, z: 0 };
-    this.platformPid = null;
-    this.platformLocalOffset = { x: 0, z: 0 };
+    this.correctionFrame = null;
+    this.frameLocalOffset = { x: 0, z: 0 };
   }
 
   public getWorldOffset(): { x: number; y: number; z: number } {
-    if (this.platformPid === null) {
+    if (this.correctionFrame === null) {
       return { ...this.worldOffset };
     }
 
-    const platform = this.options.getPlatformTransform(this.platformPid);
-    if (!platform) {
+    const frame = this.getCorrectionFrameTransform(this.correctionFrame);
+    if (!frame) {
       return { ...this.worldOffset };
     }
 
-    const cos = Math.cos(platform.yaw);
-    const sin = Math.sin(platform.yaw);
+    const cos = Math.cos(frame.yaw);
+    const sin = Math.sin(frame.yaw);
     return {
-      x: this.platformLocalOffset.x * cos + this.platformLocalOffset.z * sin,
+      x: this.frameLocalOffset.x * cos + this.frameLocalOffset.z * sin,
       y: this.worldOffset.y,
-      z: -this.platformLocalOffset.x * sin + this.platformLocalOffset.z * cos
+      z: -this.frameLocalOffset.x * sin + this.frameLocalOffset.z * cos
     };
   }
 
@@ -170,32 +184,58 @@ export class ReconciliationSmoother {
 
   private setOffsetFromWorld(
     worldOffset: { x: number; y: number; z: number },
-    groundedPlatformPid: number | null
+    correctionFrame: CorrectionFrameKey | null
   ): void {
     this.worldOffset.y = worldOffset.y;
-    if (groundedPlatformPid === null) {
+    if (correctionFrame === null) {
       this.worldOffset.x = worldOffset.x;
       this.worldOffset.z = worldOffset.z;
-      this.platformPid = null;
-      this.platformLocalOffset = { x: 0, z: 0 };
+      this.correctionFrame = null;
+      this.frameLocalOffset = { x: 0, z: 0 };
       return;
     }
 
-    const platform = this.options.getPlatformTransform(groundedPlatformPid);
-    if (!platform) {
+    const frame = this.getCorrectionFrameTransform(correctionFrame);
+    if (!frame) {
       this.worldOffset.x = worldOffset.x;
       this.worldOffset.z = worldOffset.z;
-      this.platformPid = null;
-      this.platformLocalOffset = { x: 0, z: 0 };
+      this.correctionFrame = null;
+      this.frameLocalOffset = { x: 0, z: 0 };
       return;
     }
 
-    const cos = Math.cos(platform.yaw);
-    const sin = Math.sin(platform.yaw);
-    this.platformPid = groundedPlatformPid;
-    this.platformLocalOffset.x = worldOffset.x * cos - worldOffset.z * sin;
-    this.platformLocalOffset.z = worldOffset.x * sin + worldOffset.z * cos;
+    const cos = Math.cos(frame.yaw);
+    const sin = Math.sin(frame.yaw);
+    this.correctionFrame = correctionFrame;
+    this.frameLocalOffset.x = worldOffset.x * cos - worldOffset.z * sin;
+    this.frameLocalOffset.z = worldOffset.x * sin + worldOffset.z * cos;
     this.worldOffset.x = 0;
     this.worldOffset.z = 0;
+  }
+
+  private selectCorrectionFrame(
+    groundedPlatformPid: number | null,
+    carriedFramePid: number | null
+  ): CorrectionFrameKey | null {
+    if (groundedPlatformPid !== null) {
+      return { kind: "platform", pid: groundedPlatformPid };
+    }
+    if (carriedFramePid !== null) {
+      return { kind: "reference", pid: carriedFramePid };
+    }
+    return null;
+  }
+
+  private getCorrectionFrameTransform(frame: CorrectionFrameKey): PlatformTransform | null {
+    return frame.kind === "platform"
+      ? this.options.getPlatformTransform(frame.pid)
+      : this.options.getReferenceFrameTransform(frame.pid);
+  }
+
+  private isSameCorrectionFrame(a: CorrectionFrameKey | null, b: CorrectionFrameKey | null): boolean {
+    if (a === null || b === null) {
+      return a === b;
+    }
+    return a.kind === b.kind && a.pid === b.pid;
   }
 }

@@ -20,6 +20,7 @@ export class AckReconciliationBuffer {
   private latestAck: ReconciliationAck | null = null;
   private lastAckSequence: number | null = null;
   private serverGroundedPlatformPid = -1;
+  private serverCarriedFramePid = -1;
   private lastSentYaw = 0;
   private hasSentYaw = false;
 
@@ -35,6 +36,7 @@ export class AckReconciliationBuffer {
     this.latestAck = null;
     this.lastAckSequence = null;
     this.serverGroundedPlatformPid = -1;
+    this.serverCarriedFramePid = -1;
     this.lastSentYaw = 0;
     this.hasSentYaw = false;
   }
@@ -142,6 +144,10 @@ export class AckReconciliationBuffer {
     return this.serverGroundedPlatformPid;
   }
 
+  public getServerCarriedFramePid(): number {
+    return this.serverCarriedFramePid;
+  }
+
   private applyAckMessage(message: InputAckMessage): void {
     if (this.lastAckSequence !== null && !this.isSequenceAheadOf(this.lastAckSequence, message.sequence)) {
       return;
@@ -160,10 +166,12 @@ export class AckReconciliationBuffer {
       vz: message.vz,
       grounded: message.grounded,
       groundedPlatformPid: message.groundedPlatformPid,
+      carriedFramePid: message.carriedFramePid,
       movementMode: sanitizeMovementMode(message.movementMode)
     };
 
     this.serverGroundedPlatformPid = message.groundedPlatformPid;
+    this.serverCarriedFramePid = message.carriedFramePid;
     this.trimPendingInputs(message.sequence);
   }
 

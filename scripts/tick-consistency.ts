@@ -1,8 +1,10 @@
+// Measures authoritative server fixed-tick consistency over a short local run.
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import RAPIER from "@dimforge/rapier3d-compat";
+import { init as initNavigation } from "recast-navigation";
 import { ncontext } from "../src/shared/netcode";
 import { GameServer } from "../src/server/GameServer";
 import { SERVER_TICK_RATE } from "../src/shared/config";
@@ -41,6 +43,7 @@ async function main(): Promise<void> {
   process.env.NENGI_TRANSPORT = "ws";
   process.env.SERVER_TICK_LOG = "0";
   await RAPIER.init();
+  await initNavigation();
   const testPort = await getFreePort();
 
   const server = new GameServer(ncontext);

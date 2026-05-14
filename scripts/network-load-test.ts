@@ -5,6 +5,7 @@ import process from "node:process";
 import { performance } from "node:perf_hooks";
 import { createHash } from "node:crypto";
 import RAPIER from "@dimforge/rapier3d-compat";
+import { init as initNavigation } from "recast-navigation";
 import { Client, type Context } from "nengi";
 import { WebSocketClientAdapter } from "nengi-websocket-client-adapter";
 import {
@@ -156,6 +157,7 @@ async function main(): Promise<void> {
   );
 
   await RAPIER.init();
+  await initNavigation();
 
   const runTag = Date.now();
   process.env.SERVER_DATA_PATH = path.join(reportDir, `load-db-${runTag}.sqlite`);

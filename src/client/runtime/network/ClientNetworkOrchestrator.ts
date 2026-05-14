@@ -1,5 +1,11 @@
 // Coordinates client prediction, reconciliation, and net-step ordering in the render loop.
-import { normalizeYaw, PLATFORM_DEFINITIONS, SERVER_TICK_SECONDS } from "../../../shared/index";
+import {
+  getLocationDefinitionByPid,
+  normalizeYaw,
+  PLATFORM_DEFINITIONS,
+  sampleLocationTransform,
+  SERVER_TICK_SECONDS
+} from "../../../shared/index";
 import { samplePlatformTransform } from "../../../shared/platforms";
 import { LocalPhysicsWorld } from "../LocalPhysicsWorld";
 import { NetworkClient } from "../NetworkClient";
@@ -36,7 +42,9 @@ export class ClientNetworkOrchestrator {
   ) {
     this.reconciliationSmoother = new ReconciliationSmoother({
       getPlatformTransform: (pid) => this.physics.getPlatformTransform(pid),
-      getCurrentGroundedPlatformPid: () => this.physics.getKinematicState().groundedPlatformPid
+      getReferenceFrameTransform: (pid) => this.physics.getMovingLocationTransform(pid),
+      getCurrentGroundedPlatformPid: () => this.physics.getKinematicState().groundedPlatformPid,
+      getCurrentCarriedFramePid: () => this.physics.getKinematicState().carriedFramePid
     });
   }
 
@@ -55,8 +63,10 @@ export class ClientNetworkOrchestrator {
     if (isCspActive) {
       this.lastNonCspYawCarryServerTimeSeconds = null;
       const predictedPlatformYawDelta = this.physics.predictAttachedPlatformYawDelta(delta);
-      if (Math.abs(predictedPlatformYawDelta) > 1e-6) {
-        look.applyYawDelta(predictedPlatformYawDelta);
+      const predictedFrameYawDelta = this.physics.predictCarriedFrameYawDelta(delta);
+      const predictedYawDelta = normalizeYaw(predictedPlatformYawDelta + predictedFrameYawDelta);
+      if (Math.abs(predictedYawDelta) > 1e-6) {
+        look.applyYawDelta(predictedYawDelta);
         this.network.syncSentYaw(look.getYaw());
         yaw = look.getYaw();
       }
@@ -80,6 +90,7 @@ export class ClientNetworkOrchestrator {
         vz: recon.ack.vz,
         grounded: recon.ack.grounded,
         groundedPlatformPid: recon.ack.groundedPlatformPid,
+        carriedFramePid: recon.ack.carriedFramePid,
         movementMode: recon.ack.movementMode,
         serverTimeSeconds: recon.ack.serverTick * SERVER_TICK_SECONDS
       });
@@ -96,11 +107,13 @@ export class ClientNetworkOrchestrator {
 
         const postReconciliationPose = this.physics.getPose();
         if (preReconciliationPose) {
+          const kinematic = this.physics.getKinematicState();
           this.reconciliationSmoother.applyCorrection(
             preReconciliationPose,
             postReconciliationPose,
             recon.replay.length,
-            this.physics.getKinematicState().groundedPlatformPid
+            kinematic.groundedPlatformPid,
+            kinematic.carriedFramePid
           );
         }
       }
@@ -149,17 +162,39 @@ export class ClientNetworkOrchestrator {
     }
 
     const groundedPlatformPid = this.network.getServerGroundedPlatformPid();
-    if (groundedPlatformPid < 0) {
-      return;
-    }
-    const definition = PLATFORM_DEFINITIONS.find((platform) => platform.pid === groundedPlatformPid);
-    if (!definition) {
+    if (groundedPlatformPid >= 0) {
+      const definition = PLATFORM_DEFINITIONS.find((platform) => platform.pid === groundedPlatformPid);
+      if (!definition) {
+        return;
+      }
+
+      const previousPose = samplePlatformTransform(definition, previousServerTimeSeconds);
+      const currentPose = samplePlatformTransform(definition, currentServerTimeSeconds);
+      this.applyYawCarryDelta(look, normalizeYaw(currentPose.yaw - previousPose.yaw));
       return;
     }
 
-    const previousPose = samplePlatformTransform(definition, previousServerTimeSeconds);
-    const currentPose = samplePlatformTransform(definition, currentServerTimeSeconds);
-    const yawDelta = normalizeYaw(currentPose.yaw - previousPose.yaw);
+    const carriedFramePid = this.network.getServerCarriedFramePid();
+    if (carriedFramePid < 0) {
+      return;
+    }
+    const location = getLocationDefinitionByPid(carriedFramePid);
+    if (!location || location.motion === "static") {
+      return;
+    }
+
+    const previousPose = sampleLocationTransform(location, previousServerTimeSeconds);
+    const currentPose = sampleLocationTransform(location, currentServerTimeSeconds);
+    this.applyYawCarryDelta(look, normalizeYaw(currentPose.yaw - previousPose.yaw));
+  }
+
+  private applyYawCarryDelta(
+    look: {
+      getYaw: () => number;
+      applyYawDelta: (deltaYaw: number) => void;
+    },
+    yawDelta: number
+  ): void {
     if (Math.abs(yawDelta) <= 1e-6) {
       return;
     }

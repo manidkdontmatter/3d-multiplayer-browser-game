@@ -7,14 +7,20 @@ import {
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
   MODEL_ID_PLAYER,
+  MODEL_ID_NPC_HOSTILE_GUARD,
+  MODEL_ID_NPC_DOCILE_FLEE,
+  MODEL_ID_NPC_WANDERER,
   MODEL_ID_PROJECTILE_PRIMARY,
-  MODEL_ID_TRAINING_DUMMY
+  MODEL_ID_TRAINING_DUMMY,
+  getItemDefinitionById,
+  type WorldItemState
 } from "../../../shared/index";
 import type {
   LocationRootState,
   PlatformState,
   ProjectileState,
   RemotePlayerState,
+  NpcState,
   TrainingDummyState
 } from "../types";
 
@@ -158,6 +164,36 @@ export class SnapshotStore {
         continue;
       }
       output.push(dummy);
+    }
+    return output;
+  }
+
+  public getNpcs(): NpcState[] {
+    const output: NpcState[] = [];
+    for (const rawEntity of this.entities.values()) {
+      if (rawEntity.ntype !== NType.BaseEntity) {
+        continue;
+      }
+      const npc = this.toNpcState(rawEntity);
+      if (!npc) {
+        continue;
+      }
+      output.push(npc);
+    }
+    return output;
+  }
+
+  public getWorldItems(): WorldItemState[] {
+    const output: WorldItemState[] = [];
+    for (const rawEntity of this.entities.values()) {
+      if (rawEntity.ntype !== NType.BaseEntity) {
+        continue;
+      }
+      const item = this.toWorldItemState(rawEntity);
+      if (!item) {
+        continue;
+      }
+      output.push(item);
     }
     return output;
   }
@@ -323,6 +359,78 @@ export class SnapshotStore {
       rotation,
       health,
       maxHealth
+    };
+  }
+
+  private toNpcState(raw: Record<string, unknown>): NpcState | null {
+    const modelId = raw.modelId;
+    if (
+      modelId !== MODEL_ID_NPC_HOSTILE_GUARD &&
+      modelId !== MODEL_ID_NPC_DOCILE_FLEE &&
+      modelId !== MODEL_ID_NPC_WANDERER
+    ) {
+      return null;
+    }
+    const nid = raw.nid;
+    const position = this.readPosition(raw.position);
+    const rotation = this.readRotation(raw.rotation);
+    const health = raw.health;
+    const maxHealth = raw.maxHealth;
+    if (
+      typeof nid !== "number" ||
+      typeof modelId !== "number" ||
+      position === null ||
+      rotation === null ||
+      typeof health !== "number" ||
+      typeof maxHealth !== "number"
+    ) {
+      return null;
+    }
+    return {
+      nid,
+      modelId,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      rotation,
+      health,
+      maxHealth
+    };
+  }
+
+  private toWorldItemState(raw: Record<string, unknown>): WorldItemState | null {
+    const itemArchetypeId = raw.itemArchetypeId;
+    const itemQuantity = raw.itemQuantity;
+    if (
+      typeof itemArchetypeId !== "number" ||
+      itemArchetypeId <= 0 ||
+      typeof itemQuantity !== "number" ||
+      itemQuantity <= 0 ||
+      !getItemDefinitionById(itemArchetypeId)
+    ) {
+      return null;
+    }
+    const modelId = raw.modelId;
+    const nid = raw.nid;
+    const position = this.readPosition(raw.position);
+    const rotation = this.readRotation(raw.rotation);
+    if (
+      typeof nid !== "number" ||
+      typeof modelId !== "number" ||
+      position === null ||
+      rotation === null
+    ) {
+      return null;
+    }
+    return {
+      nid,
+      modelId,
+      itemArchetypeId,
+      itemQuantity,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      rotation
     };
   }
 

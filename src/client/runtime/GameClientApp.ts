@@ -6,9 +6,11 @@ import {
   DEFAULT_PRIMARY_MOUSE_SLOT,
   DEFAULT_SECONDARY_MOUSE_SLOT,
   getAbilityDefinitionById,
+  getItemDefinitionById,
   movementModeToLabel,
   type BootstrapRequest,
   type BootstrapResponse,
+  type InventoryStateSnapshot,
   type RuntimeMapConfig
 } from "../../shared/index";
 import { NetworkClient } from "./NetworkClient";
@@ -47,6 +49,7 @@ export class GameClientApp {
   private readonly abilityHud: AbilityHud;
   private readonly authPanel: AuthPanel;
   private readonly connectedPlayersNode: HTMLDivElement;
+  private readonly interactPromptNode: HTMLDivElement;
   private readonly network = new NetworkClient();
   private readonly networkOrchestrator: ClientNetworkOrchestrator;
   private readonly platformTimeline = new DeterministicPlatformTimeline();
@@ -75,10 +78,13 @@ export class GameClientApp {
   private secondaryMouseSlot = DEFAULT_SECONDARY_MOUSE_SLOT;
   private queuedTestPrimaryActionCount = 0;
   private queuedTestSecondaryActionCount = 0;
+  private queuedTestInteractCount = 0;
   private testPrimaryHeld = false;
   private testSecondaryHeld = false;
   private activeAccessKey: string | null = null;
   private transferInProgress = false;
+  private currentInteractTargetNid: number | null = null;
+  private inventoryState: InventoryStateSnapshot = { maxSlots: 32, items: [], equipment: {} };
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -107,6 +113,18 @@ export class GameClientApp {
       },
       onAbilityCreatorCommand: (command) => {
         this.network.queueAbilityCreatorCommand(command);
+      },
+      onInventoryItemDropped: (itemInstanceId) => {
+        this.network.queueDropInventoryItem(itemInstanceId);
+      },
+      onInventoryItemUsed: (itemInstanceId) => {
+        this.network.queueUseInventoryItem(itemInstanceId);
+      },
+      onInventoryItemEquipped: (itemInstanceId) => {
+        this.network.queueEquipInventoryItem(itemInstanceId);
+      },
+      onInventorySlotUnequipped: (slot) => {
+        this.network.queueUnequipInventorySlot(slot);
       }
     });
     this.authPanel = AuthPanel.mount(document, {
@@ -118,6 +136,10 @@ export class GameClientApp {
     this.connectedPlayersNode.id = "connected-players-indicator";
     this.connectedPlayersNode.textContent = "Connected Players: 0";
     document.body.append(this.connectedPlayersNode);
+    this.interactPromptNode = document.createElement("div");
+    this.interactPromptNode.id = "interact-prompt";
+    this.interactPromptNode.className = "interact-prompt-hidden";
+    document.body.append(this.interactPromptNode);
     this.renderer = new WorldRenderer(canvas);
     this.networkOrchestrator = new ClientNetworkOrchestrator(this.network, this.physics);
     this.renderSnapshotAssembler = new RenderSnapshotAssembler({
@@ -212,6 +234,13 @@ export class GameClientApp {
       }
     }
 
+    this.currentInteractTargetNid = this.resolveInteractionTargetNid();
+    if (!this.abilityHud.isMainMenuOpen() && (this.input.consumeInteractTrigger() || this.consumeTestInteractTrigger())) {
+      if (this.currentInteractTargetNid !== null) {
+        this.network.queuePickupWorldItem(this.currentInteractTargetNid);
+      }
+    }
+
     if (this.input.consumeCameraFreezeToggle()) {
       this.freezeCamera = !this.freezeCamera;
       this.frozenCameraPose = this.freezeCamera ? this.getRenderPose() : null;
@@ -236,9 +265,11 @@ export class GameClientApp {
     }
     this.applyAbilityEvents();
     this.applyAbilityCreatorEvents();
+    this.applyInventoryEvents();
 
     const renderSnapshot = this.renderSnapshotAssembler.build(seconds);
     this.renderer.apply(renderSnapshot);
+    this.updateInteractPrompt();
     this.updateStatus();
   }
 
@@ -323,6 +354,15 @@ export class GameClientApp {
     this.abilityHud.setAbilityCreatorState(creatorState);
   }
 
+  private applyInventoryEvents(): void {
+    const inventoryState = this.network.consumeInventoryState();
+    if (!inventoryState) {
+      return;
+    }
+    this.inventoryState = inventoryState;
+    this.abilityHud.setInventoryState(inventoryState);
+  }
+
   private updateStatus(): void {
     this.updateConnectedPlayersIndicator();
 
@@ -378,6 +418,7 @@ export class GameClientApp {
     const pose = this.getRenderPose();
     const reconDiagnostics = this.networkOrchestrator.getDiagnostics();
     const remotePlayers = this.network.getRemotePlayers();
+    const localKinematic = this.physics.getKinematicState();
     const basePayload: RenderGameStatePayload = {
       mode: this.network.getConnectionState(),
       pointerLock: document.pointerLockElement === this.canvas,
@@ -385,7 +426,9 @@ export class GameClientApp {
       player: {
         ...pose,
         nid: this.network.getLocalPlayerNid(),
-        movementMode: movementModeToLabel(this.resolveLocalMovementMode())
+        movementMode: movementModeToLabel(this.resolveLocalMovementMode()),
+        groundedPlatformPid: localKinematic.groundedPlatformPid,
+        carriedFramePid: localKinematic.carriedFramePid
       },
       remotePlayers: remotePlayers.map((p) => ({
         nid: p.nid,
@@ -448,6 +491,35 @@ export class GameClientApp {
         health: dummy.health,
         maxHealth: dummy.maxHealth
       })),
+      npcs: this.network.getNpcs().map((npc) => ({
+        nid: npc.nid,
+        modelId: npc.modelId,
+        x: npc.x,
+        y: npc.y,
+        z: npc.z,
+        rotation: npc.rotation,
+        health: npc.health,
+        maxHealth: npc.maxHealth
+      })),
+      worldItems: this.network.getWorldItems().map((item) => ({
+        nid: item.nid,
+        archetypeId: item.itemArchetypeId,
+        name: getItemDefinitionById(item.itemArchetypeId)?.name ?? "Unknown",
+        quantity: item.itemQuantity,
+        x: item.x,
+        y: item.y,
+        z: item.z
+      })),
+      inventory: {
+        items: this.inventoryState.items.map((item) => ({
+          itemInstanceId: item.itemInstanceId,
+          archetypeId: item.archetypeId,
+          name: getItemDefinitionById(item.archetypeId)?.name ?? "Unknown",
+          quantity: item.quantity,
+          slotIndex: item.slotIndex
+        })),
+        equipment: this.inventoryState.equipment
+      },
       localAbility: {
         ui: {
           mainMenuOpen: this.abilityHud.isMainMenuOpen()
@@ -504,9 +576,11 @@ export class GameClientApp {
         this.stepFixed(FIXED_STEP);
       }
       this.applyAbilityEvents();
+      this.applyInventoryEvents();
       if (!this.e2eSimulationOnly) {
         const renderSnapshot = this.renderSnapshotAssembler.build(FIXED_STEP);
         this.renderer.apply(renderSnapshot);
+        this.updateInteractPrompt();
         this.updateStatus();
       }
     };
@@ -545,6 +619,32 @@ export class GameClientApp {
         this.queuedTestSecondaryActionCount + normalized,
         1024
       );
+    };
+    window.trigger_test_interact = (count = 1) => {
+      const normalized = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+      this.queuedTestInteractCount = Math.min(this.queuedTestInteractCount + normalized, 1024);
+    };
+    window.drop_first_inventory_item = () => {
+      const first = this.inventoryState.items[0];
+      if (first) {
+        this.network.queueDropInventoryItem(first.itemInstanceId);
+      }
+    };
+    window.use_first_inventory_item = () => {
+      const firstUsable = this.inventoryState.items.find((item) =>
+        Boolean(getItemDefinitionById(item.archetypeId)?.use)
+      );
+      if (firstUsable) {
+        this.network.queueUseInventoryItem(firstUsable.itemInstanceId);
+      }
+    };
+    window.equip_first_equipment_item = () => {
+      const firstEquipment = this.inventoryState.items.find((item) =>
+        Boolean(getItemDefinitionById(item.archetypeId)?.equipSlot)
+      );
+      if (firstEquipment) {
+        this.network.queueEquipInventoryItem(firstEquipment.itemInstanceId);
+      }
     };
     window.set_test_primary_hold = (held) => {
       this.testPrimaryHeld = Boolean(held);
@@ -594,7 +694,9 @@ export class GameClientApp {
       abilityUseEvents: this.network.consumeAbilityUseEvents(),
       locationRoots: this.network.getLocationRoots(),
       platforms: this.getRenderPlatformStates(),
+      npcs: this.network.getNpcs(),
       trainingDummies: this.network.getTrainingDummies(),
+      worldItems: this.network.getWorldItems(),
       projectiles: this.network.getProjectiles()
     };
   }
@@ -662,6 +764,74 @@ export class GameClientApp {
     }
     this.queuedTestSecondaryActionCount -= 1;
     return true;
+  }
+
+  private consumeTestInteractTrigger(): boolean {
+    if (this.queuedTestInteractCount <= 0) {
+      return false;
+    }
+    this.queuedTestInteractCount -= 1;
+    return true;
+  }
+
+  private resolveInteractionTargetNid(): number | null {
+    const pose = this.getRenderPose();
+    const direction = this.computeViewDirection(pose.yaw, pose.pitch);
+    let bestNid: number | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const item of this.network.getWorldItems()) {
+      const dx = item.x - pose.x;
+      const dy = item.y + 0.85 - pose.y;
+      const dz = item.z - pose.z;
+      const distance = Math.hypot(dx, dy, dz);
+      if (distance > 3.35 || distance <= 0.001) {
+        continue;
+      }
+      const dot = (dx * direction.x + dy * direction.y + dz * direction.z) / distance;
+      if (dot < 0.42) {
+        continue;
+      }
+      const score = dot * 2 - distance * 0.22;
+      if (score > bestScore) {
+        bestScore = score;
+        bestNid = item.nid;
+      }
+    }
+    return bestNid;
+  }
+
+  private updateInteractPrompt(): void {
+    const targetNid = this.currentInteractTargetNid;
+    if (targetNid === null || this.abilityHud.isMainMenuOpen()) {
+      this.interactPromptNode.className = "interact-prompt-hidden";
+      this.interactPromptNode.textContent = "";
+      return;
+    }
+    const item = this.network.getWorldItems().find((entry) => entry.nid === targetNid);
+    const definition = item ? getItemDefinitionById(item.itemArchetypeId) : null;
+    if (!item || !definition) {
+      this.interactPromptNode.className = "interact-prompt-hidden";
+      this.interactPromptNode.textContent = "";
+      return;
+    }
+    this.interactPromptNode.className = "interact-prompt-visible";
+    this.interactPromptNode.textContent = `E  Pick up ${definition.name}${item.itemQuantity > 1 ? ` x${item.itemQuantity}` : ""}`;
+  }
+
+  private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
+    const cosPitch = Math.cos(pitch);
+    const x = -Math.sin(yaw) * cosPitch;
+    const y = Math.sin(pitch);
+    const z = -Math.cos(yaw) * cosPitch;
+    const magnitude = Math.hypot(x, y, z);
+    if (magnitude <= 1e-6) {
+      return { x: 0, y: 0, z: -1 };
+    }
+    return {
+      x: x / magnitude,
+      y: y / magnitude,
+      z: z / magnitude
+    };
   }
 
   private sampleGroundingDiagnostics(): void {

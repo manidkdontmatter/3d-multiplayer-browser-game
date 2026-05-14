@@ -201,6 +201,9 @@ export class GameServer {
     onlinePlayers: number;
     activeProjectiles: number;
     pendingOfflineSnapshots: number;
+    activeNpcs: number;
+    inactiveNpcs: number;
+    hibernatingNpcs: number;
   } {
     return this.simulation.getRuntimeStats();
   }
@@ -356,7 +359,7 @@ export class GameServer {
     const targetTps = SERVER_TICK_MS > 0 ? 1000 / SERVER_TICK_MS : 0;
 
     console.log(
-      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} projectiles=${runtime.activeProjectiles} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots}`
+      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} npcs(active/inactive/hibernating)=${runtime.activeNpcs}/${runtime.inactiveNpcs}/${runtime.hibernatingNpcs} projectiles=${runtime.activeProjectiles} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots}`
     );
 
     this.tickDurationAccumMs = 0;

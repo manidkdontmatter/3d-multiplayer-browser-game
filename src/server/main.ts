@@ -1,6 +1,7 @@
 // Boots the authoritative server runtime and installs basic fatal/error diagnostics for hosts.
 import { resolve } from "node:path";
 import RAPIER from "@dimforge/rapier3d-compat";
+import { init as initNavigation } from "recast-navigation";
 import { ncontext } from "../shared/netcode";
 import { SERVER_PORT } from "../shared/config";
 import { resolveRuntimeMapConfig } from "../shared/world";
@@ -35,6 +36,7 @@ async function bootstrapServer(): Promise<void> {
   process.on("unhandledRejection", (reason) => handleFatal("unhandledRejection", reason));
 
   await RAPIER.init();
+  await initNavigation();
 
   server = new GameServer(ncontext);
   const runtimePort = Number(process.env.SERVER_PORT ?? SERVER_PORT);

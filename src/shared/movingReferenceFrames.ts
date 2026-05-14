@@ -54,8 +54,10 @@ export function getReferenceFrameCarryDelta(
 export function isPointInsideCarrierVolume(
   volume: CarrierVolumeDefinition,
   frame: ReferenceFrameTransform,
-  point: ReferenceFramePoint
+  point: ReferenceFramePoint,
+  margin = 0
 ): boolean {
+  const safeMargin = Math.max(0, Number.isFinite(margin) ? margin : 0);
   const local = worldPointToFrameLocal(frame, point);
   const dx = local.x - volume.localX;
   const dy = local.y - volume.localY;
@@ -67,25 +69,26 @@ export function isPointInsideCarrierVolume(
   const volumeLocalZ = dx * sin + dz * cos;
 
   if (volume.shape === "sphere") {
-    const radius = Math.max(0, volume.radius ?? 0);
+    const radius = Math.max(0, volume.radius ?? 0) + safeMargin;
     return volumeLocalX * volumeLocalX + dy * dy + volumeLocalZ * volumeLocalZ <= radius * radius;
   }
 
-  const halfX = Math.max(0, volume.halfX ?? 0);
-  const halfY = Math.max(0, volume.halfY ?? 0);
-  const halfZ = Math.max(0, volume.halfZ ?? 0);
+  const halfX = Math.max(0, volume.halfX ?? 0) + safeMargin;
+  const halfY = Math.max(0, volume.halfY ?? 0) + safeMargin;
+  const halfZ = Math.max(0, volume.halfZ ?? 0) + safeMargin;
   return Math.abs(volumeLocalX) <= halfX && Math.abs(dy) <= halfY && Math.abs(volumeLocalZ) <= halfZ;
 }
 
 export function hasCarrierVolumesContainingPoint(
   volumes: readonly CarrierVolumeDefinition[] | undefined,
   frame: ReferenceFrameTransform,
-  point: ReferenceFramePoint
+  point: ReferenceFramePoint,
+  margin = 0
 ): boolean {
   if (!volumes || volumes.length === 0) {
     return false;
   }
-  return volumes.some((volume) => isPointInsideCarrierVolume(volume, frame, point));
+  return volumes.some((volume) => isPointInsideCarrierVolume(volume, frame, point, margin));
 }
 
 export function transformCarrierVolumeCenter(

@@ -11,6 +11,8 @@ export interface ReplicatedSnapshot {
   movementMode: MovementMode;
   health: number;
   maxHealth: number;
+  itemArchetypeId: number;
+  itemQuantity: number;
   locationKind: number;
   locationArchetypeId: number;
   locationSeed: number;
@@ -32,6 +34,8 @@ type NetEntity = {
   movementMode: MovementMode;
   health: number;
   maxHealth: number;
+  itemArchetypeId: number;
+  itemQuantity: number;
   locationKind: number;
   locationArchetypeId: number;
   locationSeed: number;
@@ -78,6 +82,8 @@ export class NetReplicationBridge {
       movementMode: snapshot.movementMode,
       health: snapshot.health,
       maxHealth: snapshot.maxHealth,
+      itemArchetypeId: snapshot.itemArchetypeId,
+      itemQuantity: snapshot.itemQuantity,
       locationKind: snapshot.locationKind,
       locationArchetypeId: snapshot.locationArchetypeId,
       locationSeed: snapshot.locationSeed,
@@ -106,6 +112,8 @@ export class NetReplicationBridge {
       movementMode: snapshot.movementMode,
       health: snapshot.health,
       maxHealth: snapshot.maxHealth,
+      itemArchetypeId: snapshot.itemArchetypeId,
+      itemQuantity: snapshot.itemQuantity,
       locationKind: snapshot.locationKind,
       locationArchetypeId: snapshot.locationArchetypeId,
       locationSeed: snapshot.locationSeed,
@@ -130,6 +138,8 @@ export class NetReplicationBridge {
       movementMode: MovementMode;
       health: number;
       maxHealth: number;
+      itemArchetypeId: number;
+      itemQuantity: number;
       locationKind: number;
       locationArchetypeId: number;
       locationSeed: number;
@@ -152,6 +162,8 @@ export class NetReplicationBridge {
       state.movementMode,
       state.health,
       state.maxHealth,
+      state.itemArchetypeId,
+      state.itemQuantity,
       state.locationKind,
       state.locationArchetypeId,
       state.locationSeed,
@@ -175,6 +187,8 @@ export class NetReplicationBridge {
     movementMode: MovementMode,
     health: number,
     maxHealth: number,
+    itemArchetypeId: number,
+    itemQuantity: number,
     locationKind: number,
     locationArchetypeId: number,
     locationSeed: number,
@@ -201,6 +215,8 @@ export class NetReplicationBridge {
     netEntity.movementMode = movementMode;
     netEntity.health = health;
     netEntity.maxHealth = maxHealth;
+    netEntity.itemArchetypeId = itemArchetypeId;
+    netEntity.itemQuantity = itemQuantity;
     netEntity.locationKind = locationKind;
     netEntity.locationArchetypeId = locationArchetypeId;
     netEntity.locationSeed = locationSeed;

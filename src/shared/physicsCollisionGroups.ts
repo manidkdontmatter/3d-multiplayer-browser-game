@@ -11,7 +11,7 @@ export const PHYSICS_GROUP_SOLID = interactionGroups(
 
 export const PHYSICS_GROUP_CHARACTER = interactionGroups(
   PHYSICS_LAYER_CHARACTER,
-  PHYSICS_LAYER_SOLID
+  PHYSICS_LAYER_SOLID | PHYSICS_LAYER_CHARACTER
 );
 
 export const PHYSICS_GROUP_CARRIER_TRIGGER = interactionGroups(
@@ -27,6 +27,11 @@ export const PHYSICS_GROUP_DYNAMIC_BODY = interactionGroups(
 export const PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS = interactionGroups(
   PHYSICS_LAYER_CHARACTER,
   PHYSICS_LAYER_SOLID
+);
+
+export const PHYSICS_QUERY_GROUP_CHARACTER_MOVEMENT = interactionGroups(
+  PHYSICS_LAYER_CHARACTER,
+  PHYSICS_LAYER_SOLID | PHYSICS_LAYER_CHARACTER
 );
 
 export function interactionGroups(memberships: number, filter: number): number {

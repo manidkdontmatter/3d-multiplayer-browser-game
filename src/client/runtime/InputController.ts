@@ -16,6 +16,7 @@ export class InputController {
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
   private mainMenuToggleQueued = false;
+  private interactQueued = false;
   private primaryActionHeld = false;
   private primaryActionQueued = false;
   private secondaryActionHeld = false;
@@ -153,6 +154,12 @@ export class InputController {
     return queued;
   }
 
+  public consumeInteractTrigger(): boolean {
+    const queued = this.interactQueued;
+    this.interactQueued = false;
+    return queued;
+  }
+
   private readonly onCanvasClick = (): void => {
     if (this.mainUiOpen) {
       return;
@@ -188,6 +195,10 @@ export class InputController {
     }
     if (event.code === "KeyF" && !event.repeat) {
       this.toggleFlyQueued = true;
+      return;
+    }
+    if (event.code === "KeyE" && !event.repeat) {
+      this.interactQueued = true;
       return;
     }
     if (event.repeat) {
@@ -271,6 +282,7 @@ export class InputController {
     this.secondaryActionHeld = false;
     this.secondaryActionQueued = false;
     this.queuedCastSlot = null;
+    this.interactQueued = false;
     this.toggleFlyQueued = false;
     this.heldKeys.clear();
   };

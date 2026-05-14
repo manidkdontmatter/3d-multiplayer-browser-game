@@ -7,6 +7,7 @@ import {
   sanitizeMovementMode
 } from "../../shared/index";
 import type {
+  CharacterObject,
   DummyObject,
   PlayerObject,
   ProjectileCreateRequest,
@@ -23,15 +24,20 @@ export class SimulationEcsStore {
       Rotation: { x: [] as number[], y: [] as number[], z: [] as number[], w: [] as number[] },
       Velocity: { x: [] as number[], y: [] as number[], z: [] as number[] },
       Health: { value: [] as number[], max: [] as number[] },
+      ItemArchetypeId: { value: [] as number[] },
+      ItemQuantity: { value: [] as number[] },
       LocationKind: { value: [] as number[] },
       LocationArchetypeId: { value: [] as number[] },
       LocationSeed: { value: [] as number[] },
       LocationEnvironmentId: { value: [] as number[] },
       LocationStreamingRadius: { value: [] as number[] },
       LocationInfluenceRadius: { value: [] as number[] },
+      CharacterArchetypeId: { value: [] as number[] },
+      ControllerKind: { value: [] as number[] },
       Grounded: { value: [] as number[] },
       MovementMode: { value: [] as number[] },
       GroundedPlatformPid: { value: [] as number[] },
+      CarriedFramePid: { value: [] as number[] },
       AccountId: { value: [] as number[] },
       Yaw: { value: [] as number[] },
       Pitch: { value: [] as number[] },
@@ -71,6 +77,9 @@ export class SimulationEcsStore {
       PlayerTag: [] as number[],
       PlatformTag: [] as number[],
       ProjectileTag: [] as number[],
+      WorldItemTag: [] as number[],
+      CharacterTag: [] as number[],
+      NpcTag: [] as number[],
       DummyTag: [] as number[],
       LocationRootTag: [] as number[]
     }
@@ -85,12 +94,24 @@ export class SimulationEcsStore {
   }
 
   public registerPlayerComponents(eid: number): void {
-    this.ensureBaseComponents(eid);
+    this.registerCharacterComponents(eid);
     addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.PlayerTag);
+    addComponent(this.world, eid, this.world.components.AccountId);
+  }
+
+  public registerNpcComponents(eid: number): void {
+    this.registerCharacterComponents(eid);
+    addComponent(this.world, eid, this.world.components.ReplicatedTag);
+    addComponent(this.world, eid, this.world.components.NpcTag);
+  }
+
+  public registerCharacterComponents(eid: number): void {
+    this.ensureBaseComponents(eid);
+    addComponent(this.world, eid, this.world.components.CharacterTag);
     addComponent(this.world, eid, this.world.components.Velocity);
     addComponent(this.world, eid, this.world.components.GroundedPlatformPid);
-    addComponent(this.world, eid, this.world.components.AccountId);
+    addComponent(this.world, eid, this.world.components.CarriedFramePid);
     addComponent(this.world, eid, this.world.components.Yaw);
     addComponent(this.world, eid, this.world.components.Pitch);
     addComponent(this.world, eid, this.world.components.LastProcessedSequence);
@@ -118,6 +139,12 @@ export class SimulationEcsStore {
     this.ensureBaseComponents(eid);
     addComponent(this.world, eid, this.world.components.ReplicatedTag);
     addComponent(this.world, eid, this.world.components.DummyTag);
+  }
+
+  public registerWorldItemComponents(eid: number): void {
+    this.ensureBaseComponents(eid);
+    addComponent(this.world, eid, this.world.components.ReplicatedTag);
+    addComponent(this.world, eid, this.world.components.WorldItemTag);
   }
 
   public createProjectile(request: ProjectileCreateRequest): number {
@@ -189,37 +216,47 @@ export class SimulationEcsStore {
     );
     this.world.components.Health.value[eid] = Math.max(0, Math.floor(entity.health));
     this.world.components.Health.max[eid] = Math.max(0, Math.floor(entity.maxHealth));
+    this.world.components.ItemArchetypeId.value[eid] = Math.max(0, Math.floor(entity.itemArchetypeId ?? 0));
+    this.world.components.ItemQuantity.value[eid] = Math.max(0, Math.floor(entity.itemQuantity ?? 0));
     this.world.components.LocationKind.value[eid] = Math.max(0, Math.floor(entity.locationKind ?? 0));
     this.world.components.LocationArchetypeId.value[eid] = Math.max(0, Math.floor(entity.locationArchetypeId ?? 0));
     this.world.components.LocationSeed.value[eid] = Math.floor(entity.locationSeed ?? 0);
     this.world.components.LocationEnvironmentId.value[eid] = Math.max(0, Math.floor(entity.locationEnvironmentId ?? 0));
     this.world.components.LocationStreamingRadius.value[eid] = Math.max(0, entity.locationStreamingRadius ?? 0);
     this.world.components.LocationInfluenceRadius.value[eid] = Math.max(0, entity.locationInfluenceRadius ?? 0);
+    this.world.components.CharacterArchetypeId.value[eid] = Math.max(0, Math.floor(entity.characterArchetypeId ?? 0));
+    this.world.components.ControllerKind.value[eid] = Math.max(0, Math.floor(entity.controllerKind ?? 0));
+  }
+
+  public syncCharacterFromObject(eid: number, character: CharacterObject): void {
+    this.syncBaseFromObject(eid, character);
+    this.world.components.Velocity.x[eid] = character.vx;
+    this.world.components.Velocity.y[eid] = character.vy;
+    this.world.components.Velocity.z[eid] = character.vz;
+    this.world.components.GroundedPlatformPid.value[eid] =
+      character.groundedPlatformPid === null ? -1 : Math.floor(character.groundedPlatformPid);
+    this.world.components.CarriedFramePid.value[eid] =
+      character.carriedFramePid === null ? -1 : Math.floor(character.carriedFramePid);
+    this.world.components.AccountId.value[eid] = Math.max(0, Math.floor(character.accountId ?? 0));
+    this.world.components.Yaw.value[eid] = character.yaw;
+    this.world.components.Pitch.value[eid] = character.pitch;
+    this.world.components.LastProcessedSequence.value[eid] = Math.max(
+      0,
+      Math.floor(character.lastProcessedSequence)
+    );
+    this.world.components.LastPrimaryFireAtSeconds.value[eid] = character.lastPrimaryFireAtSeconds;
+    this.world.components.PrimaryHeld.value[eid] = character.primaryHeld ? 1 : 0;
+    this.world.components.SecondaryHeld.value[eid] = character.secondaryHeld ? 1 : 0;
+    this.world.components.PrimaryMouseSlot.value[eid] = clampHotbarSlotIndex(character.primaryMouseSlot);
+    this.world.components.SecondaryMouseSlot.value[eid] = clampHotbarSlotIndex(character.secondaryMouseSlot);
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+      this.setHotbarAbilityBySlot(eid, slot, character.hotbarAbilityIds[slot] ?? 0);
+    }
+    this.setUnlockedAbilities(eid, character.unlockedAbilityIds);
   }
 
   public syncPlayerFromObject(eid: number, player: PlayerObject): void {
-    this.syncBaseFromObject(eid, player);
-    this.world.components.Velocity.x[eid] = player.vx;
-    this.world.components.Velocity.y[eid] = player.vy;
-    this.world.components.Velocity.z[eid] = player.vz;
-    this.world.components.GroundedPlatformPid.value[eid] =
-      player.groundedPlatformPid === null ? -1 : Math.floor(player.groundedPlatformPid);
-    this.world.components.AccountId.value[eid] = Math.max(0, Math.floor(player.accountId));
-    this.world.components.Yaw.value[eid] = player.yaw;
-    this.world.components.Pitch.value[eid] = player.pitch;
-    this.world.components.LastProcessedSequence.value[eid] = Math.max(
-      0,
-      Math.floor(player.lastProcessedSequence)
-    );
-    this.world.components.LastPrimaryFireAtSeconds.value[eid] = player.lastPrimaryFireAtSeconds;
-    this.world.components.PrimaryHeld.value[eid] = player.primaryHeld ? 1 : 0;
-    this.world.components.SecondaryHeld.value[eid] = player.secondaryHeld ? 1 : 0;
-    this.world.components.PrimaryMouseSlot.value[eid] = clampHotbarSlotIndex(player.primaryMouseSlot);
-    this.world.components.SecondaryMouseSlot.value[eid] = clampHotbarSlotIndex(player.secondaryMouseSlot);
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-      this.setHotbarAbilityBySlot(eid, slot, player.hotbarAbilityIds[slot] ?? 0);
-    }
-    this.setUnlockedAbilities(eid, player.unlockedAbilityIds);
+    this.syncCharacterFromObject(eid, player);
   }
 
   public setUnlockedAbilities(eid: number, unlocked: Set<number>): boolean {
@@ -279,6 +316,10 @@ export class SimulationEcsStore {
     this.syncBaseFromObject(eid, dummy);
   }
 
+  public syncWorldItemFromObject(eid: number, item: SimObject): void {
+    this.syncBaseFromObject(eid, item);
+  }
+
   public setEntityNid(eid: number, nid: number): void {
     this.world.components.NetworkId.value[eid] = Math.max(0, Math.floor(nid));
   }
@@ -295,8 +336,20 @@ export class SimulationEcsStore {
     return Array.from(query(this.world, [this.world.components.PlayerTag]));
   }
 
+  public getCharacterTagEids(): number[] {
+    return Array.from(query(this.world, [this.world.components.CharacterTag]));
+  }
+
+  public getNpcTagEids(): number[] {
+    return Array.from(query(this.world, [this.world.components.NpcTag]));
+  }
+
   public getProjectileTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.ProjectileTag]));
+  }
+
+  public getWorldItemTagEids(): number[] {
+    return Array.from(query(this.world, [this.world.components.WorldItemTag]));
   }
 
   public getPlatformTagEids(): number[] {
@@ -394,11 +447,15 @@ export class SimulationEcsStore {
     addComponent(this.world, eid, this.world.components.Grounded);
     addComponent(this.world, eid, this.world.components.MovementMode);
     addComponent(this.world, eid, this.world.components.Health);
+    addComponent(this.world, eid, this.world.components.ItemArchetypeId);
+    addComponent(this.world, eid, this.world.components.ItemQuantity);
     addComponent(this.world, eid, this.world.components.LocationKind);
     addComponent(this.world, eid, this.world.components.LocationArchetypeId);
     addComponent(this.world, eid, this.world.components.LocationSeed);
     addComponent(this.world, eid, this.world.components.LocationEnvironmentId);
     addComponent(this.world, eid, this.world.components.LocationStreamingRadius);
     addComponent(this.world, eid, this.world.components.LocationInfluenceRadius);
+    addComponent(this.world, eid, this.world.components.CharacterArchetypeId);
+    addComponent(this.world, eid, this.world.components.ControllerKind);
   }
 }

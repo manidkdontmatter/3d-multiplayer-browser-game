@@ -5,6 +5,7 @@ import type {
   MovementMode,
   RuntimeMapConfig
 } from "../../../shared/index";
+import type { InventoryStateSnapshot } from "../../../shared/index";
 import type {
   MovementInput,
   AbilityUseEvent
@@ -28,6 +29,7 @@ export interface ReconciliationAck {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
+  carriedFramePid: number;
   movementMode: MovementMode;
 }
 
@@ -124,3 +126,5 @@ export interface MapTransferInstruction {
   joinTicket: string;
   mapConfig: RuntimeMapConfig;
 }
+
+export type InventoryState = InventoryStateSnapshot;

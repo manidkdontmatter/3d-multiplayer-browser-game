@@ -51,6 +51,7 @@ function runAckBufferRegression(): void {
     vz: 0,
     grounded: true,
     groundedPlatformPid: -1,
+    carriedFramePid: -1,
     movementMode: 0
   };
   buffer.enqueueAckMessage(ack1, { enabled: false, ackDropRate: 0, ackDelayMs: 0, ackJitterMs: 0 });

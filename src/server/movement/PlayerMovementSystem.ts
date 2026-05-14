@@ -10,7 +10,7 @@ import {
   stepKinematicCharacterController
 } from "../../shared/index";
 
-type PlatformCarry = { x: number; y: number; z: number; yaw: number };
+type PlayerCarry = { x: number; y: number; z: number; yaw: number; carriedFramePid: number | null };
 
 export interface PlayerMovementActor {
   movementMode: MovementMode;
@@ -20,6 +20,7 @@ export interface PlayerMovementActor {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
   x: number;
   y: number;
   z: number;
@@ -35,7 +36,12 @@ export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor
   readonly playerCapsuleHalfHeight?: number;
   readonly playerCapsuleRadius?: number;
   readonly beforePlayerMove?: (player: TPlayer) => void;
-  readonly samplePlayerPlatformCarry: (player: TPlayer) => PlatformCarry;
+  readonly samplePlayerPlatformCarry: (player: TPlayer) => PlayerCarry;
+  readonly resolvePlayerCarriedFramePid?: (
+    player: TPlayer,
+    movedBody: { x: number; y: number; z: number },
+    previousCarriedFramePid: number | null
+  ) => number | null;
   readonly resolveGroundSupportColliderHandle?: (player: TPlayer, groundedByQuery: boolean) => GroundSupportHit;
   readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
   readonly onPlayerStepped: (userId: number, player: TPlayer) => void;
@@ -53,7 +59,10 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
       this.options.beforePlayerMove?.(player);
       const carry = this.options.samplePlayerPlatformCarry(player);
       const next = stepKinematicCharacterController({
-        state: player,
+        state: {
+          ...player,
+          carriedFramePid: carry.carriedFramePid
+        },
         deltaSeconds,
         carry,
         body: player.body,
@@ -64,11 +73,15 @@ export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
         simulationSeconds,
         resolveGroundSupportColliderHandle: (groundedByQuery) =>
           this.resolveGroundSupportColliderHandle(player, groundedByQuery),
-        resolvePlatformPidByColliderHandle: this.options.resolvePlatformPidByColliderHandle
+        resolvePlatformPidByColliderHandle: this.options.resolvePlatformPidByColliderHandle,
+        resolveCarriedFramePid: (movedBody, previousCarriedFramePid) =>
+          this.options.resolvePlayerCarriedFramePid?.(player, movedBody, previousCarriedFramePid) ??
+          previousCarriedFramePid
       });
       player.yaw = next.yaw;
       player.grounded = next.grounded;
       player.groundedPlatformPid = next.groundedPlatformPid;
+      player.carriedFramePid = next.carriedFramePid;
       player.vy = next.vy;
       player.x = next.x;
       player.y = next.y;

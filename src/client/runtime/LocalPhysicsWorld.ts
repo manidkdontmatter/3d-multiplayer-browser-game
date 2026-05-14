@@ -47,6 +47,7 @@ export interface ReconciliationState {
   vz: number;
   grounded: boolean;
   groundedPlatformPid: number;
+  carriedFramePid: number;
   movementMode: MovementMode;
   serverTimeSeconds?: number;
 }
@@ -73,6 +74,16 @@ interface LocalMovingLocationBody {
   prevYaw: number;
 }
 
+interface LocalFrameCarry {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  carriedFramePid: number | null;
+}
+
+const CARRIER_FRAME_STICKY_MARGIN = 0.25;
+
 export class LocalPhysicsWorld {
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly playerBody: RAPIER.RigidBody;
@@ -84,6 +95,7 @@ export class LocalPhysicsWorld {
   private readonly runtimeMapConfig = resolveRuntimeMapConfig();
   private grounded = false;
   private groundedPlatformPid: number | null = null;
+  private carriedFramePid: number | null = null;
   private movementMode: MovementMode = MOVEMENT_MODE_GROUNDED;
   private verticalVelocity = 0;
   private horizontalVelocity = { vx: 0, vz: 0 };
@@ -181,6 +193,7 @@ export class LocalPhysicsWorld {
     }
     local.syncPlatformBodies(0);
     local.syncMovingLocationBodies(0, 0);
+    world.step();
 
     return local;
   }
@@ -251,14 +264,15 @@ export class LocalPhysicsWorld {
         vy: this.verticalVelocity,
         vz: this.horizontalVelocity.vz,
         grounded: this.grounded,
-        groundedPlatformPid: this.groundedPlatformPid
+        groundedPlatformPid: this.groundedPlatformPid,
+        carriedFramePid: frameCarry.carriedFramePid
       },
       deltaSeconds: dt,
       carry: {
         x: carry.x + frameCarry.x,
         y: carry.y + frameCarry.y,
         z: carry.z + frameCarry.z,
-        yaw: frameCarry.yaw
+        yaw: 0
       },
       body: this.playerBody,
       collider: this.playerCollider,
@@ -278,10 +292,13 @@ export class LocalPhysicsWorld {
           groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y
         }),
       resolvePlatformPidByColliderHandle: (colliderHandle) =>
-        this.platformPidByColliderHandle.get(colliderHandle) ?? null
+        this.platformPidByColliderHandle.get(colliderHandle) ?? null,
+      resolveCarriedFramePid: (movedBody, previousCarriedFramePid) =>
+        this.resolveMovingLocationFramePid(movedBody, previousCarriedFramePid)
     });
     this.grounded = next.grounded;
     this.groundedPlatformPid = next.groundedPlatformPid;
+    this.carriedFramePid = next.carriedFramePid;
     this.verticalVelocity = next.vy;
     this.pose.x = next.x;
     this.pose.y = next.y;
@@ -308,6 +325,20 @@ export class LocalPhysicsWorld {
     return normalizeYaw(currentPose.yaw - previousPose.yaw);
   }
 
+  public predictCarriedFrameYawDelta(delta: number): number {
+    if (this.carriedFramePid === null) {
+      return 0;
+    }
+    const location = this.movingLocationBodies.get(this.carriedFramePid);
+    if (!location) {
+      return 0;
+    }
+    const dt = this.clampStepDelta(delta);
+    const previousPose = sampleLocationTransform(location.definition, this.simulationSeconds);
+    const currentPose = sampleLocationTransform(location.definition, this.simulationSeconds + dt);
+    return normalizeYaw(currentPose.yaw - previousPose.yaw);
+  }
+
   public getPose(): PlayerPose {
     return { ...this.pose };
   }
@@ -329,12 +360,26 @@ export class LocalPhysicsWorld {
     };
   }
 
+  public getMovingLocationTransform(pid: number): { x: number; y: number; z: number; yaw: number } | null {
+    const location = this.movingLocationBodies.get(pid);
+    if (!location) {
+      return null;
+    }
+    return {
+      x: location.x,
+      y: location.y,
+      z: location.z,
+      yaw: location.yaw
+    };
+  }
+
   public getKinematicState(): {
     vx: number;
     vy: number;
     vz: number;
     grounded: boolean;
     groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
     movementMode: MovementMode;
   } {
     return {
@@ -343,6 +388,7 @@ export class LocalPhysicsWorld {
       vz: this.horizontalVelocity.vz,
       grounded: this.grounded,
       groundedPlatformPid: this.groundedPlatformPid,
+      carriedFramePid: this.carriedFramePid,
       movementMode: this.movementMode
     };
   }
@@ -359,14 +405,15 @@ export class LocalPhysicsWorld {
     this.pose.pitch = state.pitch;
     this.grounded = state.grounded;
     this.groundedPlatformPid = state.groundedPlatformPid >= 0 ? state.groundedPlatformPid : null;
+    this.carriedFramePid = state.carriedFramePid >= 0 ? state.carriedFramePid : null;
     this.movementMode = state.movementMode;
     this.verticalVelocity = state.vy;
     this.horizontalVelocity.vx = state.vx;
     this.horizontalVelocity.vz = state.vz;
     if (typeof state.serverTimeSeconds === "number" && Number.isFinite(state.serverTimeSeconds)) {
       this.simulationSeconds = Math.max(0, state.serverTimeSeconds);
-    this.syncPlatformBodies(this.simulationSeconds);
-    this.syncMovingLocationBodies(this.simulationSeconds, this.simulationSeconds);
+      this.syncPlatformBodies(this.simulationSeconds);
+      this.syncMovingLocationBodies(this.simulationSeconds, this.simulationSeconds);
     }
 
     const bodyY = state.y - PLAYER_CAMERA_OFFSET_Y;
@@ -446,19 +493,74 @@ export class LocalPhysicsWorld {
     }
   }
 
-  private sampleMovingLocationCarry(): { x: number; y: number; z: number; yaw: number } {
+  private sampleMovingLocationCarry(): LocalFrameCarry {
     const bodyPos = this.playerBody.translation();
-    for (const location of this.movingLocationBodies.values()) {
-      const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
-      if (!hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, current, bodyPos)) {
-        continue;
-      }
-      return getReferenceFrameCarryDelta(
-        { x: location.prevX, y: location.prevY, z: location.prevZ, yaw: location.prevYaw },
-        current,
-        bodyPos
+    const previousLocation =
+      this.carriedFramePid === null ? null : this.movingLocationBodies.get(this.carriedFramePid) ?? null;
+    if (previousLocation) {
+      const carry = this.sampleMovingLocationCarryFromPreviousFrame(
+        previousLocation,
+        bodyPos,
+        CARRIER_FRAME_STICKY_MARGIN
       );
+      if (carry) {
+        return carry;
+      }
     }
-    return { x: 0, y: 0, z: 0, yaw: 0 };
+
+    for (const location of this.movingLocationBodies.values()) {
+      const carry = this.sampleMovingLocationCarryFromPreviousFrame(location, bodyPos, 0);
+      if (carry) {
+        return carry;
+      }
+    }
+    return { x: 0, y: 0, z: 0, yaw: 0, carriedFramePid: null };
+  }
+
+  private sampleMovingLocationCarryFromPreviousFrame(
+    location: LocalMovingLocationBody,
+    bodyPos: { x: number; y: number; z: number },
+    margin: number
+  ): LocalFrameCarry | null {
+    const previous = { x: location.prevX, y: location.prevY, z: location.prevZ, yaw: location.prevYaw };
+    if (!hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, previous, bodyPos, margin)) {
+      return null;
+    }
+    const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
+    const carry = getReferenceFrameCarryDelta(previous, current, bodyPos);
+    return { ...carry, carriedFramePid: location.definition.pid };
+  }
+
+  private resolveMovingLocationFramePid(
+    point: { x: number; y: number; z: number },
+    previousCarriedFramePid: number | null
+  ): number | null {
+    const previousLocation =
+      previousCarriedFramePid === null ? null : this.movingLocationBodies.get(previousCarriedFramePid) ?? null;
+    if (
+      previousLocation &&
+      hasCarrierVolumesContainingPoint(
+        previousLocation.definition.carrierVolumes,
+        { x: previousLocation.x, y: previousLocation.y, z: previousLocation.z, yaw: previousLocation.yaw },
+        point,
+        CARRIER_FRAME_STICKY_MARGIN
+      )
+    ) {
+      return previousLocation.definition.pid;
+    }
+
+    for (const location of this.movingLocationBodies.values()) {
+      if (
+        hasCarrierVolumesContainingPoint(
+          location.definition.carrierVolumes,
+          { x: location.x, y: location.y, z: location.z, yaw: location.yaw },
+          point,
+          0
+        )
+      ) {
+        return location.definition.pid;
+      }
+    }
+    return null;
   }
 }

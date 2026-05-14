@@ -61,6 +61,8 @@ export class SimulationEcsProjectors {
       movementMode: MovementMode;
       health: number;
       maxHealth: number;
+      itemArchetypeId: number;
+      itemQuantity: number;
       locationKind: number;
       locationArchetypeId: number;
       locationSeed: number;
@@ -87,6 +89,8 @@ export class SimulationEcsProjectors {
       movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       health: c.Health.value[eid] ?? 0,
       maxHealth: c.Health.max[eid] ?? 0,
+      itemArchetypeId: c.ItemArchetypeId.value[eid] ?? 0,
+      itemQuantity: c.ItemQuantity.value[eid] ?? 0,
       locationKind: c.LocationKind.value[eid] ?? 0,
       locationArchetypeId: c.LocationArchetypeId.value[eid] ?? 0,
       locationSeed: c.LocationSeed.value[eid] ?? 0,
@@ -159,10 +163,13 @@ export class SimulationEcsProjectors {
     grounded: boolean;
     movementMode: MovementMode;
     groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
     lastProcessedSequence: number;
     lastPrimaryFireAtSeconds: number;
     primaryHeld: boolean;
     secondaryHeld: boolean;
+    health: number;
+    maxHealth: number;
     primaryMouseSlot: number;
     secondaryMouseSlot: number;
     hotbarAbilityIds: number[];
@@ -184,6 +191,7 @@ export class SimulationEcsProjectors {
 
     const c = this.store.world.components;
     const groundedPlatformPidRaw = c.GroundedPlatformPid.value[eid] ?? -1;
+    const carriedFramePidRaw = c.CarriedFramePid.value[eid] ?? -1;
     const x = c.Position.x[eid] ?? 0;
     const y = c.Position.y[eid] ?? 0;
     const z = c.Position.z[eid] ?? 0;
@@ -201,10 +209,13 @@ export class SimulationEcsProjectors {
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
       movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw,
+      carriedFramePid: carriedFramePidRaw < 0 ? null : carriedFramePidRaw,
       lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
       lastPrimaryFireAtSeconds: c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY,
       primaryHeld: (c.PrimaryHeld.value[eid] ?? 0) !== 0,
       secondaryHeld: (c.SecondaryHeld.value[eid] ?? 0) !== 0,
+      health: c.Health.value[eid] ?? 0,
+      maxHealth: c.Health.max[eid] ?? 0,
       primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
       secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
       hotbarAbilityIds: this.getHotbarArray(eid),
@@ -235,16 +246,38 @@ export class SimulationEcsProjectors {
     grounded: boolean;
     movementMode: MovementMode;
     groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
     body: RAPIER.RigidBody;
   } | null {
-    const body = this.indexes.getPlayerBody(eid);
+    return this.getCharacterDamageStateByEid(eid);
+  }
+
+  public getCharacterDamageStateByEid(eid: number): {
+    accountId: number;
+    nid: number;
+    health: number;
+    maxHealth: number;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    grounded: boolean;
+    movementMode: MovementMode;
+    groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
+    body: RAPIER.RigidBody;
+  } | null {
+    const body = this.indexes.getCharacterBody(eid);
     if (!body) {
       return null;
     }
     const c = this.store.world.components;
     const groundedPlatformPidRaw = c.GroundedPlatformPid.value[eid] ?? -1;
+    const carriedFramePidRaw = c.CarriedFramePid.value[eid] ?? -1;
     return {
-      accountId: Math.max(1, Math.floor(c.AccountId.value[eid] ?? 1)),
+      accountId: Math.max(0, Math.floor(c.AccountId.value[eid] ?? 0)),
       nid: c.NetworkId.value[eid] ?? 0,
       health: c.Health.value[eid] ?? 0,
       maxHealth: c.Health.max[eid] ?? 0,
@@ -257,6 +290,7 @@ export class SimulationEcsProjectors {
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
       movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw,
+      carriedFramePid: carriedFramePidRaw < 0 ? null : carriedFramePidRaw,
       body
     };
   }
@@ -272,12 +306,24 @@ export class SimulationEcsProjectors {
     };
   }
 
-  public resolveCombatTargetRuntime(target: { kind: "player" | "dummy"; eid: number }): {
+  public resolveCombatTargetRuntime(target: { kind: "character" | "player" | "dummy"; eid: number }): {
     nid: number;
     body: RAPIER.RigidBody;
     collider: RAPIER.Collider;
   } | null {
     const c = this.store.world.components;
+    if (target.kind === "character") {
+      const body = this.indexes.getCharacterBody(target.eid);
+      const collider = this.indexes.getCharacterCollider(target.eid);
+      if (!body || !collider) {
+        return null;
+      }
+      return {
+        nid: c.NetworkId.value[target.eid] ?? 0,
+        body,
+        collider
+      };
+    }
     if (target.kind === "player") {
       const body = this.indexes.getPlayerBody(target.eid);
       const collider = this.indexes.getPlayerCollider(target.eid);
@@ -317,6 +363,7 @@ export class SimulationEcsProjectors {
     grounded: boolean;
     movementMode: MovementMode;
     groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
   } | null {
     const eid = this.indexes.getPlayerEidByUserId(userId);
     if (typeof eid !== "number") {
@@ -324,6 +371,7 @@ export class SimulationEcsProjectors {
     }
     const c = this.store.world.components;
     const groundedPlatformPidRaw = c.GroundedPlatformPid.value[eid] ?? -1;
+    const carriedFramePidRaw = c.CarriedFramePid.value[eid] ?? -1;
     return {
       nid: c.NetworkId.value[eid] ?? 0,
       lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
@@ -337,7 +385,8 @@ export class SimulationEcsProjectors {
       vz: c.Velocity.z[eid] ?? 0,
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
       movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
-      groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw
+      groundedPlatformPid: groundedPlatformPidRaw < 0 ? null : groundedPlatformPidRaw,
+      carriedFramePid: carriedFramePidRaw < 0 ? null : carriedFramePidRaw
     };
   }
 

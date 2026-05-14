@@ -1,3 +1,4 @@
+// Declares browser testing hooks and structured runtime state exposed by the client.
 declare global {
   interface RenderGameStatePlayer {
     x: number;
@@ -7,6 +8,8 @@ declare global {
     pitch: number;
     nid: number | null;
     movementMode?: "grounded" | "flying";
+    groundedPlatformPid?: number | null;
+    carriedFramePid?: number | null;
   }
 
   interface RenderGameStateRemotePlayer {
@@ -49,6 +52,10 @@ declare global {
     set_test_movement?: (movement: TestMovementInput | null) => void;
     trigger_test_primary_action?: (count?: number) => void;
     trigger_test_secondary_action?: (count?: number) => void;
+    trigger_test_interact?: (count?: number) => void;
+    drop_first_inventory_item?: () => void;
+    use_first_inventory_item?: () => void;
+    equip_first_equipment_item?: () => void;
     set_test_primary_hold?: (held: boolean) => void;
     set_test_secondary_hold?: (held: boolean) => void;
     set_test_look_angles?: (yaw: number, pitch: number) => void;

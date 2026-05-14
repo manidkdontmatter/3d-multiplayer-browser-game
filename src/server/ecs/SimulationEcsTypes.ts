@@ -9,6 +9,8 @@ export type SimObject = {
   rotation: { x: number; y: number; z: number; w: number };
   health: number;
   maxHealth: number;
+  itemArchetypeId?: number;
+  itemQuantity?: number;
   grounded: boolean;
   movementMode?: MovementMode;
   locationKind?: number;
@@ -17,11 +19,16 @@ export type SimObject = {
   locationEnvironmentId?: number;
   locationStreamingRadius?: number;
   locationInfluenceRadius?: number;
+  characterArchetypeId?: number;
+  controllerKind?: number;
 };
 
-export type PlayerObject = SimObject & {
+export type CharacterObject = SimObject & {
   movementMode: MovementMode;
-  accountId: number;
+  accountId?: number;
+  x: number;
+  y: number;
+  z: number;
   yaw: number;
   pitch: number;
   lastProcessedSequence: number;
@@ -38,6 +45,11 @@ export type PlayerObject = SimObject & {
   vy: number;
   vz: number;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
+};
+
+export type PlayerObject = CharacterObject & {
+  accountId: number;
 };
 
 export type DummyObject = SimObject & {
@@ -76,15 +88,20 @@ export type WorldWithComponents = {
     Rotation: { x: number[]; y: number[]; z: number[]; w: number[] };
     Velocity: { x: number[]; y: number[]; z: number[] };
     Health: { value: number[]; max: number[] };
+    ItemArchetypeId: { value: number[] };
+    ItemQuantity: { value: number[] };
     LocationKind: { value: number[] };
     LocationArchetypeId: { value: number[] };
     LocationSeed: { value: number[] };
     LocationEnvironmentId: { value: number[] };
     LocationStreamingRadius: { value: number[] };
     LocationInfluenceRadius: { value: number[] };
+    CharacterArchetypeId: { value: number[] };
+    ControllerKind: { value: number[] };
     Grounded: { value: number[] };
     MovementMode: { value: number[] };
     GroundedPlatformPid: { value: number[] };
+    CarriedFramePid: { value: number[] };
     AccountId: { value: number[] };
     Yaw: { value: number[] };
     Pitch: { value: number[] };
@@ -124,6 +141,9 @@ export type WorldWithComponents = {
     PlayerTag: number[];
     PlatformTag: number[];
     ProjectileTag: number[];
+    WorldItemTag: number[];
+    CharacterTag: number[];
+    NpcTag: number[];
     DummyTag: number[];
     LocationRootTag: number[];
   };

@@ -41,6 +41,8 @@ export class ServerNetworkEventRouter {
       onAbilityCommand: (commandUser, command) => this.simulation.applyAbilityCommand(commandUser, command),
       onAbilityCreatorCommand: (commandUser, command) =>
         this.simulation.applyAbilityCreatorCommand(commandUser, command),
+      onItemCommand: (commandUser, command) =>
+        this.simulation.applyItemCommand(commandUser, command),
       onMapTransferCommand: (commandUser, command) =>
         void this.handleMapTransferCommand(commandUser, command.targetMapInstanceId)
     });

@@ -1,13 +1,21 @@
 // Client network facade handling commands, snapshots, interpolation, and ability-state sync.
 import {
   coerceRuntimeMapConfig,
+  ITEM_COMMAND_DROP,
+  ITEM_COMMAND_EQUIP,
+  ITEM_COMMAND_PICKUP,
+  ITEM_COMMAND_UNEQUIP,
+  ITEM_COMMAND_USE,
+  equipmentSlotToWireValue,
   type RuntimeMapConfig,
-  type AbilityDefinition
+  type AbilityDefinition,
+  type EquipmentSlot
 } from "../../shared/index";
 import {
   NType,
   type AbilityCommand,
   type AbilityCreatorCommand,
+  type ItemCommand,
   type MapTransferCommand,
   ncontext
 } from "../../shared/netcode";
@@ -18,11 +26,13 @@ import type {
   PlatformState,
   ProjectileState,
   RemotePlayerState,
+  NpcState,
   TrainingDummyState,
   AbilityUseEvent
 } from "./types";
 import { AbilityStateStore } from "./network/AbilityStateStore";
 import { AbilityCreatorStateStore } from "./network/AbilityCreatorStateStore";
+import { InventoryStateStore } from "./network/InventoryStateStore";
 import { AckReconciliationBuffer } from "./network/AckReconciliationBuffer";
 import { InterpolationController } from "./network/InterpolationController";
 import { InboundMessageRouter } from "./network/InboundMessageRouter";
@@ -34,6 +44,7 @@ import type {
   AbilityCreatorState,
   QueuedAbilityCreatorCommand,
   AbilityState,
+  InventoryState,
   NetSimulationConfig,
   QueuedAbilityCommand,
   ReconciliationFrame,
@@ -48,6 +59,7 @@ export class NetworkClient {
   private readonly snapshots = new SnapshotStore();
   private readonly abilities = new AbilityStateStore();
   private readonly abilityCreator = new AbilityCreatorStateStore();
+  private readonly inventory = new InventoryStateStore();
   private readonly interpolation = new InterpolationController();
   private readonly serverTimeSync = new ServerTimeSync();
   private readonly ackBuffer: AckReconciliationBuffer;
@@ -73,6 +85,7 @@ export class NetworkClient {
         this.snapshots.reset();
         this.abilities.reset();
         this.abilityCreator.reset();
+        this.inventory.reset();
         this.interpolation.reset();
         this.serverTimeSync.reset();
         this.ackBuffer.reset();
@@ -273,6 +286,56 @@ export class NetworkClient {
     this.transport.flush();
   }
 
+  public queuePickupWorldItem(worldItemNid: number): void {
+    this.queueItemCommand({
+      action: ITEM_COMMAND_PICKUP,
+      worldItemNid,
+      itemInstanceId: 0,
+      quantity: 0,
+      equipmentSlot: 0
+    });
+  }
+
+  public queueDropInventoryItem(itemInstanceId: number, quantity = 0): void {
+    this.queueItemCommand({
+      action: ITEM_COMMAND_DROP,
+      worldItemNid: 0,
+      itemInstanceId,
+      quantity,
+      equipmentSlot: 0
+    });
+  }
+
+  public queueUseInventoryItem(itemInstanceId: number): void {
+    this.queueItemCommand({
+      action: ITEM_COMMAND_USE,
+      worldItemNid: 0,
+      itemInstanceId,
+      quantity: 0,
+      equipmentSlot: 0
+    });
+  }
+
+  public queueEquipInventoryItem(itemInstanceId: number): void {
+    this.queueItemCommand({
+      action: ITEM_COMMAND_EQUIP,
+      worldItemNid: 0,
+      itemInstanceId,
+      quantity: 0,
+      equipmentSlot: 0
+    });
+  }
+
+  public queueUnequipInventorySlot(slot: EquipmentSlot): void {
+    this.queueItemCommand({
+      action: ITEM_COMMAND_UNEQUIP,
+      worldItemNid: 0,
+      itemInstanceId: 0,
+      quantity: 0,
+      equipmentSlot: equipmentSlotToWireValue(slot)
+    });
+  }
+
   public consumeAbilityEvents(): AbilityEventBatch | null {
     return this.abilities.consumeAbilityEvents();
   }
@@ -295,6 +358,14 @@ export class NetworkClient {
 
   public consumeAbilityCreatorState(): AbilityCreatorState | null {
     return this.abilityCreator.consumeState();
+  }
+
+  public consumeInventoryState(): InventoryState | null {
+    return this.inventory.consumeState();
+  }
+
+  public getInventoryState(): InventoryState {
+    return this.inventory.getState();
   }
 
   public getRemotePlayers(): RemotePlayerState[] {
@@ -321,6 +392,14 @@ export class NetworkClient {
     return this.snapshots.getTrainingDummies();
   }
 
+  public getNpcs(): NpcState[] {
+    return this.snapshots.getNpcs();
+  }
+
+  public getWorldItems() {
+    return this.snapshots.getWorldItems();
+  }
+
   public getConnectionState(): "connected" | "local-only" {
     return this.transport.isConnected() ? "connected" : "local-only";
   }
@@ -345,6 +424,10 @@ export class NetworkClient {
 
   public getServerGroundedPlatformPid(): number {
     return this.ackBuffer.getServerGroundedPlatformPid();
+  }
+
+  public getServerCarriedFramePid(): number {
+    return this.ackBuffer.getServerCarriedFramePid();
   }
 
   public getInterpolationDelayMs(): number {
@@ -409,6 +492,9 @@ export class NetworkClient {
           mapConfig
         };
       },
+      onInventoryStateMessage: (message) => {
+        this.inventory.processInventoryJson(message.inventoryJson);
+      },
       onUnhandledMessage: (message) => {
         if (this.abilities.processMessage(message)) {
           return;
@@ -438,6 +524,21 @@ export class NetworkClient {
       ackDelayMs,
       ackJitterMs
     };
+  }
+
+  private queueItemCommand(command: Omit<ItemCommand, "ntype">): void {
+    if (!this.transport.isConnected()) {
+      return;
+    }
+    this.transport.addCommand({
+      ntype: NType.ItemCommand,
+      action: this.clampUnsignedInt(command.action, 0xff),
+      worldItemNid: this.clampUnsignedInt(command.worldItemNid, 0xffff),
+      itemInstanceId: this.clampUnsignedInt(command.itemInstanceId, 0xffffffff),
+      quantity: this.clampUnsignedInt(command.quantity, 0xffff),
+      equipmentSlot: this.clampUnsignedInt(command.equipmentSlot, 0xff)
+    } satisfies ItemCommand);
+    this.transport.flush();
   }
 
   private getOrCreateQueuedAbilityCommand(): QueuedAbilityCommand {

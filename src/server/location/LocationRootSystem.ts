@@ -46,9 +46,20 @@ export interface LocationFrameActor {
   x: number;
   y: number;
   z: number;
+  carriedFramePid: number | null;
   body: RAPIER.RigidBody;
   collider?: RAPIER.Collider;
 }
+
+export interface LocationFrameCarry {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  carriedFramePid: number | null;
+}
+
+const CARRIER_FRAME_STICKY_MARGIN = 0.25;
 
 export interface LocationRootSystemOptions {
   readonly world: RAPIER.World;
@@ -134,23 +145,60 @@ export class LocationRootSystem {
     }
   }
 
-  public sampleFrameCarry(actor: LocationFrameActor): { x: number; y: number; z: number; yaw: number } {
+  public sampleFrameCarry(actor: LocationFrameActor): LocationFrameCarry {
     const bodyPos = actor.body.translation();
+    const previousLocation =
+      actor.carriedFramePid === null ? null : this.locationsByPid.get(actor.carriedFramePid) ?? null;
+    if (previousLocation && previousLocation.definition.motion !== "static") {
+      const carry = this.sampleLocationCarryFromPreviousFrame(
+        previousLocation,
+        bodyPos,
+        CARRIER_FRAME_STICKY_MARGIN
+      );
+      if (carry) {
+        return carry;
+      }
+    }
+
     for (const location of this.locationsByPid.values()) {
       if (location.definition.motion === "static") {
         continue;
       }
-      const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
-      if (!hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, current, bodyPos)) {
+      const carry = this.sampleLocationCarryFromPreviousFrame(location, bodyPos, 0);
+      if (carry) {
+        return carry;
+      }
+    }
+    return { x: 0, y: 0, z: 0, yaw: 0, carriedFramePid: null };
+  }
+
+  public resolveCarriedFramePid(actor: LocationFrameActor): number | null {
+    return this.resolveCarriedFramePidForPoint(actor.body.translation(), actor.carriedFramePid);
+  }
+
+  public resolveCarriedFramePidForPoint(
+    point: { x: number; y: number; z: number },
+    previousCarriedFramePid: number | null
+  ): number | null {
+    const previousLocation =
+      previousCarriedFramePid === null ? null : this.locationsByPid.get(previousCarriedFramePid) ?? null;
+    if (
+      previousLocation &&
+      previousLocation.definition.motion !== "static" &&
+      this.containsPointInCurrentFrame(previousLocation, point, CARRIER_FRAME_STICKY_MARGIN)
+    ) {
+      return previousLocation.pid;
+    }
+
+    for (const location of this.locationsByPid.values()) {
+      if (location.definition.motion === "static") {
         continue;
       }
-      return getReferenceFrameCarryDelta(
-        { x: location.prevX, y: location.prevY, z: location.prevZ, yaw: location.prevYaw },
-        current,
-        bodyPos
-      );
+      if (this.containsPointInCurrentFrame(location, point, 0)) {
+        return location.pid;
+      }
     }
-    return { x: 0, y: 0, z: 0, yaw: 0 };
+    return null;
   }
 
   public sampleDynamicBodyFrameCarry(actor: Required<LocationFrameActor>): {
@@ -158,6 +206,7 @@ export class LocationRootSystem {
     y: number;
     z: number;
     yaw: number;
+    carriedFramePid: number | null;
   } {
     const bodyPos = actor.body.translation();
     let carriedLocationPid: number | null = null;
@@ -179,7 +228,7 @@ export class LocationRootSystem {
       return this.sampleFrameCarry(actor);
     }
 
-    return getReferenceFrameCarryDelta(
+    const carry = getReferenceFrameCarryDelta(
       {
         x: carriedLocation.prevX,
         y: carriedLocation.prevY,
@@ -194,10 +243,34 @@ export class LocationRootSystem {
       },
       bodyPos
     );
+    return { ...carry, carriedFramePid: carriedLocation.pid };
   }
 
   public resolveLocationPidByCarrierSensorHandle(colliderHandle: number): number | null {
     return this.locationPidByCarrierSensorHandle.get(colliderHandle) ?? null;
+  }
+
+  private sampleLocationCarryFromPreviousFrame(
+    location: LocationRootEntity,
+    bodyPos: { x: number; y: number; z: number },
+    margin: number
+  ): LocationFrameCarry | null {
+    const previous = { x: location.prevX, y: location.prevY, z: location.prevZ, yaw: location.prevYaw };
+    if (!hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, previous, bodyPos, margin)) {
+      return null;
+    }
+    const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
+    const carry = getReferenceFrameCarryDelta(previous, current, bodyPos);
+    return { ...carry, carriedFramePid: location.pid };
+  }
+
+  private containsPointInCurrentFrame(
+    location: LocationRootEntity,
+    point: { x: number; y: number; z: number },
+    margin: number
+  ): boolean {
+    const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
+    return hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, current, point, margin);
   }
 }
 

@@ -2,7 +2,10 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { GRAVITY } from "../config";
 import { MOVEMENT_MODE_FLYING, type MovementMode } from "../movementMode";
-import { PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS } from "../physicsCollisionGroups";
+import {
+  PHYSICS_QUERY_GROUP_CHARACTER_MOVEMENT,
+  PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS
+} from "../physicsCollisionGroups";
 import { normalizeYaw } from "../platforms";
 
 export interface PlatformCarryDelta {
@@ -21,6 +24,7 @@ export interface KinematicSolveState {
   movementMode: MovementMode;
   grounded: boolean;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
   vy: number;
 }
 
@@ -33,6 +37,7 @@ export interface KinematicBodyPosition {
 export interface KinematicPostStepResult {
   grounded: boolean;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
   vy: number;
   x: number;
   y: number;
@@ -50,7 +55,7 @@ export function resolveVerticalVelocityForSolve(state: KinematicSolveState): num
   if (state.movementMode === MOVEMENT_MODE_FLYING) {
     return state.vy;
   }
-  if (state.groundedPlatformPid !== null) {
+  if (state.groundedPlatformPid !== null || (state.grounded && state.carriedFramePid !== null)) {
     return 0;
   }
   if (state.grounded) {
@@ -101,6 +106,7 @@ export function resolveKinematicPostStepState(options: {
   movedBody: KinematicBodyPosition;
   groundedByQuery: boolean;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
   deltaSeconds: number;
   playerCameraOffsetY: number;
   simulationSeconds: number;
@@ -109,6 +115,7 @@ export function resolveKinematicPostStepState(options: {
     return {
       grounded: false,
       groundedPlatformPid: null,
+      carriedFramePid: options.carriedFramePid,
       vy: options.previous.vy,
       x: options.movedBody.x,
       y: options.movedBody.y + options.playerCameraOffsetY,
@@ -131,6 +138,7 @@ export function resolveKinematicPostStepState(options: {
   return {
     grounded,
     groundedPlatformPid: attachedPlatformPid,
+    carriedFramePid: options.carriedFramePid,
     vy,
     x: options.movedBody.x,
     y: options.movedBody.y + options.playerCameraOffsetY,
@@ -242,6 +250,10 @@ export function stepKinematicCharacterController(options: {
   simulationSeconds: number;
   resolveGroundSupportColliderHandle: (groundedByQuery: boolean) => GroundSupportHit;
   resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
+  resolveCarriedFramePid?: (
+    movedBody: KinematicBodyPosition,
+    previousCarriedFramePid: number | null
+  ) => number | null;
 }): KinematicControllerStepResult {
   const yaw = applyPlatformCarryYaw(options.state.yaw, options.carry.yaw);
   const solveVerticalVelocity = resolveVerticalVelocityForSolve(options.state);
@@ -256,7 +268,7 @@ export function stepKinematicCharacterController(options: {
     options.collider,
     desired,
     undefined,
-    PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS,
+    PHYSICS_QUERY_GROUP_CHARACTER_MOVEMENT,
     (collider) => collider.handle !== options.collider.handle && !collider.isSensor()
   );
   const corrected = options.characterController.computedMovement();
@@ -273,10 +285,13 @@ export function stepKinematicCharacterController(options: {
 
   const moved = options.body.translation();
   const isFlying = options.state.movementMode === MOVEMENT_MODE_FLYING;
-  const groundedByQuery = isFlying ? false : options.characterController.computedGrounded();
+  const controllerGrounded = isFlying ? false : options.characterController.computedGrounded();
+  const shouldProbeGroundSupport =
+    !isFlying && (controllerGrounded || options.state.grounded || options.state.carriedFramePid !== null);
   const supportHit = isFlying
     ? { hit: false, colliderHandle: null }
-    : options.resolveGroundSupportColliderHandle(groundedByQuery);
+    : options.resolveGroundSupportColliderHandle(shouldProbeGroundSupport);
+  const groundedByQuery = isFlying ? false : controllerGrounded || supportHit.hit;
   const groundedPlatformPid = isFlying
     ? null
     : resolveGroundedPlatformPidFromComputedCollisions({
@@ -287,11 +302,14 @@ export function stepKinematicCharacterController(options: {
         resolvePlatformPidByColliderHandle: options.resolvePlatformPidByColliderHandle,
         groundContactMinNormalY: options.groundContactMinNormalY
       });
+  const carriedFramePid =
+    options.resolveCarriedFramePid?.(moved, options.state.carriedFramePid) ?? options.state.carriedFramePid;
   const next = resolveKinematicPostStepState({
     previous: options.state,
     movedBody: moved,
     groundedByQuery,
     groundedPlatformPid,
+    carriedFramePid,
     deltaSeconds: options.deltaSeconds,
     playerCameraOffsetY: options.playerCameraOffsetY,
     simulationSeconds: options.simulationSeconds

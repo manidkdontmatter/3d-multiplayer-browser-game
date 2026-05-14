@@ -31,6 +31,7 @@ export interface ReplicationPlayer {
   grounded: boolean;
   movementMode: MovementMode;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
   hotbarAbilityIds: number[];
@@ -50,6 +51,7 @@ export interface InputAckStateSnapshot {
   grounded: boolean;
   movementMode: MovementMode;
   groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
 }
 
 export interface AbilityStateSnapshot {
@@ -118,6 +120,7 @@ export class ReplicationMessagingSystem<
       vz: state.vz,
       grounded: state.grounded,
       groundedPlatformPid: state.groundedPlatformPid ?? -1,
+      carriedFramePid: state.carriedFramePid ?? -1,
       movementMode: state.movementMode ?? MOVEMENT_MODE_GROUNDED
     });
   }

@@ -5,6 +5,7 @@ export * from "./config";
 export * from "./controller/characterControllerConfig";
 export * from "./controller/characterMotor";
 export * from "./environmentVolumes";
+export * from "./items";
 export * from "./movement";
 export * from "./movementMode";
 export * from "./movingReferenceFrames";
