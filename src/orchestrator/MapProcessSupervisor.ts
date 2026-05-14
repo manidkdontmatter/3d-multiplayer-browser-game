@@ -100,7 +100,7 @@ export class MapProcessSupervisor {
       return false;
     }
     const repoRoot = process.cwd();
-    const entryPath = resolve(repoRoot, "src/engine/server/main.ts");
+    const entryPath = resolve(repoRoot, "src/game/server/main.ts");
     const child = spawn(
       process.execPath,
       ["--import", "tsx", entryPath],

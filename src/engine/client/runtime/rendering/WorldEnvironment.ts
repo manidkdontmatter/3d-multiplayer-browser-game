@@ -99,7 +99,7 @@ type VoidSkyLayerId = "skybox1" | "skybox2" | "skybox3" | "skybox4" | "skybox5";
 
 type VoidSkyWeights = Record<VoidSkyLayerId, number>;
 
-interface EnvironmentPreset {
+export interface EnvironmentPreset {
   background: Color;
   fogColor: Color;
   fogNear: number;
@@ -256,143 +256,12 @@ void main() {
 }
 `;
 
-const ENVIRONMENT_PRESETS = new Map<number, EnvironmentPreset>([
-  [
-    ENVIRONMENT_PRESET_VOID_NEUTRAL,
-    {
-      background: new Color(0x090712),
-      fogColor: new Color(0x171126),
-      fogNear: 420,
-      fogFar: 1800,
-      ambientColor: new Color(0xb8c7ff),
-      ambientIntensity: 0.58,
-      sunColor: new Color(0xd8e4ff),
-      sunIntensity: 0.85,
-      exposure: 0.9,
-      vfx: {
-        voidStars: 0.9,
-        heavenMist: 0,
-        infernalNebula: 0,
-        arcaneMotes: 0.2
-      },
-      sky: {
-        skybox1: 0,
-        skybox2: 0,
-        skybox3: 0,
-        skybox4: 0,
-        skybox5: 1
-      }
-    }
-  ],
-  [
-    ENVIRONMENT_PRESET_SKY_BLUE_DAY,
-    {
-      background: new Color(0x9fd7ff),
-      fogColor: new Color(0xb8e4ff),
-      fogNear: 190,
-      fogFar: 980,
-      ambientColor: new Color(0xffffff),
-      ambientIntensity: 0.54,
-      sunColor: new Color(0xfff2d9),
-      sunIntensity: 1.1,
-      exposure: 0.96,
-      vfx: {
-        voidStars: 0.15,
-        heavenMist: 0.8,
-        infernalNebula: 0,
-        arcaneMotes: 0
-      },
-      sky: {
-        skybox1: 1,
-        skybox2: 0,
-        skybox3: 0,
-        skybox4: 0,
-        skybox5: 0
-      }
-    }
-  ],
-  [
-    ENVIRONMENT_PRESET_VOID_INFERNAL,
-    {
-      background: new Color(0x120207),
-      fogColor: new Color(0x3a0610),
-      fogNear: 260,
-      fogFar: 1200,
-      ambientColor: new Color(0xff6a4f),
-      ambientIntensity: 0.35,
-      sunColor: new Color(0xff9b51),
-      sunIntensity: 1.2,
-      exposure: 0.82,
-      vfx: {
-        voidStars: 0.35,
-        heavenMist: 0,
-        infernalNebula: 1,
-        arcaneMotes: 0.1
-      },
-      sky: {
-        skybox1: 0,
-        skybox2: 0,
-        skybox3: 0,
-        skybox4: 1,
-        skybox5: 0
-      }
-    }
-  ],
-  [
-    ENVIRONMENT_PRESET_VOID_ARCANE,
-    {
-      background: new Color(0x070a22),
-      fogColor: new Color(0x1f225d),
-      fogNear: 300,
-      fogFar: 1450,
-      ambientColor: new Color(0x9bb9ff),
-      ambientIntensity: 0.48,
-      sunColor: new Color(0xa2f6ff),
-      sunIntensity: 1.0,
-      exposure: 0.88,
-      vfx: {
-        voidStars: 0.65,
-        heavenMist: 0.1,
-        infernalNebula: 0,
-        arcaneMotes: 1
-      },
-      sky: {
-        skybox1: 0,
-        skybox2: 0,
-        skybox3: 1,
-        skybox4: 0,
-        skybox5: 0
-      }
-    }
-  ],
-  [
-    ENVIRONMENT_PRESET_VOID_DEEP,
-    {
-      background: new Color(0x090208),
-      fogColor: new Color(0x170711),
-      fogNear: 330,
-      fogFar: 1550,
-      ambientColor: new Color(0xc4a4ff),
-      ambientIntensity: 0.44,
-      sunColor: new Color(0xffb3c4),
-      sunIntensity: 0.95,
-      exposure: 0.86,
-      vfx: {
-        voidStars: 0.7,
-        heavenMist: 0,
-        infernalNebula: 0.25,
-        arcaneMotes: 0.35
-      },
-      sky: {
-        skybox1: 0,
-        skybox2: 1,
-        skybox3: 0,
-        skybox4: 0,
-        skybox5: 0
-      }
-    }
-  ]
-]);
+// Environment presets — injected by the game layer at startup via injectEnvironmentPresets().
+let ENVIRONMENT_PRESETS = new Map<number, EnvironmentPreset>();
+
+export function injectEnvironmentPresets(presets: Map<number, EnvironmentPreset>): void {
+  ENVIRONMENT_PRESETS = presets;
+}
 
 
 export class WorldEnvironment {
@@ -1198,9 +1067,23 @@ diffuseColor.a *= grassFade;`
 
 }
 
+const FALLBACK_PRESET: EnvironmentPreset = {
+  background: new Color(0x090712),
+  fogColor: new Color(0x171126),
+  fogNear: 420,
+  fogFar: 1800,
+  ambientColor: new Color(0xb8c7ff),
+  ambientIntensity: 0.58,
+  sunColor: new Color(0xd8e4ff),
+  sunIntensity: 0.85,
+  exposure: 0.9,
+  vfx: { voidStars: 0.9, heavenMist: 0, infernalNebula: 0, arcaneMotes: 0.2 },
+  sky: { skybox1: 0, skybox2: 0, skybox3: 0, skybox4: 0, skybox5: 1 }
+};
+
 function requireEnvironmentPreset(id: number): EnvironmentPreset {
   const preset = ENVIRONMENT_PRESETS.get(id);
-  return preset ?? ENVIRONMENT_PRESETS.get(DEFAULT_ENVIRONMENT_PRESET_ID)!;
+  return preset ?? ENVIRONMENT_PRESETS.get(DEFAULT_ENVIRONMENT_PRESET_ID) ?? FALLBACK_PRESET;
 }
 
 function transformLocationEnvironmentVolume(

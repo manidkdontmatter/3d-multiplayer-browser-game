@@ -41,8 +41,6 @@ data/
 !data/
 data/*
 data/server-errors.log
-!data/archetypes/
-!data/archetypes/*.json
 
 # Profiling outputs (generated locally)
 profiling/multiplayer-e2e/

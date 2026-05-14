@@ -5,11 +5,10 @@ import { init as initNavigation } from "recast-navigation";
 import { ncontext } from "../shared/netcode";
 import { SERVER_PORT } from "../shared/config";
 import { resolveRuntimeMapConfig } from "../shared/world";
-import { initializeGameData } from "../../game/shared/index";
 import { GameServer } from "./GameServer";
 import { ServerDiagnostics } from "./ServerDiagnostics";
 
-async function bootstrapServer(): Promise<void> {
+export async function bootstrapServer(): Promise<void> {
   const diagnostics = new ServerDiagnostics({
     errorLogPath: resolve(process.env.SERVER_ERROR_LOG_PATH ?? "./data/server-errors.log"),
     maxLines: 20
@@ -38,8 +37,6 @@ async function bootstrapServer(): Promise<void> {
 
   await RAPIER.init();
   await initNavigation();
-
-  initializeGameData();
 
   server = new GameServer(ncontext);
   const runtimePort = Number(process.env.SERVER_PORT ?? SERVER_PORT);
@@ -127,12 +124,5 @@ function installOrchestratorHeartbeat(runtimePort: number, server: GameServer): 
   return timer;
 }
 
-void bootstrapServer().catch((error) => {
-  const diagnostics = new ServerDiagnostics({
-    errorLogPath: resolve(process.env.SERVER_ERROR_LOG_PATH ?? "./data/server-errors.log"),
-    maxLines: 20
-  });
-  diagnostics.logFatal("startup", error);
-  console.error("[server] failed to start", error);
-  process.exit(1);
-});
+// This module is a library — the game layer entry point calls bootstrapServer()
+// after initializing game data. No auto-execute here.

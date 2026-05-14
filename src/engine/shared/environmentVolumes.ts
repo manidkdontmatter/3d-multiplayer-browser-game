@@ -1,10 +1,5 @@
-// Defines authored axis-aligned environment volumes and blend weights shared by clients and servers.
-import {
-  ENVIRONMENT_PRESET_VOID_ARCANE,
-  ENVIRONMENT_PRESET_VOID_DEEP,
-  ENVIRONMENT_PRESET_VOID_INFERNAL,
-  ENVIRONMENT_PRESET_VOID_NEUTRAL
-} from "./worldLocations";
+// Shared environment volume definitions and blend helpers.
+// Game data is injected by the game layer at startup via injectEnvironmentVolumeDefinitions().
 
 export type EnvironmentVolumeKind = "voidRegion" | "location" | "interior";
 
@@ -33,60 +28,11 @@ export interface EnvironmentSamplePoint {
   readonly z: number;
 }
 
-export const VOID_ENVIRONMENT_VOLUME_DEFINITIONS: readonly EnvironmentVolumeDefinition[] = Object.freeze([
-  {
-    id: "void-region.neutral-origin-expanse",
-    kind: "voidRegion",
-    priority: ENVIRONMENT_PRIORITY_VOID_REGION,
-    environmentPresetId: ENVIRONMENT_PRESET_VOID_NEUTRAL,
-    x: 0,
-    y: 0,
-    z: 0,
-    halfX: 900,
-    halfY: 760,
-    halfZ: 760,
-    blendDistance: 360
-  },
-  {
-    id: "void-region.infernal-blackstone-expanse",
-    kind: "voidRegion",
-    priority: ENVIRONMENT_PRIORITY_VOID_REGION,
-    environmentPresetId: ENVIRONMENT_PRESET_VOID_INFERNAL,
-    x: 1250,
-    y: 40,
-    z: -760,
-    halfX: 820,
-    halfY: 760,
-    halfZ: 780,
-    blendDistance: 360
-  },
-  {
-    id: "void-region.arcane-drift-belt",
-    kind: "voidRegion",
-    priority: ENVIRONMENT_PRIORITY_VOID_REGION,
-    environmentPresetId: ENVIRONMENT_PRESET_VOID_ARCANE,
-    x: -760,
-    y: 130,
-    z: -520,
-    halfX: 820,
-    halfY: 760,
-    halfZ: 780,
-    blendDistance: 360
-  },
-  {
-    id: "void-region.deep-skybox-survey",
-    kind: "voidRegion",
-    priority: ENVIRONMENT_PRIORITY_VOID_REGION,
-    environmentPresetId: ENVIRONMENT_PRESET_VOID_DEEP,
-    x: -1420,
-    y: 80,
-    z: 980,
-    halfX: 900,
-    halfY: 760,
-    halfZ: 840,
-    blendDistance: 360
-  }
-]);
+export let VOID_ENVIRONMENT_VOLUME_DEFINITIONS: readonly EnvironmentVolumeDefinition[] = Object.freeze([]);
+
+export function injectEnvironmentVolumeDefinitions(definitions: readonly EnvironmentVolumeDefinition[]): void {
+  VOID_ENVIRONMENT_VOLUME_DEFINITIONS = Object.freeze(definitions);
+}
 
 export function getEnvironmentVolumeWeight(
   volume: EnvironmentVolumeDefinition,

@@ -58,6 +58,7 @@
 
 ## Decision and Quality Heuristics
 
+- Optimize tool use to minimize round trips. Use larger, more informative commands such as Bash instead of drip-feeding yourself context with many tiny commands. Come up with other sane ways to minimize round trips. Before using a lot of tool calls make a tool-use plan. Batch what you can as long as it is sane to do so. There is nothing wrong with getting a large amount of context at once if it minimizes tool round trips.
 - Sometimes you get overly specific about how you name certain variables, classes, properties etc, or sometimes even making systems that are overly specific, when actually you should try to keep things generic and generalized.
 - The user is not as smart as you, you must help them, not just blindly follow their instructions. Don't just assume they know how things should be done. You have to tell them better ways.
 - Optimize for a high-quality production 3D first-person multiplayer browser game.

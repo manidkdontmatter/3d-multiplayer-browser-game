@@ -18,28 +18,21 @@ import {
   buildTerrainMeshData,
   getLocationDefinitionByArchetypeId,
   getItemDefinitionById,
-  MODEL_ID_NPC_DOCILE_FLEE,
-  MODEL_ID_NPC_HOSTILE_GUARD,
-  MODEL_ID_NPC_WANDERER,
-  MODEL_ID_PLATFORM_LINEAR,
-  MODEL_ID_PLATFORM_ROTATING,
   type WorldItemState
 } from "../../../shared/index";
 import type { CarrierVolumeDefinition } from "../../../shared/index";
 import type { LocationRootState, NpcState, PlatformState, TrainingDummyState } from "../types";
-
-const PLATFORM_VISUALS = {
-  [MODEL_ID_PLATFORM_LINEAR]: { halfX: 2.25, halfY: 0.35, halfZ: 2.25, color: 0xd8b691 },
-  [MODEL_ID_PLATFORM_ROTATING]: { halfX: 2.8, halfY: 0.35, halfZ: 2.8, color: 0x9ea7d8 }
-} as const;
+import {
+  getPlatformVisual,
+  getNpcVisual,
+  getItemVisual,
+  getDummyVisual,
+  getLocationVisual,
+  type LocationVisualDef
+} from "./VisualRegistry";
 
 const LOCATION_CACHE_TTL_MS = 10 * 60 * 1000;
 const CARRIER_VOLUME_WIREFRAME_COLOR = 0x66e0ff;
-const NPC_VISUAL_COLORS = {
-  [MODEL_ID_NPC_HOSTILE_GUARD]: 0xd9463e,
-  [MODEL_ID_NPC_DOCILE_FLEE]: 0xf2d34f,
-  [MODEL_ID_NPC_WANDERER]: 0x52c96b
-} as const;
 
 interface LocationVisual {
   group: Group;
@@ -92,8 +85,7 @@ export class WorldEntityVisualSystem {
   public syncPlatforms(platformStates: PlatformState[]): void {
     const activeNids = new Set<number>();
     for (const platform of platformStates) {
-      const platformVisual =
-        PLATFORM_VISUALS[platform.modelId as keyof typeof PLATFORM_VISUALS];
+      const platformVisual = getPlatformVisual(platform.modelId);
       if (!platformVisual) {
         continue;
       }
@@ -108,8 +100,8 @@ export class WorldEntityVisualSystem {
           ),
           new MeshStandardMaterial({
             color: platformVisual.color,
-            roughness: 0.88,
-            metalness: 0.06
+            roughness: platformVisual.roughness ?? 0.88,
+            metalness: platformVisual.metalness ?? 0.06
           })
         );
         this.platforms.set(platform.nid, mesh);
@@ -140,12 +132,13 @@ export class WorldEntityVisualSystem {
       activeNids.add(dummy.nid);
       let mesh = this.trainingDummies.get(dummy.nid);
       if (!mesh) {
+        const visual = getDummyVisual();
         mesh = new Mesh(
-          new CylinderGeometry(0.42, 0.42, 1.9, 12, 1),
+          new CylinderGeometry(visual.radius, visual.radius, visual.height, visual.segments, 1),
           new MeshStandardMaterial({
-            color: 0xa6c9d8,
-            roughness: 0.88,
-            metalness: 0.08
+            color: visual.color,
+            roughness: visual.roughness,
+            metalness: visual.metalness
           })
         );
         this.trainingDummies.set(dummy.nid, mesh);
@@ -179,12 +172,15 @@ export class WorldEntityVisualSystem {
       activeNids.add(npc.nid);
       let mesh = this.npcs.get(npc.nid);
       if (!mesh) {
+        const npcVisual = getNpcVisual(npc.modelId);
+        const radius = npcVisual?.capsuleRadius ?? 0.35;
+        const height = npcVisual?.capsuleHeight ?? 1.9;
         mesh = new Mesh(
-          new CylinderGeometry(0.35, 0.35, 1.9, 14, 1),
+          new CylinderGeometry(radius, radius, height, 14, 1),
           new MeshStandardMaterial({
-            color: this.resolveNpcColor(npc.modelId),
-            roughness: 0.82,
-            metalness: 0.08
+            color: npcVisual?.color ?? 0xd89572,
+            roughness: npcVisual?.roughness ?? 0.82,
+            metalness: npcVisual?.metalness ?? 0.08
           })
         );
         this.npcs.set(npc.nid, mesh);
@@ -193,7 +189,8 @@ export class WorldEntityVisualSystem {
       const healthRatio =
         npc.maxHealth > 0 ? Math.max(0, Math.min(1, npc.health / npc.maxHealth)) : 1;
       const material = mesh.material as MeshStandardMaterial;
-      material.color.set(this.resolveNpcColor(npc.modelId)).multiplyScalar(0.45 + healthRatio * 0.55);
+      const npcColor = getNpcVisual(npc.modelId)?.color ?? 0xd89572;
+      material.color.set(npcColor).multiplyScalar(0.45 + healthRatio * 0.55);
       mesh.position.set(npc.x, npc.y, npc.z);
       this.quatScratch.set(npc.rotation.x, npc.rotation.y, npc.rotation.z, npc.rotation.w);
       mesh.setRotationFromQuaternion(this.quatScratch);
@@ -277,29 +274,38 @@ export class WorldEntityVisualSystem {
   }
 
   private createWorldItemMesh(modelId: number): Mesh {
-    const color =
-      modelId === 40 ? 0x74f2b2 :
-      modelId === 41 ? 0xbfc7d5 :
-      modelId === 42 ? 0x8fb7ff :
-      0xe2d39a;
-    const geometry =
-      modelId === 41
-        ? new BoxGeometry(0.18, 0.9, 0.18)
-        : new DodecahedronGeometry(modelId === 42 ? 0.28 : 0.22, 0);
+    const visual = getItemVisual(modelId);
+    if (!visual) {
+      return new Mesh(new BoxGeometry(0.22, 0.22, 0.22), new MeshStandardMaterial({ color: 0xe2d39a }));
+    }
+    const geometry = this.buildGeometry(visual.geometry, visual.geometryParams);
     return new Mesh(
       geometry,
       new MeshStandardMaterial({
-        color,
-        roughness: 0.42,
-        metalness: modelId === 42 ? 0.2 : 0.06,
-        emissive: modelId === 40 || modelId === 42 ? color : 0x000000,
-        emissiveIntensity: modelId === 40 || modelId === 42 ? 0.28 : 0
+        color: visual.color,
+        roughness: visual.roughness,
+        metalness: visual.metalness,
+        emissive: visual.emissive ?? 0x000000,
+        emissiveIntensity: visual.emissiveIntensity ?? 0
       })
     );
   }
 
-  private resolveNpcColor(modelId: number): number {
-    return NPC_VISUAL_COLORS[modelId as keyof typeof NPC_VISUAL_COLORS] ?? 0xd89572;
+  private buildGeometry(type: string, params: number[]): BufferGeometry {
+    switch (type) {
+      case "box":
+        return new BoxGeometry(params[0] ?? 0.2, params[1] ?? 0.2, params[2] ?? 0.2);
+      case "dodecahedron":
+        return new DodecahedronGeometry(params[0] ?? 0.22, params[1] ?? 0);
+      case "cylinder":
+        return new CylinderGeometry(
+          params[0] ?? 0.2, params[1] ?? 0.2, params[2] ?? 1, params[3] ?? 12, 1
+        );
+      case "sphere":
+        return new SphereGeometry(params[0] ?? 0.22, params[1] ?? 12, params[2] ?? 8);
+      default:
+        return new BoxGeometry(0.22, 0.22, 0.22);
+    }
   }
 
   private createLocationGroup(root: LocationRootState): Group {
@@ -314,20 +320,24 @@ export class WorldEntityVisualSystem {
       return group;
     }
     if (definition.kind === "staticCastle") {
-      this.addCastleChildren(group, 0x24222d, 0x5d526e);
+      const vis = getLocationVisual("staticCastle");
+      this.addCastleChildren(group, vis?.castleBaseColor ?? 0x24222d, vis?.castleAccentColor ?? 0x5d526e);
       return group;
     }
     if (definition.kind === "movingCastle") {
-      this.addCastleChildren(group, 0x253d55, 0x75a7c4);
+      const vis = getLocationVisual("movingCastle");
+      this.addCastleChildren(group, vis?.castleBaseColor ?? 0x253d55, vis?.castleAccentColor ?? 0x75a7c4);
       this.addCarrierVolumeDebug(group, definition.carrierVolumes);
       return group;
     }
     if (definition.kind === "movingTestPlatform") {
-      this.addMovingTestPlatformChildren(group);
+      const vis = getLocationVisual("movingTestPlatform");
+      this.addMovingTestPlatformChildren(group, vis);
       this.addCarrierVolumeDebug(group, definition.carrierVolumes);
       return group;
     }
-    this.addArenaChildren(group);
+    const arenaVis = getLocationVisual("testArena");
+    this.addArenaChildren(group, arenaVis);
     return group;
   }
 
@@ -337,6 +347,7 @@ export class WorldEntityVisualSystem {
     if (!config) {
       return;
     }
+    const vis = getLocationVisual("terrainIsland");
     const terrain = buildTerrainMeshData(config);
     const geometry = new BufferGeometry();
     geometry.setAttribute("position", new BufferAttribute(terrain.vertices, 3));
@@ -347,9 +358,9 @@ export class WorldEntityVisualSystem {
       new Mesh(
         geometry,
         new MeshStandardMaterial({
-          color: 0xffffff,
+          color: vis?.terrainColor ?? 0xffffff,
           vertexColors: true,
-          roughness: 0.95,
+          roughness: vis?.terrainRoughness ?? 0.95,
           metalness: 0.02
         })
       )
@@ -358,7 +369,7 @@ export class WorldEntityVisualSystem {
     const bowl = new Mesh(
       new DodecahedronGeometry(config.groundHalfExtent * 0.9, 2),
       new MeshStandardMaterial({
-        color: 0x8ed8ff,
+        color: vis?.bowlColor ?? 0x8ed8ff,
         roughness: 0.08,
         metalness: 0.18,
         transparent: true,
@@ -382,14 +393,14 @@ export class WorldEntityVisualSystem {
     this.addBox(group, 0, -8, 0, 92, 5, 64, accentMaterial);
   }
 
-  private addMovingTestPlatformChildren(group: Group): void {
+  private addMovingTestPlatformChildren(group: Group, vis?: LocationVisualDef): void {
     const slabMaterial = new MeshStandardMaterial({
-      color: 0x7fc7d9,
+      color: vis?.slabColor ?? 0x7fc7d9,
       roughness: 0.72,
       metalness: 0.08
     });
     const stripeMaterial = new MeshStandardMaterial({
-      color: 0xf2d16b,
+      color: vis?.stripeColor ?? 0xf2d16b,
       roughness: 0.68,
       metalness: 0.05
     });
@@ -398,9 +409,9 @@ export class WorldEntityVisualSystem {
     this.addBox(group, 40, 0.55, 0, 1.25, 0.1, 70.2, stripeMaterial);
   }
 
-  private addArenaChildren(group: Group): void {
-    const material = new MeshStandardMaterial({ color: 0x4e625f, roughness: 0.84, metalness: 0.08 });
-    const accent = new MeshStandardMaterial({ color: 0xd8b691, roughness: 0.82, metalness: 0.1 });
+  private addArenaChildren(group: Group, vis?: LocationVisualDef): void {
+    const material = new MeshStandardMaterial({ color: vis?.arenaColor ?? 0x4e625f, roughness: 0.84, metalness: 0.08 });
+    const accent = new MeshStandardMaterial({ color: vis?.arenaAccentColor ?? 0xd8b691, roughness: 0.82, metalness: 0.1 });
     this.addBox(group, 0, 0, 0, 84, 4, 84, material);
     this.addBox(group, 0, 10, -68, 24, 12, 6, accent);
   }

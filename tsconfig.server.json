@@ -4,5 +4,5 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["src/engine/server/**/*.ts", "src/orchestrator/**/*.ts", "src/engine/shared/**/*.ts", "src/game/**/*.ts"]
+  "include": ["src/engine/server/**/*.ts", "src/orchestrator/**/*.ts", "src/engine/shared/**/*.ts", "src/game/server/**/*.ts", "src/game/shared/**/*.ts"]
 }

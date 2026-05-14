@@ -1,6 +1,4 @@
 // Loads and validates server-only archetype data while using shared catalogs for cross-runtime content.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { PLATFORM_DEFINITIONS, type PlatformDefinition } from "../../shared/platforms";
 
 type Vec3Yaw = {
@@ -54,11 +52,17 @@ export interface ServerArchetypeCatalog {
   readonly projectiles: ReadonlyMap<number, { modelId: number }>;
 }
 
+let _serverArchetypeRaw: unknown = null;
+
+export function injectServerArchetypeRaw(raw: unknown): void {
+  _serverArchetypeRaw = raw;
+}
+
 export function loadServerArchetypeCatalog(): ServerArchetypeCatalog {
-  const archetypePath = resolve(process.cwd(), "src", "game", "shared", "archetypes", "server-archetypes.json");
-  const rawText = readFileSync(archetypePath, "utf8");
-  const parsed = JSON.parse(rawText) as unknown;
-  return validateServerArchetypeCatalog(parsed);
+  if (_serverArchetypeRaw === null) {
+    throw new Error("Server archetype data not injected. Call injectServerArchetypeRaw() first.");
+  }
+  return validateServerArchetypeCatalog(_serverArchetypeRaw);
 }
 
 function validateServerArchetypeCatalog(value: unknown): ServerArchetypeCatalog {
