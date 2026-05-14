@@ -1,5 +1,5 @@
 // Shared deterministic platform definitions and math used by server authority and client prediction/rendering.
-import platformArchetypesRaw from "../../data/archetypes/platform-archetypes.json";
+// Archetype data is injected by the game layer at startup via injectPlatformCatalog().
 
 export type PlatformKind = 1 | 2;
 
@@ -35,14 +35,16 @@ export interface PlatformPose extends PlatformTransform {
   halfZ: number;
 }
 
-interface PlatformArchetypeCatalog {
+export interface PlatformArchetypeCatalog {
   version: unknown;
   platforms: unknown;
 }
 
-export const PLATFORM_DEFINITIONS: readonly PlatformDefinition[] = Object.freeze(
-  parsePlatformArchetypeCatalog(platformArchetypesRaw as PlatformArchetypeCatalog)
-);
+export let PLATFORM_DEFINITIONS: readonly PlatformDefinition[] = Object.freeze([]);
+
+export function injectPlatformCatalog(raw: PlatformArchetypeCatalog): void {
+  PLATFORM_DEFINITIONS = Object.freeze(parsePlatformArchetypeCatalog(raw));
+}
 
 export function samplePlatformTransform(definition: PlatformDefinition, seconds: number): PlatformTransform {
   let x = definition.baseX;

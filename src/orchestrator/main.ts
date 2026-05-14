@@ -15,14 +15,14 @@ import {
   type TransferResponse,
   type ValidateJoinTicketRequest,
   type ValidateJoinTicketResponse
-} from "../shared/orchestrator";
-import { coerceRuntimeMapConfig, type RuntimeMapConfig } from "../shared/world";
+} from "../engine/shared/orchestrator";
+import { coerceRuntimeMapConfig, type RuntimeMapConfig } from "../engine/shared/world";
 import { MapProcessSupervisor, type MapProcessSpec } from "./MapProcessSupervisor";
 import {
   GUEST_ACCOUNT_ID_BASE,
   PersistenceService,
   type PlayerSnapshot
-} from "../server/persistence/PersistenceService";
+} from "../engine/server/persistence/PersistenceService";
 
 interface JoinTicketRecord {
   token: string;

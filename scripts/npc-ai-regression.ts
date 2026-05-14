@@ -3,15 +3,15 @@ import assert from "node:assert/strict";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { init as initNavigation } from "recast-navigation";
 import { generateSoloNavMesh } from "recast-navigation/generators";
-import { NpcAiSystem, type AiVisibleTarget, type NpcCharacter } from "../src/server/ai/NpcAiSystem";
-import { loadServerArchetypeCatalog } from "../src/server/content/ArchetypeCatalog";
-import { CONTROLLER_KIND_AI } from "../src/server/controllers/ControllerSystem";
-import { buildServerNavigationWorld } from "../src/server/navigation/NavigationWorldBuilder";
+import { NpcAiSystem, type AiVisibleTarget, type NpcCharacter } from "../src/engine/server/ai/NpcAiSystem";
+import { loadServerArchetypeCatalog } from "../src/engine/server/content/ArchetypeCatalog";
+import { CONTROLLER_KIND_AI } from "../src/engine/server/controllers/ControllerSystem";
+import { buildServerNavigationWorld } from "../src/engine/server/navigation/NavigationWorldBuilder";
 import {
   CharacterNavigationPlanner,
   NavigationWorld,
   RecastNavigationContext
-} from "../src/server/navigation/NavigationService";
+} from "../src/engine/server/navigation/NavigationService";
 
 await RAPIER.init();
 await initNavigation();

@@ -15,7 +15,7 @@ import {
   type RuntimeAssetDefinition,
   type RuntimeAssetManifest,
   type RuntimeManifestBootstrap
-} from "../src/client/assets/assetManifest";
+} from "../src/engine/client/assets/assetManifest";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

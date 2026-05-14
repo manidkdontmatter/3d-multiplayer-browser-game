@@ -5,6 +5,7 @@ import { init as initNavigation } from "recast-navigation";
 import { ncontext } from "../shared/netcode";
 import { SERVER_PORT } from "../shared/config";
 import { resolveRuntimeMapConfig } from "../shared/world";
+import { initializeGameData } from "../../game/shared/index";
 import { GameServer } from "./GameServer";
 import { ServerDiagnostics } from "./ServerDiagnostics";
 
@@ -37,6 +38,8 @@ async function bootstrapServer(): Promise<void> {
 
   await RAPIER.init();
   await initNavigation();
+
+  initializeGameData();
 
   server = new GameServer(ncontext);
   const runtimePort = Number(process.env.SERVER_PORT ?? SERVER_PORT);

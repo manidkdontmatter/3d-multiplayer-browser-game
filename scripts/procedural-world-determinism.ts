@@ -7,7 +7,7 @@ import {
   generateRuntimeMapLayout,
   sampleWorldDominantBiome,
   type RuntimeMapConfig
-} from "../src/shared/index";
+} from "../src/engine/shared/index";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {

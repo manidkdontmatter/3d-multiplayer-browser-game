@@ -1,7 +1,7 @@
 // Supervises map server child processes for each configured map instance.
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
-import type { RuntimeMapConfig } from "../shared/world";
+import type { RuntimeMapConfig } from "../engine/shared/world";
 
 export interface MapProcessSpec {
   instanceId: string;
@@ -100,7 +100,7 @@ export class MapProcessSupervisor {
       return false;
     }
     const repoRoot = process.cwd();
-    const entryPath = resolve(repoRoot, "src/server/main.ts");
+    const entryPath = resolve(repoRoot, "src/engine/server/main.ts");
     const child = spawn(
       process.execPath,
       ["--import", "tsx", entryPath],

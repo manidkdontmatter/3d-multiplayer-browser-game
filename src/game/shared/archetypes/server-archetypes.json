@@ -1,0 +1,773 @@
+{
+  "version": 1,
+  "player": {
+    "modelId": 1,
+    "maxHealth": 100
+  },
+  "trainingDummy": {
+    "modelId": 5,
+    "maxHealth": 160,
+    "capsuleHalfHeight": 0.95,
+    "capsuleRadius": 0.42,
+    "spawns": [
+      {
+        "x": 260,
+        "y": 85.37,
+        "z": 440,
+        "yaw": 0
+      }
+    ]
+  },
+  "characterArchetypes": [
+    {
+      "id": 100,
+      "name": "hostile_guard",
+      "modelId": 6,
+      "maxHealth": 120,
+      "capsuleHalfHeight": 0.45,
+      "capsuleRadius": 0.35,
+      "moveSpeed": 5.25,
+      "perceptionRadius": 7,
+      "attackRange": 2.1,
+      "attackDamage": 10,
+      "attackCooldownSeconds": 1.1,
+      "activationRadius": 32,
+      "deactivationRadius": 38,
+      "behaviorTreeId": "hostile_guard.v1"
+    },
+    {
+      "id": 101,
+      "name": "docile_flee",
+      "modelId": 7,
+      "maxHealth": 95,
+      "capsuleHalfHeight": 0.45,
+      "capsuleRadius": 0.35,
+      "moveSpeed": 6.1,
+      "perceptionRadius": 7,
+      "attackRange": 1.5,
+      "attackDamage": 6,
+      "attackCooldownSeconds": 1.2,
+      "activationRadius": 34,
+      "deactivationRadius": 41,
+      "behaviorTreeId": "docile_flee.v1"
+    },
+    {
+      "id": 102,
+      "name": "wanderer",
+      "modelId": 8,
+      "maxHealth": 105,
+      "capsuleHalfHeight": 0.45,
+      "capsuleRadius": 0.35,
+      "moveSpeed": 4.4,
+      "perceptionRadius": 5,
+      "attackRange": 1.5,
+      "attackDamage": 6,
+      "attackCooldownSeconds": 1.2,
+      "activationRadius": 30,
+      "deactivationRadius": 37,
+      "behaviorTreeId": "wander.v1"
+    }
+  ],
+  "npcSpawns": [
+    {
+      "archetypeId": 100,
+      "x": 252,
+      "y": 84.72,
+      "z": 432,
+      "yaw": 0,
+      "patrolPoints": [
+        {
+          "x": 252,
+          "y": 84.72,
+          "z": 432
+        },
+        {
+          "x": 268,
+          "y": 84.72,
+          "z": 432
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 258,
+      "y": 84.72,
+      "z": 434,
+      "yaw": 0.35,
+      "patrolPoints": [
+        {
+          "x": 258,
+          "y": 84.72,
+          "z": 434
+        },
+        {
+          "x": 266,
+          "y": 84.72,
+          "z": 426
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 266,
+      "y": 84.72,
+      "z": 438,
+      "yaw": 0.6,
+      "patrolPoints": [
+        {
+          "x": 266,
+          "y": 84.72,
+          "z": 438
+        },
+        {
+          "x": 274,
+          "y": 84.72,
+          "z": 430
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 274,
+      "y": 84.72,
+      "z": 442,
+      "yaw": 0.8,
+      "patrolPoints": [
+        {
+          "x": 274,
+          "y": 84.72,
+          "z": 442
+        },
+        {
+          "x": 282,
+          "y": 84.72,
+          "z": 436
+        }
+      ]
+    },
+    {
+      "archetypeId": 102,
+      "x": 282,
+      "y": 84.72,
+      "z": 448,
+      "yaw": 1.05,
+      "patrolPoints": [
+        {
+          "x": 282,
+          "y": 84.72,
+          "z": 448
+        },
+        {
+          "x": 286,
+          "y": 84.72,
+          "z": 440
+        }
+      ]
+    },
+    {
+      "archetypeId": 102,
+      "x": 248,
+      "y": 84.72,
+      "z": 444,
+      "yaw": 2.7,
+      "patrolPoints": [
+        {
+          "x": 248,
+          "y": 84.72,
+          "z": 444
+        },
+        {
+          "x": 240,
+          "y": 84.72,
+          "z": 438
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 240,
+      "y": 84.72,
+      "z": 438,
+      "yaw": 2.95,
+      "patrolPoints": [
+        {
+          "x": 240,
+          "y": 84.72,
+          "z": 438
+        },
+        {
+          "x": 236,
+          "y": 84.72,
+          "z": 430
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 236,
+      "y": 84.72,
+      "z": 430,
+      "yaw": 3.14,
+      "patrolPoints": [
+        {
+          "x": 236,
+          "y": 84.72,
+          "z": 430
+        },
+        {
+          "x": 244,
+          "y": 84.72,
+          "z": 422
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 244,
+      "y": 84.72,
+      "z": 424,
+      "yaw": 3.45,
+      "patrolPoints": [
+        {
+          "x": 244,
+          "y": 84.72,
+          "z": 424
+        },
+        {
+          "x": 252,
+          "y": 84.72,
+          "z": 418
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 256,
+      "y": 84.72,
+      "z": 420,
+      "yaw": 3.72,
+      "patrolPoints": [
+        {
+          "x": 256,
+          "y": 84.72,
+          "z": 420
+        },
+        {
+          "x": 264,
+          "y": 84.72,
+          "z": 424
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 270,
+      "y": 84.72,
+      "z": 424,
+      "yaw": 0.2,
+      "patrolPoints": [
+        {
+          "x": 270,
+          "y": 84.72,
+          "z": 424
+        },
+        {
+          "x": 278,
+          "y": 84.72,
+          "z": 426
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 278,
+      "y": 84.72,
+      "z": 430,
+      "yaw": 0.35,
+      "patrolPoints": [
+        {
+          "x": 278,
+          "y": 84.72,
+          "z": 430
+        },
+        {
+          "x": 284,
+          "y": 84.72,
+          "z": 434
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 286,
+      "y": 84.72,
+      "z": 436,
+      "yaw": 0.55,
+      "patrolPoints": [
+        {
+          "x": 286,
+          "y": 84.72,
+          "z": 436
+        },
+        {
+          "x": 290,
+          "y": 84.72,
+          "z": 444
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 290,
+      "y": 84.72,
+      "z": 444,
+      "yaw": 0.7,
+      "patrolPoints": [
+        {
+          "x": 290,
+          "y": 84.72,
+          "z": 444
+        },
+        {
+          "x": 284,
+          "y": 84.72,
+          "z": 452
+        }
+      ]
+    },
+    {
+      "archetypeId": 102,
+      "x": 284,
+      "y": 84.72,
+      "z": 452,
+      "yaw": 1.05,
+      "patrolPoints": [
+        {
+          "x": 284,
+          "y": 84.72,
+          "z": 452
+        },
+        {
+          "x": 274,
+          "y": 84.72,
+          "z": 456
+        }
+      ]
+    },
+    {
+      "archetypeId": 102,
+      "x": 272,
+      "y": 84.72,
+      "z": 456,
+      "yaw": 1.6,
+      "patrolPoints": [
+        {
+          "x": 272,
+          "y": 84.72,
+          "z": 456
+        },
+        {
+          "x": 262,
+          "y": 84.72,
+          "z": 454
+        }
+      ]
+    },
+    {
+      "archetypeId": 102,
+      "x": 260,
+      "y": 84.72,
+      "z": 454,
+      "yaw": 1.9,
+      "patrolPoints": [
+        {
+          "x": 260,
+          "y": 84.72,
+          "z": 454
+        },
+        {
+          "x": 250,
+          "y": 84.72,
+          "z": 450
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 248,
+      "y": 84.72,
+      "z": 450,
+      "yaw": 2.2,
+      "patrolPoints": [
+        {
+          "x": 248,
+          "y": 84.72,
+          "z": 450
+        },
+        {
+          "x": 240,
+          "y": 84.72,
+          "z": 446
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 238,
+      "y": 84.72,
+      "z": 446,
+      "yaw": 2.55,
+      "patrolPoints": [
+        {
+          "x": 238,
+          "y": 84.72,
+          "z": 446
+        },
+        {
+          "x": 232,
+          "y": 84.72,
+          "z": 438
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 232,
+      "y": 84.72,
+      "z": 438,
+      "yaw": 2.9,
+      "patrolPoints": [
+        {
+          "x": 232,
+          "y": 84.72,
+          "z": 438
+        },
+        {
+          "x": 236,
+          "y": 84.72,
+          "z": 430
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": -42,
+      "y": 20.58,
+      "z": -34,
+      "yaw": 0.4,
+      "patrolPoints": [
+        {
+          "x": -42,
+          "y": 20.58,
+          "z": -34
+        },
+        {
+          "x": -30,
+          "y": 20.58,
+          "z": -28
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": -28,
+      "y": 24.47,
+      "z": -46,
+      "yaw": 0.2,
+      "patrolPoints": [
+        {
+          "x": -28,
+          "y": 24.47,
+          "z": -46
+        },
+        {
+          "x": -14,
+          "y": 24.47,
+          "z": -42
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": -12,
+      "y": 29.4,
+      "z": -52,
+      "yaw": 0,
+      "patrolPoints": [
+        {
+          "x": -12,
+          "y": 29.4,
+          "z": -52
+        },
+        {
+          "x": 4,
+          "y": 29.4,
+          "z": -46
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 8,
+      "y": 29.51,
+      "z": -48,
+      "yaw": 5.9,
+      "patrolPoints": [
+        {
+          "x": 8,
+          "y": 29.51,
+          "z": -48
+        },
+        {
+          "x": 22,
+          "y": 29.51,
+          "z": -38
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 26,
+      "y": 28.33,
+      "z": -40,
+      "yaw": 5.7,
+      "patrolPoints": [
+        {
+          "x": 26,
+          "y": 28.33,
+          "z": -40
+        },
+        {
+          "x": 38,
+          "y": 28.33,
+          "z": -28
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 44,
+      "y": 30.93,
+      "z": -28,
+      "yaw": 5.2,
+      "patrolPoints": [
+        {
+          "x": 44,
+          "y": 30.93,
+          "z": -28
+        },
+        {
+          "x": 50,
+          "y": 30.93,
+          "z": -12
+        }
+      ]
+    },
+    {
+      "archetypeId": 100,
+      "x": 54,
+      "y": 32.43,
+      "z": -10,
+      "yaw": 4.8,
+      "patrolPoints": [
+        {
+          "x": 54,
+          "y": 32.43,
+          "z": -10
+        },
+        {
+          "x": 48,
+          "y": 32.43,
+          "z": 6
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 50,
+      "y": 30.14,
+      "z": 12,
+      "yaw": 4.4,
+      "patrolPoints": [
+        {
+          "x": 50,
+          "y": 30.14,
+          "z": 12
+        },
+        {
+          "x": 38,
+          "y": 30.14,
+          "z": 24
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 36,
+      "y": 22.89,
+      "z": 30,
+      "yaw": 4,
+      "patrolPoints": [
+        {
+          "x": 36,
+          "y": 22.89,
+          "z": 30
+        },
+        {
+          "x": 20,
+          "y": 22.89,
+          "z": 36
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": 16,
+      "y": 11.42,
+      "z": 42,
+      "yaw": 3.7,
+      "patrolPoints": [
+        {
+          "x": 16,
+          "y": 11.42,
+          "z": 42
+        },
+        {
+          "x": 0,
+          "y": 11.42,
+          "z": 44
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": -8,
+      "y": 2.11,
+      "z": 48,
+      "yaw": 3.3,
+      "patrolPoints": [
+        {
+          "x": -8,
+          "y": 2.11,
+          "z": 48
+        },
+        {
+          "x": -22,
+          "y": 2.11,
+          "z": 42
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": -30,
+      "y": 0.68,
+      "z": 40,
+      "yaw": 2.9,
+      "patrolPoints": [
+        {
+          "x": -30,
+          "y": 0.68,
+          "z": 40
+        },
+        {
+          "x": -42,
+          "y": 0.68,
+          "z": 28
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": -48,
+      "y": 7.75,
+      "z": 24,
+      "yaw": 2.5,
+      "patrolPoints": [
+        {
+          "x": -48,
+          "y": 7.75,
+          "z": 24
+        },
+        {
+          "x": -52,
+          "y": 7.75,
+          "z": 8
+        }
+      ]
+    },
+    {
+      "archetypeId": 101,
+      "x": -56,
+      "y": 6.01,
+      "z": 2,
+      "yaw": 2.1,
+      "patrolPoints": [
+        {
+          "x": -56,
+          "y": 6.01,
+          "z": 2
+        },
+        {
+          "x": -48,
+          "y": 6.01,
+          "z": -12
+        }
+      ]
+    },
+    {
+      "archetypeId": 102,
+      "x": -50,
+      "y": 13.74,
+      "z": -20,
+      "yaw": 1.7,
+      "patrolPoints": []
+    },
+    {
+      "archetypeId": 102,
+      "x": -34,
+      "y": 11.15,
+      "z": -8,
+      "yaw": 1.2,
+      "patrolPoints": []
+    },
+    {
+      "archetypeId": 102,
+      "x": -18,
+      "y": 5,
+      "z": 14,
+      "yaw": 0.8,
+      "patrolPoints": []
+    },
+    {
+      "archetypeId": 102,
+      "x": 4,
+      "y": 9.29,
+      "z": 22,
+      "yaw": 0.4,
+      "patrolPoints": []
+    },
+    {
+      "archetypeId": 102,
+      "x": 24,
+      "y": 26.36,
+      "z": 8,
+      "yaw": 5.8,
+      "patrolPoints": []
+    },
+    {
+      "archetypeId": 102,
+      "x": 38,
+      "y": 31.79,
+      "z": -12,
+      "yaw": 5.3,
+      "patrolPoints": []
+    }
+  ],
+  "projectileKinds": [
+    {
+      "kind": 1,
+      "modelId": 4
+    }
+  ]
+}

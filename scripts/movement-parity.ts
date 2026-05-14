@@ -1,12 +1,12 @@
 // Deterministic parity harness validating client prediction and server authority movement alignment.
 import process from "node:process";
 import RAPIER from "@dimforge/rapier3d-compat";
-import { LocalPhysicsWorld } from "../src/client/runtime/LocalPhysicsWorld";
-import type { MovementInput } from "../src/client/runtime/types";
-import { PlayerMovementSystem } from "../src/server/movement/PlayerMovementSystem";
-import { PlatformSystem } from "../src/server/platform/PlatformSystem";
-import { WorldBootstrapSystem } from "../src/server/world/WorldBootstrapSystem";
-import { LocationRootSystem } from "../src/server/location/LocationRootSystem";
+import { LocalPhysicsWorld } from "../src/engine/client/runtime/LocalPhysicsWorld";
+import type { MovementInput } from "../src/engine/client/runtime/types";
+import { PlayerMovementSystem } from "../src/engine/server/movement/PlayerMovementSystem";
+import { PlatformSystem } from "../src/engine/server/platform/PlatformSystem";
+import { WorldBootstrapSystem } from "../src/engine/server/world/WorldBootstrapSystem";
+import { LocationRootSystem } from "../src/engine/server/location/LocationRootSystem";
 import {
   GROUND_CONTACT_MIN_NORMAL_Y,
   MOVEMENT_MODE_FLYING,
@@ -26,7 +26,7 @@ import {
   toggleMovementMode,
   stepHorizontalMovement,
   type MovementMode
-} from "../src/shared/index";
+} from "../src/engine/shared/index";
 
 type MovementFrame = {
   movement: MovementInput;

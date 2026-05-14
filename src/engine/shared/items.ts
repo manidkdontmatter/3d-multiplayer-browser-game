@@ -1,5 +1,5 @@
 // Shared item archetype, inventory, equipment, and interaction helpers for client/server gameplay.
-import itemArchetypesRaw from "../../data/archetypes/item-archetypes.json";
+// Archetype data is injected by the game layer at startup via injectItemCatalog().
 
 export type ItemCategory = "consumable" | "equipment" | "material" | "quest";
 export type EquipmentSlot = "weapon" | "head" | "body" | "legs" | "accessory";
@@ -71,7 +71,7 @@ const WIRE_VALUE_TO_EQUIPMENT_SLOT = new Map<number, EquipmentSlot>(
   Object.entries(EQUIPMENT_SLOT_WIRE_VALUE).map(([slot, value]) => [value, slot as EquipmentSlot])
 );
 
-type ItemCatalogRaw = {
+export type ItemCatalogRaw = {
   version: unknown;
   inventory?: {
     maxSlots?: unknown;
@@ -80,19 +80,21 @@ type ItemCatalogRaw = {
   starterWorldItems?: unknown;
 };
 
-const parsedItemCatalog = parseItemCatalog(itemArchetypesRaw as ItemCatalogRaw);
-const ITEM_DEFINITIONS: ReadonlyArray<ItemArchetypeDefinition> = Object.freeze(parsedItemCatalog.items);
-const ITEM_DEFINITIONS_BY_ID = new Map<number, ItemArchetypeDefinition>(
-  ITEM_DEFINITIONS.map((item) => [item.id, item])
-);
-const ITEM_DEFINITIONS_BY_MODEL_ID = new Map<number, ItemArchetypeDefinition>(
-  ITEM_DEFINITIONS.map((item) => [item.modelId, item])
-);
+// Mutable catalog — populated by injectItemCatalog() which the game layer calls at startup.
+let ITEM_DEFINITIONS: ReadonlyArray<ItemArchetypeDefinition> = Object.freeze([]);
+let ITEM_DEFINITIONS_BY_ID = new Map<number, ItemArchetypeDefinition>();
+let ITEM_DEFINITIONS_BY_MODEL_ID = new Map<number, ItemArchetypeDefinition>();
+export let INVENTORY_MAX_SLOTS = 32;
+export let STARTER_WORLD_ITEMS: ReadonlyArray<StarterWorldItemDefinition> = Object.freeze([]);
 
-export const INVENTORY_MAX_SLOTS = parsedItemCatalog.maxSlots;
-export const STARTER_WORLD_ITEMS: ReadonlyArray<StarterWorldItemDefinition> = Object.freeze(
-  parsedItemCatalog.starterWorldItems
-);
+export function injectItemCatalog(raw: ItemCatalogRaw): void {
+  const parsed = parseItemCatalog(raw);
+  ITEM_DEFINITIONS = Object.freeze(parsed.items);
+  ITEM_DEFINITIONS_BY_ID = new Map(parsed.items.map((item) => [item.id, item]));
+  ITEM_DEFINITIONS_BY_MODEL_ID = new Map(parsed.items.map((item) => [item.modelId, item]));
+  INVENTORY_MAX_SLOTS = parsed.maxSlots;
+  STARTER_WORLD_ITEMS = Object.freeze(parsed.starterWorldItems);
+}
 
 export function getAllItemDefinitions(): ReadonlyArray<ItemArchetypeDefinition> {
   return ITEM_DEFINITIONS;

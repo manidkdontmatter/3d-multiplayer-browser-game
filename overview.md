@@ -96,7 +96,7 @@ Runtime entry points:
 - `src/game/client`: game-specific UI, HUD, visual customization
 - `src/game/server`: game-specific server behavior, map configs
 - `src/orchestrator`: control-plane HTTP server for auth/map-transfer/persistence
-- `src/client/assets`: asset manifest + preload/cache utilities
+- `src/engine/client/assets`: asset manifest + preload/cache utilities
 - `public/assets`: browser-served runtime assets
 - `scripts`: test/automation scripts
 - `docs`: local reference docs for nengi/Three.js/Rapier

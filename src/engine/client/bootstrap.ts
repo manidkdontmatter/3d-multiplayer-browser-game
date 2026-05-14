@@ -1,3 +1,4 @@
+import { initializeGameData } from "../../game/shared/index";
 import { preloadCoreAssets } from "./assets/assetLoader";
 import { GameClientApp } from "./runtime/GameClientApp";
 import type { ClientCreatePhase } from "./runtime/GameClientApp";
@@ -24,6 +25,8 @@ export async function bootstrapClient(): Promise<void> {
   overlay.setProgress(0.02);
 
   try {
+    initializeGameData();
+
     overlay.setStage("Loading core assets");
     await preloadCoreAssets({
       onProgress: (progress) => {

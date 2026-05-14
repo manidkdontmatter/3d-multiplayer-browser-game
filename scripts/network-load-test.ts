@@ -15,8 +15,8 @@ import {
   ncontext,
   NType,
   type InputCommand
-} from "../src/shared/index";
-import { GameServer } from "../src/server/GameServer";
+} from "../src/engine/shared/index";
+import { GameServer } from "../src/engine/server/GameServer";
 
 type Mode = "benchmark" | "hosted";
 

@@ -23,9 +23,9 @@ function assertNoForbiddenImports(path: string, forbidden: readonly string[]): v
 
 function main(): void {
   const ecsCoreFiles = [
-    "src/server/ecs/SimulationEcsStore.ts",
-    "src/server/ecs/SimulationEcsIndexRegistry.ts",
-    "src/server/ecs/SimulationEcsProjectors.ts"
+    "src/engine/server/ecs/SimulationEcsStore.ts",
+    "src/engine/server/ecs/SimulationEcsIndexRegistry.ts",
+    "src/engine/server/ecs/SimulationEcsProjectors.ts"
   ] as const;
 
   const forbiddenCrossLayerTokens = [
@@ -42,7 +42,7 @@ function main(): void {
     assertNoForbiddenImports(file, forbiddenCrossLayerTokens);
   }
 
-  const ecsFacade = read("src/server/ecs/SimulationEcs.ts");
+  const ecsFacade = read("src/engine/server/ecs/SimulationEcs.ts");
   assert(!ecsFacade.includes("Object.defineProperty"), "SimulationEcs.ts must not use property descriptor mutation");
 
   for (const file of ecsCoreFiles) {
@@ -51,7 +51,7 @@ function main(): void {
     assert(!content.includes("new Proxy("), `${file} must not use Proxy-based state mutation`);
   }
 
-  const gameClientApp = read("src/client/runtime/GameClientApp.ts");
+  const gameClientApp = read("src/engine/client/runtime/GameClientApp.ts");
   assert(
     gameClientApp.includes("yaw: this.input.getYaw()"),
     "GameClientApp.getRenderPose must source yaw from InputController"
@@ -91,7 +91,7 @@ function main(): void {
     "GameClientApp must not directly construct ReconciliationSmoother"
   );
 
-  const ackBuffer = read("src/client/runtime/network/AckReconciliationBuffer.ts");
+  const ackBuffer = read("src/engine/client/runtime/network/AckReconciliationBuffer.ts");
   assert(
     !ackBuffer.includes("yaw: message.yaw"),
     "AckReconciliationBuffer must not apply ack yaw to reconciliation state"
@@ -105,7 +105,7 @@ function main(): void {
     "AckReconciliationBuffer must not apply ack-driven platform yaw carry"
   );
 
-  const sharedNetcode = read("src/shared/netcode.ts");
+  const sharedNetcode = read("src/engine/shared/netcode.ts");
   const inputAckSchemaStart = sharedNetcode.indexOf("export const inputAckMessageSchema = defineSchema({");
   const inputAckSchemaEnd = sharedNetcode.indexOf("});", inputAckSchemaStart);
   assert(inputAckSchemaStart >= 0 && inputAckSchemaEnd > inputAckSchemaStart, "Failed to locate InputAck schema");
@@ -142,13 +142,13 @@ function main(): void {
     "InputAckMessage interface must not include platformYawDelta"
   );
 
-  const serverInputSystem = read("src/server/input/InputSystem.ts");
+  const serverInputSystem = read("src/engine/server/input/InputSystem.ts");
   assert(
     !serverInputSystem.includes("LoadoutCommand"),
     "InputSystem must not parse or depend on LoadoutCommand wire types"
   );
 
-  const gameSimulation = read("src/server/GameSimulation.ts");
+  const gameSimulation = read("src/engine/server/GameSimulation.ts");
   assert(
     !gameSimulation.includes('from "./netcode/ReplicationMessagingSystem"'),
     "GameSimulation must not import ReplicationMessagingSystem directly"
@@ -166,35 +166,35 @@ function main(): void {
     "GameSimulation must keep player-session lifecycle wiring behind a dedicated factory method"
   );
 
-  const networkClient = read("src/client/runtime/NetworkClient.ts");
+  const networkClient = read("src/engine/client/runtime/NetworkClient.ts");
   assert(
     !networkClient.includes("LocalPhysicsWorld"),
     "NetworkClient must not import or reference LocalPhysicsWorld"
   );
 
-  const clientOrchestrator = read("src/client/runtime/network/ClientNetworkOrchestrator.ts");
+  const clientOrchestrator = read("src/engine/client/runtime/network/ClientNetworkOrchestrator.ts");
   assert(
     clientOrchestrator.includes("consumeReconciliationFrame"),
     "ClientNetworkOrchestrator must own reconciliation-frame consumption"
   );
 
-  const sharedPlatforms = read("src/shared/platforms.ts");
+  const sharedPlatforms = read("src/engine/shared/platforms.ts");
   assert(
-    sharedPlatforms.includes("platform-archetypes.json"),
-    "Shared platform definitions must be sourced from data/archetypes/platform-archetypes.json"
+    sharedPlatforms.includes("injectPlatformCatalog"),
+    "Shared platform definitions must be injected via injectPlatformCatalog() from game layer"
   );
   assert(
     !sharedPlatforms.includes("export const PLATFORM_DEFINITIONS: PlatformDefinition[] = ["),
-    "PLATFORM_DEFINITIONS must not be a hardcoded array in src/shared/platforms.ts"
+    "PLATFORM_DEFINITIONS must not be a hardcoded array in src/engine/shared/platforms.ts"
   );
 
-  const serverArchetypeCatalog = read("src/server/content/ArchetypeCatalog.ts");
+  const serverArchetypeCatalog = read("src/engine/server/content/ArchetypeCatalog.ts");
   assert(
     serverArchetypeCatalog.includes("PLATFORM_DEFINITIONS"),
     "Server archetype catalog must use shared PLATFORM_DEFINITIONS for platform content"
   );
 
-  const serverArchetypes = JSON.parse(read("data/archetypes/server-archetypes.json")) as Record<string, unknown>;
+  const serverArchetypes = JSON.parse(read("src/game/shared/archetypes/server-archetypes.json")) as Record<string, unknown>;
   assert(
     !Object.prototype.hasOwnProperty.call(serverArchetypes, "platforms"),
     "server-archetypes.json must not duplicate platform definitions; use platform-archetypes.json"

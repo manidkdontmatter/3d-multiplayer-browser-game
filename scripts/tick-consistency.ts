@@ -5,9 +5,9 @@ import path from "node:path";
 import process from "node:process";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { init as initNavigation } from "recast-navigation";
-import { ncontext } from "../src/shared/netcode";
-import { GameServer } from "../src/server/GameServer";
-import { SERVER_TICK_RATE } from "../src/shared/config";
+import { ncontext } from "../src/engine/shared/netcode";
+import { GameServer } from "../src/engine/server/GameServer";
+import { SERVER_TICK_RATE } from "../src/engine/shared/config";
 
 const OUTPUT_DIR = path.join(process.cwd(), "output", "tick-consistency");
 const WARMUP_SECONDS = 5;

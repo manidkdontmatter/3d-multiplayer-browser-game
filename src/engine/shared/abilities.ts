@@ -9,7 +9,8 @@ import {
   ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY,
   type AbilityCreatorType
 } from "./abilityCreator";
-import abilityArchetypesRaw from "../../data/archetypes/ability-archetypes.json";
+// Archetype data is injected by the game layer at startup via injectAbilityCatalog().
+// All lookup functions return empty/null results until the catalog is initialized.
 
 export type AbilityCategory =
   | "projectile"
@@ -169,7 +170,7 @@ const ABILITY_ATTRIBUTE_BY_KEY = new Map(
   ABILITY_ATTRIBUTE_DEFINITIONS.map((attribute) => [attribute.key, attribute])
 );
 
-type AbilityArchetypeCatalogRaw = {
+export type AbilityArchetypeCatalogRaw = {
   version: unknown;
   baseAbilities: unknown;
   defaults: {
@@ -180,28 +181,23 @@ type AbilityArchetypeCatalogRaw = {
   };
 };
 
-const parsedAbilityArchetypes = parseAbilityArchetypes(abilityArchetypesRaw as AbilityArchetypeCatalogRaw);
-const ABILITY_DEFINITIONS: ReadonlyArray<AbilityDefinition> = Object.freeze(parsedAbilityArchetypes.baseAbilities);
+// Mutable catalog — populated by injectAbilityCatalog() which the game layer calls at startup.
+let ABILITY_DEFINITIONS: ReadonlyArray<AbilityDefinition> = Object.freeze([]);
+let ABILITY_DEFINITIONS_BY_ID = new Map<number, AbilityDefinition>();
+export let DEFAULT_HOTBAR_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([]);
+export let DEFAULT_UNLOCKED_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([]);
+export let DEFAULT_PRIMARY_MOUSE_SLOT = 0;
+export let DEFAULT_SECONDARY_MOUSE_SLOT = 1;
 
-const ABILITY_DEFINITIONS_BY_ID = new Map<number, AbilityDefinition>(
-  ABILITY_DEFINITIONS.map((ability) => [ability.id, ability])
-);
-
-export const DEFAULT_HOTBAR_ABILITY_IDS: ReadonlyArray<number> = Object.freeze(
-  parsedAbilityArchetypes.defaults.hotbarAbilityIds
-);
-
-export const DEFAULT_UNLOCKED_ABILITY_IDS: ReadonlyArray<number> = Object.freeze(
-  parsedAbilityArchetypes.defaults.unlockedAbilityIds
-);
-
-export const DEFAULT_PRIMARY_MOUSE_SLOT = clampHotbarSlotIndex(
-  parsedAbilityArchetypes.defaults.primaryMouseSlot
-);
-
-export const DEFAULT_SECONDARY_MOUSE_SLOT = clampHotbarSlotIndex(
-  parsedAbilityArchetypes.defaults.secondaryMouseSlot
-);
+export function injectAbilityCatalog(raw: AbilityArchetypeCatalogRaw): void {
+  const parsed = parseAbilityArchetypes(raw);
+  ABILITY_DEFINITIONS = Object.freeze(parsed.baseAbilities);
+  ABILITY_DEFINITIONS_BY_ID = new Map(parsed.baseAbilities.map((a) => [a.id, a]));
+  DEFAULT_HOTBAR_ABILITY_IDS = Object.freeze(parsed.defaults.hotbarAbilityIds);
+  DEFAULT_UNLOCKED_ABILITY_IDS = Object.freeze(parsed.defaults.unlockedAbilityIds);
+  DEFAULT_PRIMARY_MOUSE_SLOT = clampHotbarSlotIndex(parsed.defaults.primaryMouseSlot);
+  DEFAULT_SECONDARY_MOUSE_SLOT = clampHotbarSlotIndex(parsed.defaults.secondaryMouseSlot);
+}
 
 export function getAllAbilityDefinitions(): ReadonlyArray<AbilityDefinition> {
   return ABILITY_DEFINITIONS;

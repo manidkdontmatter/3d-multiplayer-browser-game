@@ -5,10 +5,10 @@ import {
   type InputAckMessage,
   type AbilityDefinitionMessage,
   type AbilityStateMessage
-} from "../src/shared/netcode";
-import { AckReconciliationBuffer } from "../src/client/runtime/network/AckReconciliationBuffer";
-import { InterpolationController } from "../src/client/runtime/network/InterpolationController";
-import { AbilityStateStore } from "../src/client/runtime/network/AbilityStateStore";
+} from "../src/engine/shared/netcode";
+import { AckReconciliationBuffer } from "../src/engine/client/runtime/network/AckReconciliationBuffer";
+import { InterpolationController } from "../src/engine/client/runtime/network/InterpolationController";
+import { AbilityStateStore } from "../src/engine/client/runtime/network/AbilityStateStore";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {

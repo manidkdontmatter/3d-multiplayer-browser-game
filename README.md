@@ -34,9 +34,10 @@ Authoritative server/browser-client scaffold using:
 ## Notes
 
 - Single entry points:
-  - client: `src/client/main.ts`
-  - server: `src/server/main.ts`
-- Shared protocol/schemas live in `src/shared`.
+  - client: `src/engine/client/main.ts`
+  - server: `src/engine/server/main.ts`
+- Engine shared protocol/schemas live in `src/engine/shared`.
+- Game-specific definitions live in `src/game/`.
 - Client defaults to orchestrator bootstrap at `http://localhost:9000` and then connects to assigned map WS endpoint.
 - Override direct map server URL in browser with `?server=ws://HOST:PORT`.
 - Override orchestrator URL in browser with `?orchestrator=http://HOST:PORT`.
