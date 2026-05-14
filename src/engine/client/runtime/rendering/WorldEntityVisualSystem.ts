@@ -178,7 +178,7 @@ export class WorldEntityVisualSystem {
         mesh = new Mesh(
           new CylinderGeometry(radius, radius, height, 14, 1),
           new MeshStandardMaterial({
-            color: npcVisual?.color ?? 0xd89572,
+            color: npcVisual?.color ?? 0x888888,
             roughness: npcVisual?.roughness ?? 0.82,
             metalness: npcVisual?.metalness ?? 0.08
           })
@@ -189,7 +189,7 @@ export class WorldEntityVisualSystem {
       const healthRatio =
         npc.maxHealth > 0 ? Math.max(0, Math.min(1, npc.health / npc.maxHealth)) : 1;
       const material = mesh.material as MeshStandardMaterial;
-      const npcColor = getNpcVisual(npc.modelId)?.color ?? 0xd89572;
+      const npcColor = getNpcVisual(npc.modelId)?.color ?? 0x888888;
       material.color.set(npcColor).multiplyScalar(0.45 + healthRatio * 0.55);
       mesh.position.set(npc.x, npc.y, npc.z);
       this.quatScratch.set(npc.rotation.x, npc.rotation.y, npc.rotation.z, npc.rotation.w);
@@ -276,7 +276,7 @@ export class WorldEntityVisualSystem {
   private createWorldItemMesh(modelId: number): Mesh {
     const visual = getItemVisual(modelId);
     if (!visual) {
-      return new Mesh(new BoxGeometry(0.22, 0.22, 0.22), new MeshStandardMaterial({ color: 0xe2d39a }));
+      return new Mesh(new BoxGeometry(0.22, 0.22, 0.22), new MeshStandardMaterial({ color: 0x888888 }));
     }
     const geometry = this.buildGeometry(visual.geometry, visual.geometryParams);
     return new Mesh(

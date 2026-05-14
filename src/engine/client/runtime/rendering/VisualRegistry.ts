@@ -50,13 +50,40 @@ export interface DummyVisualDef {
   metalness: number;
 }
 
+export interface FallbackAvatarVisualDef {
+  bodyColor: number;
+  bodyRoughness: number;
+  bodyMetalness: number;
+  visorColor: number;
+  visorRoughness: number;
+  visorMetalness: number;
+}
+
+export interface PropColorDef {
+  treeTrunk: number;
+  treeCanopy: number;
+  rock: number;
+  bush: number;
+}
+
 export interface VisualPalette {
   platforms: ReadonlyMap<number, PlatformVisualDef>;
   npcs: ReadonlyMap<number, NpcVisualDef>;
   items: ReadonlyMap<number, ItemVisualDef>;
-  locations: ReadonlyMap<string, LocationVisualDef>; // keyed by location kind string
+  locations: ReadonlyMap<string, LocationVisualDef>;
   dummy: DummyVisualDef;
+  fallbackAvatar: FallbackAvatarVisualDef;
+  propColors: PropColorDef;
 }
+
+const DEFAULT_FALLBACK_AVATAR: FallbackAvatarVisualDef = {
+  bodyColor: 0x888888, bodyRoughness: 0.94, bodyMetalness: 0.01,
+  visorColor: 0x444444, visorRoughness: 0.35, visorMetalness: 0.15
+};
+
+const DEFAULT_PROP_COLORS: PropColorDef = {
+  treeTrunk: 0x6f4b2e, treeCanopy: 0x2f7838, rock: 0x73777f, bush: 0x3e8a45
+};
 
 const DEFAULT_DUMMY: DummyVisualDef = {
   radius: 0.42, height: 1.9, segments: 12,
@@ -68,16 +95,24 @@ let _palette: VisualPalette = {
   npcs: new Map(),
   items: new Map(),
   locations: new Map(),
-  dummy: DEFAULT_DUMMY
+  dummy: DEFAULT_DUMMY,
+  fallbackAvatar: DEFAULT_FALLBACK_AVATAR,
+  propColors: DEFAULT_PROP_COLORS
 };
 
-export function injectVisualPalette(palette: Partial<VisualPalette> & { dummy?: Partial<DummyVisualDef> }): void {
+export function injectVisualPalette(palette: Partial<VisualPalette> & {
+  dummy?: Partial<DummyVisualDef>;
+  fallbackAvatar?: Partial<FallbackAvatarVisualDef>;
+  propColors?: Partial<PropColorDef>;
+}): void {
   _palette = {
-    platforms: palette.platforms ?? new Map(),
-    npcs: palette.npcs ?? new Map(),
-    items: palette.items ?? new Map(),
-    locations: palette.locations ?? new Map(),
-    dummy: palette.dummy ? { ...DEFAULT_DUMMY, ...palette.dummy } : DEFAULT_DUMMY
+    platforms: palette.platforms ?? _palette.platforms,
+    npcs: palette.npcs ?? _palette.npcs,
+    items: palette.items ?? _palette.items,
+    locations: palette.locations ?? _palette.locations,
+    dummy: palette.dummy ? { ...DEFAULT_DUMMY, ...palette.dummy } : _palette.dummy,
+    fallbackAvatar: palette.fallbackAvatar ? { ...DEFAULT_FALLBACK_AVATAR, ...palette.fallbackAvatar } : _palette.fallbackAvatar,
+    propColors: palette.propColors ? { ...DEFAULT_PROP_COLORS, ...palette.propColors } : _palette.propColors
   };
 }
 
@@ -87,6 +122,14 @@ export function getVisualPalette(): VisualPalette {
 
 export function getPlatformVisual(modelId: number): PlatformVisualDef | undefined {
   return _palette.platforms.get(modelId);
+}
+
+export function getFallbackAvatarVisual(): FallbackAvatarVisualDef {
+  return _palette.fallbackAvatar;
+}
+
+export function getPropColors(): PropColorDef {
+  return _palette.propColors;
 }
 
 export function getNpcVisual(modelId: number): NpcVisualDef | undefined {

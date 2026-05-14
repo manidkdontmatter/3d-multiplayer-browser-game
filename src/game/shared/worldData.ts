@@ -1,6 +1,7 @@
 // Game-specific world data injected into engine catalogs at startup.
 import { injectLocationDefinitions } from "../../engine/shared/worldLocations";
 import { injectEnvironmentVolumeDefinitions } from "../../engine/shared/environmentVolumes";
+import { injectMovingLocationCollisionExtents } from "../../engine/shared/worldPhysics";
 import type { LocationRootDefinition, SpawnAnchor } from "../../engine/shared/worldLocations";
 import type { EnvironmentVolumeDefinition } from "../../engine/shared/environmentVolumes";
 import {
@@ -308,7 +309,13 @@ const VOID_ENVIRONMENT_VOLUME_DEFINITIONS: readonly EnvironmentVolumeDefinition[
   }
 ];
 
+const MOVING_LOCATION_COLLISION_EXTENTS = new Map([
+  ["movingCastle", { halfX: 42, halfY: 9, halfZ: 28 }],
+  ["movingTestPlatform", { halfX: 60, halfY: 0.5, halfZ: 35 }]
+]);
+
 export function initWorldData(): void {
   injectLocationDefinitions(VOID_LOCATION_DEFINITIONS, DEFAULT_VOID_SPAWN_ANCHOR);
   injectEnvironmentVolumeDefinitions(VOID_ENVIRONMENT_VOLUME_DEFINITIONS);
+  injectMovingLocationCollisionExtents(MOVING_LOCATION_COLLISION_EXTENTS);
 }

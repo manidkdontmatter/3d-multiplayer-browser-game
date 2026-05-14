@@ -51,6 +51,7 @@ import {
   type VisualGrassInstance
 } from "../../../shared/index";
 import { configureAssetLoaderRenderer, ensureAsset, getLoadedAsset } from "../../assets/assetLoader";
+import { getPropColors } from "./VisualRegistry";
 import {
   WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID,
   WORLD_SKYBOX_1_ASSET_ID,
@@ -725,10 +726,12 @@ export class WorldEnvironment {
     const rocks = props.filter((prop) => prop.kind === "rock");
     const bushes = props.filter((prop) => prop.kind === "bush");
 
+    const propColors = getPropColors();
+
     if (trees.length > 0) {
       const trunkGeometry = new CylinderGeometry(0.2, 0.26, 2.25, 8, 1);
       const trunkMaterial = new MeshStandardMaterial({
-        color: 0x6f4b2e,
+        color: propColors.treeTrunk,
         roughness: 0.94,
         metalness: 0.01
       });
@@ -737,7 +740,7 @@ export class WorldEnvironment {
 
       const canopyGeometry = new ConeGeometry(1.35, 2.9, 9, 1);
       const canopyMaterial = new MeshStandardMaterial({
-        color: 0x2f7838,
+        color: propColors.treeCanopy,
         roughness: 0.88,
         metalness: 0.01
       });
@@ -774,7 +777,7 @@ export class WorldEnvironment {
     if (rocks.length > 0) {
       const rockGeometry = new DodecahedronGeometry(0.85, 0);
       const rockMaterial = new MeshStandardMaterial({
-        color: 0x73777f,
+        color: propColors.rock,
         roughness: 0.93,
         metalness: 0.02
       });
@@ -802,7 +805,7 @@ export class WorldEnvironment {
     if (bushes.length > 0) {
       const bushGeometry = new SphereGeometry(0.72, 10, 8);
       const bushMaterial = new MeshStandardMaterial({
-        color: 0x3e8a45,
+        color: propColors.bush,
         roughness: 0.9,
         metalness: 0.01
       });
@@ -1067,18 +1070,19 @@ diffuseColor.a *= grassFade;`
 
 }
 
+// Neutral fallback — replaced by injectEnvironmentPresets() at startup under normal operation.
 const FALLBACK_PRESET: EnvironmentPreset = {
-  background: new Color(0x090712),
-  fogColor: new Color(0x171126),
-  fogNear: 420,
-  fogFar: 1800,
-  ambientColor: new Color(0xb8c7ff),
-  ambientIntensity: 0.58,
-  sunColor: new Color(0xd8e4ff),
-  sunIntensity: 0.85,
-  exposure: 0.9,
-  vfx: { voidStars: 0.9, heavenMist: 0, infernalNebula: 0, arcaneMotes: 0.2 },
-  sky: { skybox1: 0, skybox2: 0, skybox3: 0, skybox4: 0, skybox5: 1 }
+  background: new Color(0x000000),
+  fogColor: new Color(0x111111),
+  fogNear: 400,
+  fogFar: 1600,
+  ambientColor: new Color(0x444444),
+  ambientIntensity: 0.4,
+  sunColor: new Color(0x666666),
+  sunIntensity: 0.6,
+  exposure: 0.8,
+  vfx: { voidStars: 0.5, heavenMist: 0, infernalNebula: 0, arcaneMotes: 0 },
+  sky: { skybox1: 0, skybox2: 0, skybox3: 0, skybox4: 0, skybox5: 0 }
 };
 
 function requireEnvironmentPreset(id: number): EnvironmentPreset {

@@ -85,7 +85,7 @@ export interface VisualGrassInstance {
 }
 
 export const RUNTIME_MAP_CONFIG_DEFAULTS = {
-  mapId: "sandbox-alpha",
+  mapId: "",
   instanceId: "default-1",
   seed: 1337,
   groundHalfExtent: 384,

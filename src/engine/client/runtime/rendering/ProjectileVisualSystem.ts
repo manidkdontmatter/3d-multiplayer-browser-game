@@ -13,7 +13,7 @@ import {
 import { MODEL_ID_PROJECTILE_PRIMARY } from "../../../shared/index";
 import type { ProjectileState } from "../types";
 
-interface ProjectilePalette {
+export interface ProjectilePalette {
   coreColor: number;
   emissiveColor: number;
   glowColor: number;
@@ -21,23 +21,17 @@ interface ProjectilePalette {
 }
 
 const DEFAULT_PROJECTILE_PALETTE: Readonly<ProjectilePalette> = Object.freeze({
-  coreColor: 0xffdd91,
-  emissiveColor: 0xb46a1d,
-  glowColor: 0xffd06f,
-  burstColor: 0xffd495
+  coreColor: 0xaaaaaa,
+  emissiveColor: 0x666666,
+  glowColor: 0x888888,
+  burstColor: 0x999999
 });
 
-const PROJECTILE_PALETTES = new Map<number, Readonly<ProjectilePalette>>([
-  [
-    MODEL_ID_PROJECTILE_PRIMARY,
-    Object.freeze({
-      coreColor: 0x78dfff,
-      emissiveColor: 0x2d9cc5,
-      glowColor: 0x67d4ff,
-      burstColor: 0x9ce8ff
-    })
-  ]
-]);
+let PROJECTILE_PALETTES = new Map<number, Readonly<ProjectilePalette>>();
+
+export function injectProjectilePalettes(palettes: ReadonlyMap<number, Readonly<ProjectilePalette>>): void {
+  PROJECTILE_PALETTES = new Map(palettes);
+}
 
 const PROJECTILE_VISUAL_POOL_PREWARM = 24;
 const PROJECTILE_SPAWN_BURST_POOL_PREWARM = 12;

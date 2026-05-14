@@ -1,5 +1,6 @@
 // Remote player visual/animation presenter used for replicated character rendering.
 import { Group, Mesh, MeshStandardMaterial, BoxGeometry, CapsuleGeometry, type Object3D, type Scene } from "three";
+import { getFallbackAvatarVisual } from "./VisualRegistry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type VRM, type VRMHumanoid } from "@pixiv/three-vrm";
 import { MOVEMENT_MODE_GROUNDED, PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED } from "../../../shared/index";
@@ -217,15 +218,16 @@ export class RemoteCharacterVisualSystem {
     } else {
       root = new Group();
 
+      const fallback = getFallbackAvatarVisual();
       const capsuleRadius = 0.38;
       const capsuleLength = 1;
       const capsuleHeight = capsuleLength + capsuleRadius * 2;
       const body = new Mesh(
         new CapsuleGeometry(capsuleRadius, capsuleLength, 3, 6),
         new MeshStandardMaterial({
-          color: 0xf4d8b5,
-          roughness: 0.94,
-          metalness: 0.01
+          color: fallback.bodyColor,
+          roughness: fallback.bodyRoughness,
+          metalness: fallback.bodyMetalness
         })
       );
       body.position.y = capsuleHeight * 0.5;
@@ -235,9 +237,9 @@ export class RemoteCharacterVisualSystem {
       const visor = new Mesh(
         new BoxGeometry(visorSize, visorSize, visorSize),
         new MeshStandardMaterial({
-          color: 0x1b1e2e,
-          roughness: 0.35,
-          metalness: 0.15
+          color: fallback.visorColor,
+          roughness: fallback.visorRoughness,
+          metalness: fallback.visorMetalness
         })
       );
       visor.position.set(0, capsuleHeight * 0.75, -(capsuleRadius + visorSize * 0.5));

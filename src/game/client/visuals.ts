@@ -7,13 +7,24 @@ import {
   type ItemVisualDef,
   type LocationVisualDef
 } from "../../engine/client/runtime/rendering/VisualRegistry";
-import { injectEnvironmentPresets, type EnvironmentPreset } from "../../engine/client/runtime/rendering/WorldEnvironment";
+import {
+  injectEnvironmentPresets,
+  type EnvironmentPreset
+} from "../../engine/client/runtime/rendering/WorldEnvironment";
+import {
+  injectProjectilePalettes,
+  type ProjectilePalette
+} from "../../engine/client/runtime/rendering/ProjectileVisualSystem";
 import {
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
   MODEL_ID_NPC_HOSTILE_GUARD,
   MODEL_ID_NPC_DOCILE_FLEE,
-  MODEL_ID_NPC_WANDERER
+  MODEL_ID_NPC_WANDERER,
+  MODEL_ID_ITEM_VITALITY_SHARD,
+  MODEL_ID_ITEM_FOCUS_BLADE,
+  MODEL_ID_ITEM_ETHER_CRYSTAL,
+  MODEL_ID_PROJECTILE_PRIMARY
 } from "../../engine/shared/config";
 import {
   ENVIRONMENT_PRESET_VOID_NEUTRAL,
@@ -35,9 +46,9 @@ const npcs = new Map<number, NpcVisualDef>([
 ]);
 
 const items = new Map<number, ItemVisualDef>([
-  [40, { geometry: "dodecahedron", geometryParams: [0.22, 0], color: 0x74f2b2, roughness: 0.42, metalness: 0.06, emissive: 0x74f2b2, emissiveIntensity: 0.28 }],
-  [41, { geometry: "box", geometryParams: [0.18, 0.9, 0.18], color: 0xbfc7d5, roughness: 0.42, metalness: 0.06 }],
-  [42, { geometry: "dodecahedron", geometryParams: [0.28, 0], color: 0x8fb7ff, roughness: 0.42, metalness: 0.2, emissive: 0x8fb7ff, emissiveIntensity: 0.28 }]
+  [MODEL_ID_ITEM_VITALITY_SHARD, { geometry: "dodecahedron", geometryParams: [0.22, 0], color: 0x74f2b2, roughness: 0.42, metalness: 0.06, emissive: 0x74f2b2, emissiveIntensity: 0.28 }],
+  [MODEL_ID_ITEM_FOCUS_BLADE, { geometry: "box", geometryParams: [0.18, 0.9, 0.18], color: 0xbfc7d5, roughness: 0.42, metalness: 0.06 }],
+  [MODEL_ID_ITEM_ETHER_CRYSTAL, { geometry: "dodecahedron", geometryParams: [0.28, 0], color: 0x8fb7ff, roughness: 0.42, metalness: 0.2, emissive: 0x8fb7ff, emissiveIntensity: 0.28 }]
 ]);
 
 const locations = new Map<string, LocationVisualDef>([
@@ -46,6 +57,12 @@ const locations = new Map<string, LocationVisualDef>([
   ["movingCastle", { kind: "movingCastle", castleBaseColor: 0x253d55, castleAccentColor: 0x75a7c4 }],
   ["movingTestPlatform", { kind: "movingTestPlatform", slabColor: 0x7fc7d9, stripeColor: 0xf2d16b }],
   ["testArena", { kind: "testArena", arenaColor: 0x4e625f, arenaAccentColor: 0xd8b691 }]
+]);
+
+const projectilePalettes = new Map<number, Readonly<ProjectilePalette>>([
+  [MODEL_ID_PROJECTILE_PRIMARY, Object.freeze({
+    coreColor: 0x78dfff, emissiveColor: 0x2d9cc5, glowColor: 0x67d4ff, burstColor: 0x9ce8ff
+  })]
 ]);
 
 const environmentPresets = new Map<number, EnvironmentPreset>([
@@ -84,4 +101,5 @@ const environmentPresets = new Map<number, EnvironmentPreset>([
 export function initVisuals(): void {
   injectVisualPalette({ platforms, npcs, items, locations });
   injectEnvironmentPresets(environmentPresets);
+  injectProjectilePalettes(projectilePalettes);
 }

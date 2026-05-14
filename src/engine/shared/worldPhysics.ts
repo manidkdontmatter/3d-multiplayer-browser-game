@@ -118,15 +118,19 @@ function createCarrierVolumeColliderDesc(volume: CarrierVolumeDefinition): RAPIE
   return RAPIER.ColliderDesc.cuboid(halfX, halfY, halfZ);
 }
 
+let _movingLocationCollisionExtents: ReadonlyMap<string, { halfX: number; halfY: number; halfZ: number }> = new Map();
+
+export function injectMovingLocationCollisionExtents(
+  extents: ReadonlyMap<string, { halfX: number; halfY: number; halfZ: number }>
+): void {
+  _movingLocationCollisionExtents = extents;
+}
+
 function getMovingLocationCollisionHalfExtents(
   definition: LocationRootDefinition
 ): { halfX: number; halfY: number; halfZ: number } {
-  if (definition.kind === "movingCastle") {
-    return { halfX: 42, halfY: 9, halfZ: 28 };
-  }
-  if (definition.kind === "movingTestPlatform") {
-    return { halfX: 60, halfY: 0.5, halfZ: 35 };
-  }
+  const entry = _movingLocationCollisionExtents.get(definition.kind);
+  if (entry) return entry;
   return { halfX: 10, halfY: 4, halfZ: 10 };
 }
 
