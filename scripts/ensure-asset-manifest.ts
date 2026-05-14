@@ -49,7 +49,7 @@ async function checkNeedsBuild(): Promise<boolean> {
   const outputMtime = Math.min(bootstrapStat.mtimeMs, manifestStat.mtimeMs);
   const inputPaths = [
     path.join(repoRoot, "scripts", "build-asset-manifest.ts"),
-    path.join(repoRoot, "src", "client", "assets", "assetManifest.ts"),
+    path.join(repoRoot, "src", "engine", "client", "assets", "assetManifest.ts"),
     ...ASSET_CATALOG.flatMap((entry) => getEntrySourceUrls(entry))
       .map((sourceUrl) => path.join(repoRoot, "public", normalizePublicPath(sourceUrl)))
   ];
