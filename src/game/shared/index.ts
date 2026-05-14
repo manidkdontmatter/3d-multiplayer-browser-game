@@ -23,3 +23,6 @@ export function initializeGameData(): void {
   initAssetCatalog();
   initWorldData();
 }
+
+// Auto-initialize on import — the game entry points rely on this side-effect.
+initializeGameData();

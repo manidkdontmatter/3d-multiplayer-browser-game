@@ -3,7 +3,8 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ASSET_CATALOG, RUNTIME_ASSET_BOOTSTRAP_URL } from "../src/engine/client/assets/assetManifest";
+import { RUNTIME_ASSET_BOOTSTRAP_URL } from "../src/engine/client/assets/assetManifest";
+import { ASSET_CATALOG_DEFINITIONS } from "../src/game/shared/assetCatalog";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,7 +51,7 @@ async function checkNeedsBuild(): Promise<boolean> {
   const inputPaths = [
     path.join(repoRoot, "scripts", "build-asset-manifest.ts"),
     path.join(repoRoot, "src", "engine", "client", "assets", "assetManifest.ts"),
-    ...ASSET_CATALOG.flatMap((entry) => getEntrySourceUrls(entry))
+    ...ASSET_CATALOG_DEFINITIONS.flatMap((entry) => getEntrySourceUrls(entry))
       .map((sourceUrl) => path.join(repoRoot, "public", normalizePublicPath(sourceUrl)))
   ];
 

@@ -31,7 +31,7 @@ function skyboxFaceUrls(folder: string): string[] {
   );
 }
 
-const ASSET_CATALOG_DEFINITIONS: AssetCatalogDefinition[] = [
+export const ASSET_CATALOG_DEFINITIONS: AssetCatalogDefinition[] = [
   {
     id: CHARACTER_MALE_ASSET_ID,
     label: "CoolAlien VRM Character",

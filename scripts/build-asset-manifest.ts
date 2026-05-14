@@ -10,12 +10,12 @@ import { EXTMeshoptCompression } from "@gltf-transform/extensions";
 import { meshopt } from "@gltf-transform/functions";
 import { MeshoptEncoder } from "meshoptimizer";
 import {
-  ASSET_CATALOG,
   type AssetCatalogDefinition,
   type RuntimeAssetDefinition,
   type RuntimeAssetManifest,
   type RuntimeManifestBootstrap
 } from "../src/engine/client/assets/assetManifest";
+import { ASSET_CATALOG_DEFINITIONS } from "../src/game/shared/assetCatalog";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
   await copyBasisTranscoderRuntime();
 
   const definitions: RuntimeAssetDefinition[] = [];
-  for (const entry of ASSET_CATALOG) {
+  for (const entry of ASSET_CATALOG_DEFINITIONS) {
     const definition = await buildRuntimeDefinition(entry);
     definitions.push(definition);
   }
