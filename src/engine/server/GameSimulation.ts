@@ -43,6 +43,9 @@ import { CharacterMovementSystem } from "./movement/CharacterMovementSystem";
 import { CharacterNavigationPlanner } from "./navigation/NavigationService";
 import { buildServerNavigationWorld, type NavigationBuildReport } from "./navigation/NavigationWorldBuilder";
 import type { PlayerStateSnapshot, ReplicationSnapshot } from "./ecs/SimulationEcsTypes";
+import { EventBus } from "./events/EventBus";
+import { GameEvent, type PlayerMovedPayload, type PlayerSpawnedPayload, type PlayerDespawnedPayload, type DamageDealtPayload, type HealthChangedPayload, type AbilityUsedPayload } from "./events/GameEvents";
+import { StatusEffectSystem } from "./combat/status/StatusEffectSystem";
 
 type UserLike = {
   id: number; queueMessage: (message: unknown) => void; accountId?: number;
@@ -67,6 +70,8 @@ type CreateUserView = (p: { x: number; y: number; z: number; halfWidth: number; 
 export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
   private readonly world: RAPIER.World;
+  public readonly events = new EventBus();
+  public readonly statusEffects: StatusEffectSystem;
   private readonly simulationEcs = new SimulationEcs();
   private readonly controllerSystem = new ControllerSystem();
   private readonly replication: ServerReplicationCoordinator<UserLike>;
@@ -225,7 +230,14 @@ export class GameSimulation {
     this.abilityExecutionSystem = new AbilityExecutionSystem({
       getElapsedSeconds: () => this.elapsedSeconds,
       resolveAbilityById: (unlockedAbilityIds, abilityId) => this.getAbilityDefinitionForUnlockedSet(unlockedAbilityIds, abilityId),
-      broadcastAbilityUse: (playerNid, ability) => this.replication.broadcastAbilityUseMessage(playerNid, ability),
+      broadcastAbilityUse: (playerNid, ability) => {
+        this.replication.broadcastAbilityUseMessage(playerNid, ability);
+        this.events.emit<AbilityUsedPayload>(GameEvent.ABILITY_USED, {
+          ownerNid: playerNid, abilityId: ability.id,
+          category: ability.category, serverTick: this.tickNumber,
+          x: 0, y: 0, z: 0
+        });
+      },
       spawnProjectile: (req) => this.projectileSystem.spawn(req),
       applyMeleeHit: (playerNid, mp) => {
         const eid = this.simulationEcs.getPlayerEidByNid(playerNid);
@@ -360,20 +372,18 @@ export class GameSimulation {
       resolvePlayerCarriedFramePid: (eid, movedBody, prev) => { const b = this.simulationEcs.getPlayerBody(eid); const cfp2 = c.CarriedFramePid.value[eid]; return b ? this.locationRootSystem.resolveCarriedFramePidForPoint(movedBody, (cfp2 ?? -1) < 0 ? null : (cfp2 ?? null)) : prev; },
       resolvePlatformPidByColliderHandle: (h) => this.platformSystem.resolvePlatformPidByColliderHandle(h),
       onPlayerStepped: (userId, eid) => {
-        const ack = {
-          nid: c.NetworkId.value[eid] ?? 0, lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
+        const ack: PlayerMovedPayload = {
+          userId, eid,
           x: c.Position.x[eid] ?? 0, y: c.Position.y[eid] ?? 0, z: c.Position.z[eid] ?? 0,
           yaw: c.Yaw.value[eid] ?? 0, pitch: c.Pitch.value[eid] ?? 0,
           vx: c.Velocity.x[eid] ?? 0, vy: c.Velocity.y[eid] ?? 0, vz: c.Velocity.z[eid] ?? 0,
           grounded: (c.Grounded.value[eid] ?? 0) !== 0,
           movementMode: (c.MovementMode.value[eid] ?? MOVEMENT_MODE_GROUNDED) as MovementMode,
-          groundedPlatformPid: (c.GroundedPlatformPid.value[eid] ?? -1) < 0 ? null : c.GroundedPlatformPid.value[eid]!,
-          carriedFramePid: (c.CarriedFramePid.value[eid] ?? -1) < 0 ? null : c.CarriedFramePid.value[eid]!
+          groundedPlatformPid: (c.GroundedPlatformPid.value[eid] ?? -1) < 0 ? null : (c.GroundedPlatformPid.value[eid] ?? null),
+          carriedFramePid: (c.CarriedFramePid.value[eid] ?? -1) < 0 ? null : (c.CarriedFramePid.value[eid] ?? null),
+          lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0
         };
-        this.replication.syncUserViewPosition(userId, ack.x, ack.y, ack.z);
-        this.replication.queueInputAckFromState(userId, ack);
-        const aid = this.simulationEcs.getPlayerAccountIdByUserId(userId);
-        if (aid !== null) this.persistenceSyncSystem.markAccountDirty(aid, { dirtyCharacter: true, dirtyAbilityState: false });
+        this.events.emit(GameEvent.PLAYER_MOVED, ack);
       }
     });
 
@@ -396,6 +406,71 @@ export class GameSimulation {
       },
       resolveCharacterCarriedFramePid: (eid, movedBody, prev) => { const b = this.simulationEcs.getCharacterBody(eid); const cfp2 = c.CarriedFramePid.value[eid]; return b ? this.locationRootSystem.resolveCarriedFramePidForPoint(movedBody, (cfp2 ?? -1) < 0 ? null : (cfp2 ?? null)) : prev; },
       resolvePlatformPidByColliderHandle: (h) => this.platformSystem.resolvePlatformPidByColliderHandle(h)
+    });
+
+    // ── Event subscriptions (replaces ad-hoc callback wiring) ──────────────
+    this.events.on<PlayerMovedPayload>(GameEvent.PLAYER_MOVED, (payload) => {
+      this.replication.syncUserViewPosition(payload.userId, payload.x, payload.y, payload.z);
+      this.replication.queueInputAckFromState(payload.userId, {
+        lastProcessedSequence: payload.lastProcessedSequence,
+        x: payload.x, y: payload.y, z: payload.z,
+        yaw: payload.yaw, pitch: payload.pitch,
+        vx: payload.vx, vy: payload.vy, vz: payload.vz,
+        grounded: payload.grounded, movementMode: payload.movementMode,
+        groundedPlatformPid: payload.groundedPlatformPid,
+        carriedFramePid: payload.carriedFramePid
+      });
+      const aid = this.simulationEcs.getPlayerAccountIdByUserId(payload.userId);
+      if (aid !== null) this.persistenceSyncSystem.markAccountDirty(aid, { dirtyCharacter: true, dirtyAbilityState: false });
+    });
+
+    this.events.on<PlayerSpawnedPayload>(GameEvent.PLAYER_SPAWNED, (payload) => {
+      this.replication.queueIdentityMessage(
+        { id: payload.userId, queueMessage: (msg) => { const u = this.usersById.get(payload.userId); if (u) u.queueMessage(msg); } } as UserLike,
+        this.simulationEcs.world.components.NetworkId.value[payload.eid] ?? 0
+      );
+    });
+
+    this.events.on<DamageDealtPayload>(GameEvent.DAMAGE_DEALT, (payload) => {
+      const fromAccount = payload.sourceEid !== null ? this.simulationEcs.world.components.AccountId.value[payload.sourceEid] : undefined;
+      if (typeof fromAccount === "number" && fromAccount > 0) {
+        this.persistenceSyncSystem.markAccountDirty(fromAccount, { dirtyCharacter: true, dirtyAbilityState: false });
+      }
+    });
+
+    this.events.on<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, (payload) => {
+      const accountId = this.simulationEcs.world.components.AccountId.value[payload.eid];
+      if (typeof accountId === "number" && accountId > 0) {
+        this.persistenceSyncSystem.markAccountDirty(accountId, { dirtyCharacter: true, dirtyAbilityState: false });
+      }
+    });
+
+    // ── Status effects ────────────────────────────────────────────────────
+    this.statusEffects = new StatusEffectSystem(c, this.events);
+    this.statusEffects.registerDefinition({
+      id: "burning", key: "burning", name: "Burning", description: "Taking fire damage over time.",
+      durationMs: 3000, tickIntervalMs: 500, maxStacks: 5, stackPolicy: "stack_add",
+      damagePerTick: 5
+    });
+    this.statusEffects.registerDefinition({
+      id: "frozen", key: "frozen", name: "Frozen", description: "Movement speed reduced.",
+      durationMs: 4000, tickIntervalMs: 0, maxStacks: 1, stackPolicy: "replace",
+      speedMultiplier: 0.3
+    });
+    this.statusEffects.registerDefinition({
+      id: "regeneration", key: "regeneration", name: "Regeneration", description: "Healing over time.",
+      durationMs: 5000, tickIntervalMs: 1000, maxStacks: 3, stackPolicy: "stack_add",
+      healPerTick: 8
+    });
+    this.statusEffects.registerDefinition({
+      id: "weakened", key: "weakened", name: "Weakened", description: "Deal reduced damage.",
+      durationMs: 4000, tickIntervalMs: 0, maxStacks: 1, stackPolicy: "replace",
+      damageMultiplier: 0.7
+    });
+    this.statusEffects.registerDefinition({
+      id: "vulnerable", key: "vulnerable", name: "Vulnerable", description: "Take increased damage.",
+      durationMs: 3000, tickIntervalMs: 0, maxStacks: 3, stackPolicy: "stack_add",
+      damageTakenMultiplier: 1.3
     });
 
     // ── NPC AI ────────────────────────────────────────────────────────────
@@ -572,6 +647,7 @@ export class GameSimulation {
     this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta, this.elapsedSeconds);
     this.npcMovementSystem.stepCharacters(this.getNpcMovementEntries(), delta, this.elapsedSeconds);
     this.projectileSystem.step(delta);
+    this.statusEffects.step(this.elapsedSeconds * 1000);
 
     const replicatedEids = this.simulationEcs.getReplicatedEids();
     for (const eid of replicatedEids) {
@@ -856,14 +932,17 @@ export class GameSimulation {
         this.damageSystem.registerPlayerCollider(ctx.collider.handle, eid);
         this.ensurePunchAssigned(eid);
         this.replication.queueIdentityMessage(user, nid);
+        this.events.emit<PlayerSpawnedPayload>(GameEvent.PLAYER_SPAWNED, { userId: user.id, eid, accountId: ctx.accountId, colliderHandle: ctx.collider.handle });
         return eid;
       },
       despawnPlayer: (user, eid) => {
+        const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id) ?? 0;
         this.creatorSystem.removeSession(user.id);
         this.controllerSystem.detachUser(user.id);
         this.simulationEcs.unbindPlayerIndexes(user.id, eid);
         this.replication.despawnEntity(eid);
         this.simulationEcs.destroyEid(eid);
+        this.events.emit<PlayerDespawnedPayload>(GameEvent.PLAYER_DESPAWNED, { userId: user.id, eid, accountId });
       },
       sendInitialReplicationState: (user, accountId) => {
         const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
