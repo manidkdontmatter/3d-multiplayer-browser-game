@@ -2,7 +2,8 @@
 import type { AbilityDefinition } from "../../shared/index";
 import type { CreatorSessionSnapshot } from "../../shared/index";
 import { NType } from "../../shared/netcode";
-import { NetReplicationBridge, type ReplicatedSnapshot } from "../netcode/NetReplicationBridge";
+import { NetReplicationBridge } from "../netcode/NetReplicationBridge";
+import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 import {
   ReplicationMessagingSystem,
   type AbilityStateSnapshot,
@@ -30,8 +31,8 @@ export class ServerReplicationCoordinator<TUser extends ReplicationUser> {
   private readonly replicationBridge: NetReplicationBridge;
   private readonly replicationMessaging: ReplicationMessagingSystem<TUser>;
 
-  public constructor(options: ServerReplicationCoordinatorOptions<TUser>) {
-    this.replicationBridge = new NetReplicationBridge(options.nearChannel, options.farChannel);
+  public constructor(options: ServerReplicationCoordinatorOptions<TUser>, components: WorldWithComponents["components"]) {
+    this.replicationBridge = new NetReplicationBridge(options.nearChannel, options.farChannel, components);
     this.replicationMessaging = new ReplicationMessagingSystem<TUser>({
       getTickNumber: options.getTickNumber,
       getUserById: options.getUserById,
@@ -41,16 +42,16 @@ export class ServerReplicationCoordinator<TUser extends ReplicationUser> {
     });
   }
 
-  public spawnEntity(simEid: number, snapshot: ReplicatedSnapshot): number {
-    return this.replicationBridge.spawn(simEid, snapshot);
+  public spawnEntity(simEid: number): number {
+    return this.replicationBridge.spawn(simEid);
   }
 
   public despawnEntity(simEid: number): void {
     this.replicationBridge.despawn(simEid);
   }
 
-  public syncEntityFromSnapshot(simEid: number, snapshot: ReplicatedSnapshot): void {
-    this.replicationBridge.sync(simEid, snapshot);
+  public syncEntityFromEcs(simEid: number): void {
+    this.replicationBridge.sync(simEid);
   }
 
   public syncUserViewPosition(userId: number, x: number, y: number, z: number): void {

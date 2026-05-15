@@ -159,25 +159,6 @@ export type PersistenceState = {
   hotbarAbilityIds: number[];
 };
 
-export type ReplicationSnapshot = {
-  nid: number;
-  modelId: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  grounded: boolean;
-  movementMode: MovementMode;
-  health: number;
-  maxHealth: number;
-  itemArchetypeId: number;
-  itemQuantity: number;
-  locationKind: number;
-  locationArchetypeId: number;
-  locationSeed: number;
-  locationEnvironmentId: number;
-  locationStreamingRadius: number;
-  locationInfluenceRadius: number;
-};
-
 export type AbilityState = {
   primaryMouseSlot: number;
   secondaryMouseSlot: number;

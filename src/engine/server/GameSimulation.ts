@@ -42,7 +42,7 @@ import { CONTROLLER_KIND_AI, ControllerSystem } from "./controllers/ControllerSy
 import { CharacterMovementSystem } from "./movement/CharacterMovementSystem";
 import { CharacterNavigationPlanner } from "./navigation/NavigationService";
 import { buildServerNavigationWorld, type NavigationBuildReport } from "./navigation/NavigationWorldBuilder";
-import type { PlayerStateSnapshot, ReplicationSnapshot } from "./ecs/SimulationEcsTypes";
+import type { PlayerStateSnapshot } from "./ecs/SimulationEcsTypes";
 import { EventBus } from "./events/EventBus";
 import { GameEvent, type PlayerMovedPayload, type PlayerSpawnedPayload, type PlayerDespawnedPayload, type DamageDealtPayload, type HealthChangedPayload, type AbilityUsedPayload } from "./events/GameEvents";
 import { StatusEffectSystem } from "./combat/status/StatusEffectSystem";
@@ -131,7 +131,7 @@ export class GameSimulation {
       getUserById: (userId) => this.usersById.get(userId),
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       getAbilityDefinitionById: (abilityId) => this.resolveAbilityDefinitionById(abilityId)
-    });
+    }, c);
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
     this.characterController = this.world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
@@ -175,8 +175,7 @@ export class GameSimulation {
           modelId: dummy.modelId
         });
         this.simulationEcs.registerDummyPhysicsRefs(eid, dummy.body, dummy.collider);
-        const snap = this.simulationEcs.getReplicationSnapshotByEid(eid);
-        const nid = this.replication.spawnEntity(eid, snap);
+        const nid = this.replication.spawnEntity(eid);
         dummy.nid = nid;
         this.simulationEcs.setEntityNidByEid(eid, nid);
       }
@@ -205,8 +204,7 @@ export class GameSimulation {
           projectileDespawnOnDamageableHit: typeof req.despawnOnDamageableHit === "boolean" ? req.despawnOnDamageableHit : true,
           projectileDespawnOnWorldHit: typeof req.despawnOnWorldHit === "boolean" ? req.despawnOnWorldHit : true
         });
-        const snap = this.simulationEcs.getReplicationSnapshotByEid(eid);
-        const nid = this.replication.spawnEntity(eid, snap);
+        const nid = this.replication.spawnEntity(eid);
         this.simulationEcs.setEntityNidByEid(eid, nid);
         return eid;
       },
@@ -295,8 +293,7 @@ export class GameSimulation {
           locationStreamingRadius: location.locationStreamingRadius, locationInfluenceRadius: location.locationInfluenceRadius
         });
         (location as any)._ecsEid = eid;
-        const snap = this.simulationEcs.getReplicationSnapshotByEid(eid);
-        const nid = this.replication.spawnEntity(eid, snap);
+        const nid = this.replication.spawnEntity(eid);
         location.nid = nid;
         this.simulationEcs.setEntityNidByEid(eid, nid);
       },
@@ -652,8 +649,7 @@ export class GameSimulation {
 
     const replicatedEids = this.simulationEcs.getReplicatedEids();
     for (const eid of replicatedEids) {
-      const snap = this.simulationEcs.getReplicationSnapshotByEid(eid);
-      this.replication.syncEntityFromSnapshot(eid, snap);
+      this.replication.syncEntityFromEcs(eid);
     }
     this.world.step();
     this.maybeBroadcastServerPopulation();
@@ -753,8 +749,7 @@ export class GameSimulation {
       itemArchetypeId: item.itemArchetypeId, itemQuantity: item.itemQuantity
     });
     (item as any)._ecsEid = eid;
-    const snap = this.simulationEcs.getReplicationSnapshotByEid(eid);
-    const nid = this.replication.spawnEntity(eid, snap);
+    const nid = this.replication.spawnEntity(eid);
     item.nid = nid;
     this.simulationEcs.setEntityNidByEid(eid, nid);
   }
@@ -787,8 +782,7 @@ export class GameSimulation {
     this.simulationEcs.registerCharacterPhysicsRefs(eid, character.body, character.collider);
     character._ecsEid = eid;
     this.controllerSystem.attachAiController(eid);
-    const snap = this.simulationEcs.getReplicationSnapshotByEid(eid);
-    const nid = this.replication.spawnEntity(eid, snap);
+    const nid = this.replication.spawnEntity(eid);
     character.nid = nid;
     this.simulationEcs.setEntityNidByEid(eid, nid);
     this.damageSystem.registerCharacterCollider(character.collider.handle, eid);
@@ -925,8 +919,7 @@ export class GameSimulation {
           primaryHeld: false, secondaryHeld: false
         });
         this.simulationEcs.registerPlayerPhysicsRefs(eid, ctx.body, ctx.collider);
-        const snap = this.simulationEcs.getReplicationSnapshotByEid(eid);
-        const nid = this.replication.spawnEntity(eid, snap);
+        const nid = this.replication.spawnEntity(eid);
         this.simulationEcs.setEntityNidByEid(eid, nid);
         this.simulationEcs.bindPlayerIndexes(user.id, eid);
         this.controllerSystem.attachPlayerController(user.id, eid);

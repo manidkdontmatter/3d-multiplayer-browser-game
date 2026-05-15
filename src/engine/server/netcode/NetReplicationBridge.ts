@@ -1,47 +1,23 @@
-// Bridges ECS replication snapshots into nengi entity create/update/despawn operations.
+// Bridges ECS state into nengi entity create/update/despawn operations.
+// Reads ECS components directly — no intermediary snapshot object.
 import { NType } from "../../shared/netcode";
-import type { MovementMode } from "../../shared/index";
-
-export interface ReplicatedSnapshot {
-  nid: number;
-  modelId: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  grounded: boolean;
-  movementMode: MovementMode;
-  health: number;
-  maxHealth: number;
-  itemArchetypeId: number;
-  itemQuantity: number;
-  locationKind: number;
-  locationArchetypeId: number;
-  locationSeed: number;
-  locationEnvironmentId: number;
-  locationStreamingRadius: number;
-  locationInfluenceRadius: number;
-}
+import { MOVEMENT_MODE_GROUNDED, sanitizeMovementMode, type MovementMode } from "../../shared/index";
+import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 
 type NetEntity = {
   nid: number;
   ntype: NType.BaseEntity | NType.LocationRootEntity;
-  x: number;
-  y: number;
-  z: number;
+  x: number; y: number; z: number;
   modelId: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
   movementMode: MovementMode;
-  health: number;
-  maxHealth: number;
-  itemArchetypeId: number;
-  itemQuantity: number;
-  locationKind: number;
-  locationArchetypeId: number;
-  locationSeed: number;
-  locationEnvironmentId: number;
-  locationStreamingRadius: number;
-  locationInfluenceRadius: number;
+  health: number; maxHealth: number;
+  itemArchetypeId: number; itemQuantity: number;
+  locationKind: number; locationArchetypeId: number;
+  locationSeed: number; locationEnvironmentId: number;
+  locationStreamingRadius: number; locationInfluenceRadius: number;
 };
 
 type EntityChannel = {
@@ -52,44 +28,48 @@ type EntityChannel = {
 export class NetReplicationBridge {
   private readonly netBySimEid = new Map<number, NetEntity>();
   private readonly channelBySimEid = new Map<number, EntityChannel>();
+  private readonly c: WorldWithComponents["components"];
 
   public constructor(
     private readonly nearChannel: EntityChannel,
-    private readonly farChannel: EntityChannel
-  ) {}
+    private readonly farChannel: EntityChannel,
+    components: WorldWithComponents["components"]
+  ) {
+    this.c = components;
+  }
 
-  public spawn(simEid: number, snapshot: ReplicatedSnapshot): number {
-    const isLocationRoot = snapshot.locationKind > 0 && snapshot.locationArchetypeId > 0;
+  public spawn(simEid: number): number {
+    const locKind = this.c.LocationKind.value[simEid] ?? 0;
+    const locArchetypeId = this.c.LocationArchetypeId.value[simEid] ?? 0;
+    const isLocationRoot = locKind > 0 && locArchetypeId > 0;
+    const x = this.c.Position.x[simEid] ?? 0;
+    const y = this.c.Position.y[simEid] ?? 0;
+    const z = this.c.Position.z[simEid] ?? 0;
+
     const netEntity: NetEntity = {
       nid: 0,
       ntype: isLocationRoot ? NType.LocationRootEntity : NType.BaseEntity,
-      x: snapshot.position.x,
-      y: snapshot.position.y,
-      z: snapshot.position.z,
-      modelId: snapshot.modelId,
-      position: {
-        x: snapshot.position.x,
-        y: snapshot.position.y,
-        z: snapshot.position.z
-      },
+      x, y, z,
+      modelId: this.c.ModelId.value[simEid] ?? 0,
+      position: { x, y, z },
       rotation: {
-        x: snapshot.rotation.x,
-        y: snapshot.rotation.y,
-        z: snapshot.rotation.z,
-        w: snapshot.rotation.w
+        x: this.c.Rotation.x[simEid] ?? 0,
+        y: this.c.Rotation.y[simEid] ?? 0,
+        z: this.c.Rotation.z[simEid] ?? 0,
+        w: this.c.Rotation.w[simEid] ?? 1
       },
-      grounded: snapshot.grounded,
-      movementMode: snapshot.movementMode,
-      health: snapshot.health,
-      maxHealth: snapshot.maxHealth,
-      itemArchetypeId: snapshot.itemArchetypeId,
-      itemQuantity: snapshot.itemQuantity,
-      locationKind: snapshot.locationKind,
-      locationArchetypeId: snapshot.locationArchetypeId,
-      locationSeed: snapshot.locationSeed,
-      locationEnvironmentId: snapshot.locationEnvironmentId,
-      locationStreamingRadius: snapshot.locationStreamingRadius,
-      locationInfluenceRadius: snapshot.locationInfluenceRadius
+      grounded: (this.c.Grounded.value[simEid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(this.c.MovementMode.value[simEid], MOVEMENT_MODE_GROUNDED),
+      health: this.c.Health.value[simEid] ?? 0,
+      maxHealth: this.c.Health.max[simEid] ?? 0,
+      itemArchetypeId: this.c.ItemArchetypeId.value[simEid] ?? 0,
+      itemQuantity: this.c.ItemQuantity.value[simEid] ?? 0,
+      locationKind: locKind,
+      locationArchetypeId: locArchetypeId,
+      locationSeed: this.c.LocationSeed.value[simEid] ?? 0,
+      locationEnvironmentId: this.c.LocationEnvironmentId.value[simEid] ?? 0,
+      locationStreamingRadius: this.c.LocationStreamingRadius.value[simEid] ?? 0,
+      locationInfluenceRadius: this.c.LocationInfluenceRadius.value[simEid] ?? 0
     };
     const channel = isLocationRoot ? this.farChannel : this.nearChannel;
     channel.addEntity(netEntity);
@@ -98,142 +78,42 @@ export class NetReplicationBridge {
     return netEntity.nid;
   }
 
-  public sync(simEid: number, snapshot: ReplicatedSnapshot): void {
-    this.syncFromState(simEid, {
-      modelId: snapshot.modelId,
-      x: snapshot.position.x,
-      y: snapshot.position.y,
-      z: snapshot.position.z,
-      rx: snapshot.rotation.x,
-      ry: snapshot.rotation.y,
-      rz: snapshot.rotation.z,
-      rw: snapshot.rotation.w,
-      grounded: snapshot.grounded,
-      movementMode: snapshot.movementMode,
-      health: snapshot.health,
-      maxHealth: snapshot.maxHealth,
-      itemArchetypeId: snapshot.itemArchetypeId,
-      itemQuantity: snapshot.itemQuantity,
-      locationKind: snapshot.locationKind,
-      locationArchetypeId: snapshot.locationArchetypeId,
-      locationSeed: snapshot.locationSeed,
-      locationEnvironmentId: snapshot.locationEnvironmentId,
-      locationStreamingRadius: snapshot.locationStreamingRadius,
-      locationInfluenceRadius: snapshot.locationInfluenceRadius
-    });
-  }
-
-  public syncFromState(
-    simEid: number,
-    state: {
-      modelId: number;
-      x: number;
-      y: number;
-      z: number;
-      rx: number;
-      ry: number;
-      rz: number;
-      rw: number;
-      grounded: boolean;
-      movementMode: MovementMode;
-      health: number;
-      maxHealth: number;
-      itemArchetypeId: number;
-      itemQuantity: number;
-      locationKind: number;
-      locationArchetypeId: number;
-      locationSeed: number;
-      locationEnvironmentId: number;
-      locationStreamingRadius: number;
-      locationInfluenceRadius: number;
-    }
-  ): void {
-    this.syncFromValues(
-      simEid,
-      state.modelId,
-      state.x,
-      state.y,
-      state.z,
-      state.rx,
-      state.ry,
-      state.rz,
-      state.rw,
-      state.grounded,
-      state.movementMode,
-      state.health,
-      state.maxHealth,
-      state.itemArchetypeId,
-      state.itemQuantity,
-      state.locationKind,
-      state.locationArchetypeId,
-      state.locationSeed,
-      state.locationEnvironmentId,
-      state.locationStreamingRadius,
-      state.locationInfluenceRadius
-    );
-  }
-
-  public syncFromValues(
-    simEid: number,
-    modelId: number,
-    x: number,
-    y: number,
-    z: number,
-    rx: number,
-    ry: number,
-    rz: number,
-    rw: number,
-    grounded: boolean,
-    movementMode: MovementMode,
-    health: number,
-    maxHealth: number,
-    itemArchetypeId: number,
-    itemQuantity: number,
-    locationKind: number,
-    locationArchetypeId: number,
-    locationSeed: number,
-    locationEnvironmentId: number,
-    locationStreamingRadius: number,
-    locationInfluenceRadius: number
-  ): void {
+  public sync(simEid: number): void {
     const netEntity = this.netBySimEid.get(simEid);
-    if (!netEntity) {
-      return;
-    }
-    netEntity.modelId = modelId;
+    if (!netEntity) return;
+    const x = this.c.Position.x[simEid] ?? 0;
+    const y = this.c.Position.y[simEid] ?? 0;
+    const z = this.c.Position.z[simEid] ?? 0;
+    netEntity.modelId = this.c.ModelId.value[simEid] ?? 0;
     netEntity.position.x = x;
     netEntity.position.y = y;
     netEntity.position.z = z;
     netEntity.x = x;
     netEntity.y = y;
     netEntity.z = z;
-    netEntity.rotation.x = rx;
-    netEntity.rotation.y = ry;
-    netEntity.rotation.z = rz;
-    netEntity.rotation.w = rw;
-    netEntity.grounded = grounded;
-    netEntity.movementMode = movementMode;
-    netEntity.health = health;
-    netEntity.maxHealth = maxHealth;
-    netEntity.itemArchetypeId = itemArchetypeId;
-    netEntity.itemQuantity = itemQuantity;
-    netEntity.locationKind = locationKind;
-    netEntity.locationArchetypeId = locationArchetypeId;
-    netEntity.locationSeed = locationSeed;
-    netEntity.locationEnvironmentId = locationEnvironmentId;
-    netEntity.locationStreamingRadius = locationStreamingRadius;
-    netEntity.locationInfluenceRadius = locationInfluenceRadius;
+    netEntity.rotation.x = this.c.Rotation.x[simEid] ?? 0;
+    netEntity.rotation.y = this.c.Rotation.y[simEid] ?? 0;
+    netEntity.rotation.z = this.c.Rotation.z[simEid] ?? 0;
+    netEntity.rotation.w = this.c.Rotation.w[simEid] ?? 1;
+    netEntity.grounded = (this.c.Grounded.value[simEid] ?? 0) !== 0;
+    netEntity.movementMode = sanitizeMovementMode(this.c.MovementMode.value[simEid], MOVEMENT_MODE_GROUNDED);
+    netEntity.health = this.c.Health.value[simEid] ?? 0;
+    netEntity.maxHealth = this.c.Health.max[simEid] ?? 0;
+    netEntity.itemArchetypeId = this.c.ItemArchetypeId.value[simEid] ?? 0;
+    netEntity.itemQuantity = this.c.ItemQuantity.value[simEid] ?? 0;
+    netEntity.locationKind = this.c.LocationKind.value[simEid] ?? 0;
+    netEntity.locationArchetypeId = this.c.LocationArchetypeId.value[simEid] ?? 0;
+    netEntity.locationSeed = this.c.LocationSeed.value[simEid] ?? 0;
+    netEntity.locationEnvironmentId = this.c.LocationEnvironmentId.value[simEid] ?? 0;
+    netEntity.locationStreamingRadius = this.c.LocationStreamingRadius.value[simEid] ?? 0;
+    netEntity.locationInfluenceRadius = this.c.LocationInfluenceRadius.value[simEid] ?? 0;
   }
 
   public despawn(simEid: number): void {
     const netEntity = this.netBySimEid.get(simEid);
-    if (!netEntity) {
-      return;
-    }
+    if (!netEntity) return;
     const channel = this.channelBySimEid.get(simEid);
-    if (channel) {
-      channel.removeEntity(netEntity);
-    }
+    if (channel) channel.removeEntity(netEntity);
     this.netBySimEid.delete(simEid);
     this.channelBySimEid.delete(simEid);
   }

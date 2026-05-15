@@ -20,8 +20,7 @@ import type {
   InputAckState,
   PersistenceState,
   PlayerStateSnapshot,
-  ProjectileState,
-  ReplicationSnapshot
+  ProjectileState
 } from "./SimulationEcsTypes";
 
 export class SimulationEcs {
@@ -497,28 +496,6 @@ export class SimulationEcs {
   }
 
   // ── Replication ───────────────────────────────────────────────────────────
-
-  public getReplicationSnapshotByEid(eid: number): ReplicationSnapshot {
-    const c = this.world.components;
-    return {
-      nid: c.NetworkId.value[eid] ?? 0,
-      modelId: c.ModelId.value[eid] ?? 0,
-      position: { x: c.Position.x[eid] ?? 0, y: c.Position.y[eid] ?? 0, z: c.Position.z[eid] ?? 0 },
-      rotation: { x: c.Rotation.x[eid] ?? 0, y: c.Rotation.y[eid] ?? 0, z: c.Rotation.z[eid] ?? 0, w: c.Rotation.w[eid] ?? 1 },
-      grounded: (c.Grounded.value[eid] ?? 0) !== 0,
-      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
-      health: c.Health.value[eid] ?? 0,
-      maxHealth: c.Health.max[eid] ?? 0,
-      itemArchetypeId: c.ItemArchetypeId.value[eid] ?? 0,
-      itemQuantity: c.ItemQuantity.value[eid] ?? 0,
-      locationKind: c.LocationKind.value[eid] ?? 0,
-      locationArchetypeId: c.LocationArchetypeId.value[eid] ?? 0,
-      locationSeed: c.LocationSeed.value[eid] ?? 0,
-      locationEnvironmentId: c.LocationEnvironmentId.value[eid] ?? 0,
-      locationStreamingRadius: c.LocationStreamingRadius.value[eid] ?? 0,
-      locationInfluenceRadius: c.LocationInfluenceRadius.value[eid] ?? 0
-    };
-  }
 
   public getReplicatedEids(): number[] {
     return this.store.getReplicatedTagEids();
