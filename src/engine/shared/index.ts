@@ -1,7 +1,8 @@
 // Shared module barrel for simulation, protocol, and content helpers used by client and server.
 export * from "./abilities";
-export * from "./abilityCreator";
+export * from "./archetype";
 export * from "./config";
+export * from "./creator";
 export * from "./controller/characterControllerConfig";
 export * from "./controller/characterMotor";
 export * from "./environmentVolumes";
@@ -14,6 +15,8 @@ export * from "./orchestrator";
 export * from "./physicsCollisionGroups";
 export * from "./platforms";
 export * from "./rotation";
+export * from "./stats";
+export * from "./traits";
 export * from "./world";
 export * from "./worldLocations";
 export * from "./worldPhysics";

@@ -13,8 +13,9 @@ import {
   type EquipmentSlot,
   type InventoryStateSnapshot
 } from "../../shared/items";
-import type { AbilityCreatorState } from "../runtime/network/types";
-import { AbilityCreatorPanel, type AbilityCreatorCommandInput } from "./AbilityCreatorPanel";
+import { CreatorPanel, type CreatorPanelCommand } from "./CreatorPanel";
+import { getAllArchetypeDefinitions } from "../../shared/archetype";
+import type { CreatorClientState } from "../runtime/network/CreatorStateStore";
 
 export interface AbilityHudOptions {
   initialHotbarAssignments: ReadonlyArray<number>;
@@ -22,7 +23,7 @@ export interface AbilityHudOptions {
   initialSecondaryMouseSlot: number;
   onHotbarAssignmentChanged?: (slot: number, abilityId: number) => void;
   onAbilityForgotten?: (abilityId: number) => void;
-  onAbilityCreatorCommand?: (command: AbilityCreatorCommandInput) => void;
+  onCreatorCommand?: (command: CreatorPanelCommand) => void;
   onInventoryItemDropped?: (itemInstanceId: number) => void;
   onInventoryItemUsed?: (itemInstanceId: number) => void;
   onInventoryItemEquipped?: (itemInstanceId: number) => void;
@@ -55,7 +56,7 @@ export class AbilityHud {
   private readonly abilityCatalog = new Map<number, AbilityDefinition>();
   private readonly ownedAbilityIds = new Set<number>();
   private inventoryState: InventoryStateSnapshot = { maxSlots: 32, items: [], equipment: {} };
-  private abilityCreatorPanel!: AbilityCreatorPanel;
+  private creatorPanel!: CreatorPanel;
   private mainUiOpen = false;
   private activeSection: MainUiSectionKey = "ability-book";
   private editSlot = 0;
@@ -161,11 +162,10 @@ export class AbilityHud {
       }
     }
     this.applyAbilityBookFilter(this.abilitySearchInput.value);
-    this.abilityCreatorPanel.setOwnedAbilityIds(Array.from(this.ownedAbilityIds.values()));
   }
 
-  public setAbilityCreatorState(state: AbilityCreatorState | null): void {
-    this.abilityCreatorPanel.setState(state);
+  public setCreatorState(state: CreatorClientState | null): void {
+    this.creatorPanel.setState(state);
   }
 
   public setInventoryState(state: InventoryStateSnapshot): void {
@@ -190,7 +190,6 @@ export class AbilityHud {
     this.applyAbilityBookFilter(this.abilitySearchInput.value);
     this.refreshAbilityCardSelection();
     this.renderAllSlots();
-    this.abilityCreatorPanel.setOwnedAbilityIds(Array.from(this.ownedAbilityIds.values()));
   }
 
   public getHotbarAssignments(): number[] {
@@ -260,12 +259,17 @@ export class AbilityHud {
     this.abilityBookGrid = grid;
     abilityBookPanel.append(grid);
 
-    this.abilityCreatorPanel = new AbilityCreatorPanel(documentRef, {
-      onCommand: (command) => this.options.onAbilityCreatorCommand?.(command),
-      resolveAbilityById: (abilityId) => this.resolveAbilityById(abilityId)
+    // Generalized creator panel — ability, character, and item archetypes
+    const creatorKinds = new Set(["ability", "character", "item"]);
+    const baseArchetypes = getAllArchetypeDefinitions().filter((a) => creatorKinds.has(a.kind));
+    this.creatorPanel = new CreatorPanel(documentRef, {
+      kind: "ability",
+      kindLabel: "Creator",
+      availableBaseArchetypes: baseArchetypes,
+      onCommand: (command) => this.options.onCreatorCommand?.(command)
     });
-    this.abilityCreatorPanel.setOwnedAbilityIds(Array.from(this.ownedAbilityIds.values()));
-    const creatorPanel = this.abilityCreatorPanel.getElement();
+    const creatorPanelEl = this.creatorPanel.getElement();
+
     const settingsPanel = this.createPlaceholderPanel(
       documentRef,
       "settings",
@@ -273,12 +277,12 @@ export class AbilityHud {
       "Settings menu will be implemented here."
     );
 
-    content.append(characterPanel, inventoryPanel, abilityBookPanel, creatorPanel, settingsPanel);
+    content.append(characterPanel, inventoryPanel, abilityBookPanel, creatorPanelEl, settingsPanel);
 
     this.sectionPanels.set("character", characterPanel);
     this.sectionPanels.set("inventory", inventoryPanel);
     this.sectionPanels.set("ability-book", abilityBookPanel);
-    this.sectionPanels.set("ability-creator", creatorPanel);
+    this.sectionPanels.set("ability-creator", creatorPanelEl);
     this.sectionPanels.set("settings", settingsPanel);
 
     shell.append(nav, content);

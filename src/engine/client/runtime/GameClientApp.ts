@@ -111,8 +111,8 @@ export class GameClientApp {
       onAbilityForgotten: (abilityId) => {
         this.network.queueForgetAbility(abilityId);
       },
-      onAbilityCreatorCommand: (command) => {
-        this.network.queueAbilityCreatorCommand(command);
+      onCreatorCommand: (command) => {
+        this.network.queueCreatorCommand(command);
       },
       onInventoryItemDropped: (itemInstanceId) => {
         this.network.queueDropInventoryItem(itemInstanceId);
@@ -347,11 +347,10 @@ export class GameClientApp {
   }
 
   private applyAbilityCreatorEvents(): void {
-    const creatorState = this.network.consumeAbilityCreatorState();
-    if (!creatorState) {
-      return;
+    const genCreatorState = this.network.consumeCreatorState();
+    if (genCreatorState) {
+      this.abilityHud.setCreatorState(genCreatorState);
     }
-    this.abilityHud.setAbilityCreatorState(creatorState);
   }
 
   private applyInventoryEvents(): void {

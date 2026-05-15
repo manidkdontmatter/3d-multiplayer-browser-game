@@ -50,33 +50,6 @@ export interface AbilityEventBatch {
   ownedAbilityIds: number[] | null;
 }
 
-export interface AbilityCreatorState {
-  sessionId: number;
-  ackSequence: number;
-  maxCreatorTier: number;
-  selectedTier: number;
-  selectedType: AbilityCreatorType;
-  abilityName: string;
-  coreExampleStat: number;
-  exampleUpsideEnabled: boolean;
-  exampleDownsideEnabled: boolean;
-  usingTemplate: boolean;
-  templateAbilityId: number;
-  totalPointBudget: number;
-  spentPoints: number;
-  remainingPoints: number;
-  upsideSlots: number;
-  downsideMax: number;
-  usedUpsideSlots: number;
-  usedDownsideSlots: number;
-  derivedExamplePower: number;
-  derivedExampleStability: number;
-  derivedExampleComplexity: number;
-  isValid: boolean;
-  validationMessage: string;
-  ownedAbilityCount: number;
-}
-
 export interface NetSimulationConfig {
   enabled: boolean;
   ackDropRate: number;
@@ -94,26 +67,6 @@ export interface QueuedAbilityCommand {
   secondaryMouseSlot: number;
   applyForgetAbility: boolean;
   forgetAbilityId: number;
-}
-
-export interface QueuedAbilityCreatorCommand {
-  sessionId: number;
-  sequence: number;
-  applyName: boolean;
-  abilityName: string;
-  applyType: boolean;
-  abilityType: number;
-  applyTier: boolean;
-  tier: number;
-  incrementExampleStat: boolean;
-  decrementExampleStat: boolean;
-  applyExampleUpsideEnabled: boolean;
-  exampleUpsideEnabled: boolean;
-  applyExampleDownsideEnabled: boolean;
-  exampleDownsideEnabled: boolean;
-  applyTemplateAbilityId: boolean;
-  templateAbilityId: number;
-  submitCreate: boolean;
 }
 
 export interface AbilityStateConsumeResult {

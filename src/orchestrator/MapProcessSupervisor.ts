@@ -108,20 +108,23 @@ export class MapProcessSupervisor {
         cwd: repoRoot,
         env: {
           ...process.env,
-          SERVER_PORT: String(spec.wsPort),
-          MAP_INSTANCE_ID: spec.instanceId,
-          MAP_ID: spec.mapId,
-          MAP_SEED: String(spec.mapConfig.seed),
-          MAP_GROUND_HALF_EXTENT: String(spec.mapConfig.groundHalfExtent),
-          MAP_GROUND_HALF_THICKNESS: String(spec.mapConfig.groundHalfThickness),
-          MAP_CUBE_COUNT: String(spec.mapConfig.cubeCount),
           ORCHESTRATOR_INTERNAL_URL: this.orchestratorBaseUrl,
           ORCH_INTERNAL_RPC_SECRET: this.internalRpcSecret,
           SERVER_DISABLE_PERSISTENCE_WRITES: "1"
         },
-        stdio: "inherit"
+        stdio: ["ignore", "inherit", "inherit", "ipc"]
       }
     );
+
+    child.send({
+      type: "mapRuntimeConfig",
+      config: {
+        instanceId: spec.instanceId,
+        mapId: spec.mapId,
+        wsPort: spec.wsPort,
+        mapConfig: spec.mapConfig
+      }
+    });
 
     const managed: ManagedMapProcess = {
       spec,

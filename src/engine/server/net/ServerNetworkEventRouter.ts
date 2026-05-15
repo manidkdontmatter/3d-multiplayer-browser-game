@@ -39,12 +39,48 @@ export class ServerNetworkEventRouter {
     this.commandRouter.route(user, commands, {
       onInputCommands: (inputCommands) => this.simulation.applyInputCommands(user.id, inputCommands),
       onAbilityCommand: (commandUser, command) => this.simulation.applyAbilityCommand(commandUser, command),
-      onAbilityCreatorCommand: (commandUser, command) =>
-        this.simulation.applyAbilityCreatorCommand(commandUser, command),
       onItemCommand: (commandUser, command) =>
         this.simulation.applyItemCommand(commandUser, command),
       onMapTransferCommand: (commandUser, command) =>
-        void this.handleMapTransferCommand(commandUser, command.targetMapInstanceId)
+        void this.handleMapTransferCommand(commandUser, command.targetMapInstanceId),
+      onCreatorCommand: (commandUser, command) => {
+        try {
+          const payload = JSON.parse(command.commandJson) as {
+            sessionId: number;
+            sequence: number;
+            actions: Array<Record<string, unknown>>;
+          };
+          const cmd: Record<string, unknown> = {
+            sessionId: payload.sessionId,
+            sequence: payload.sequence
+          };
+          for (const action of payload.actions) {
+            if (action.kind === "apply_name") { cmd.applyName = true; cmd.name = action.name; }
+            if (action.kind === "select_base_archetype") { cmd.selectBaseArchetype = true; cmd.baseArchetypeId = action.archetypeId; }
+            if (action.kind === "allocate_stat") { cmd.allocateStat = true; cmd.statId = action.statId; cmd.statDelta = action.delta; }
+            if (action.kind === "toggle_trait") { cmd.toggleTrait = true; cmd.traitId = action.traitId; }
+            if (action.kind === "submit_create") { cmd.submitCreate = true; }
+            if (action.kind === "forget") { cmd.forgetArchetypeId = action.archetypeId; }
+          }
+          this.simulation.applyCreatorCommand(commandUser, cmd as {
+            sessionId: number;
+            sequence: number;
+            applyName?: boolean;
+            name?: string;
+            selectBaseArchetype?: boolean;
+            baseArchetypeId?: number;
+            allocateStat?: boolean;
+            statId?: string;
+            statDelta?: number;
+            toggleTrait?: boolean;
+            traitId?: string;
+            submitCreate?: boolean;
+            forgetArchetypeId?: number;
+          });
+        } catch (error) {
+          console.warn("[server] malformed creator command:", error);
+        }
+      }
     });
   }
 

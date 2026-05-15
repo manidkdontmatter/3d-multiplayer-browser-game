@@ -2,7 +2,7 @@
 import { NType } from "../../shared/netcode";
 import type {
   AbilityCommand as AbilityWireCommand,
-  AbilityCreatorCommand as AbilityCreatorWireCommand,
+  CreatorCommandWire,
   InputCommand as InputWireCommand,
   ItemCommand as ItemWireCommand,
   MapTransferCommand as MapTransferWireCommand
@@ -11,7 +11,7 @@ import type {
 export interface ServerCommandRouterHandlers<TUser> {
   readonly onInputCommands: (commands: Partial<InputWireCommand>[]) => void;
   readonly onAbilityCommand: (user: TUser, command: Partial<AbilityWireCommand>) => void;
-  readonly onAbilityCreatorCommand: (user: TUser, command: Partial<AbilityCreatorWireCommand>) => void;
+  readonly onCreatorCommand: (user: TUser, command: CreatorCommandWire) => void;
   readonly onItemCommand: (user: TUser, command: Partial<ItemWireCommand>) => void;
   readonly onMapTransferCommand: (user: TUser, command: Partial<MapTransferWireCommand>) => void;
 }
@@ -27,8 +27,8 @@ export class ServerCommandRouter<TUser> {
         continue;
       }
 
-      if (ntype === NType.AbilityCreatorCommand) {
-        handlers.onAbilityCreatorCommand(user, rawCommand as Partial<AbilityCreatorWireCommand>);
+      if (ntype === NType.CreatorCommand) {
+        handlers.onCreatorCommand(user, rawCommand as CreatorCommandWire);
         continue;
       }
 

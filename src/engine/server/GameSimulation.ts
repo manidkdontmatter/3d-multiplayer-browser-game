@@ -16,17 +16,18 @@ import {
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   encodeInventoryStateSnapshot,
+  getAbilityDefinitionById,
   quaternionFromYawPitchRoll,
   resolveRuntimeMapConfig,
   type InventoryStateSnapshot,
   type MovementMode,
   SERVER_TICK_SECONDS
 } from "../shared/index";
-import type { AbilityDefinition } from "../shared/index";
+import type { AbilityDefinition, CreatorSessionSnapshot } from "../shared/index";
 import {
   NType,
   type AbilityCommand as AbilityWireCommand,
-  type AbilityCreatorCommand as AbilityCreatorWireCommand,
+  type CreatorCommandWire,
   type ItemCommand as ItemWireCommand,
   type InputCommand as InputWireCommand
 } from "../shared/netcode";
@@ -46,7 +47,7 @@ import { PlayerLifecycleSystem } from "./lifecycle/PlayerLifecycleSystem";
 import { LocationRootSystem } from "./location/LocationRootSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { AbilityCommandHandler } from "./net/AbilityCommandHandler";
-import { AbilityCreatorSystem } from "./abilityCreator/AbilityCreatorSystem";
+import { CreatorSystem } from "./creator/CreatorSystem";
 import { ItemInventorySystem, type WorldItemObject } from "./items/ItemInventorySystem";
 import { ServerReplicationCoordinator } from "./net/ServerReplicationCoordinator";
 import { PlatformSystem } from "./platform/PlatformSystem";
@@ -198,7 +199,7 @@ export class GameSimulation {
   private readonly projectileSystem: ProjectileSystem;
   private readonly inputSystem: InputSystem<RuntimePlayerState>;
   private readonly abilityCommandHandler: AbilityCommandHandler<UserLike>;
-  private readonly abilityCreatorSystem: AbilityCreatorSystem;
+  private readonly creatorSystem: CreatorSystem;
   private readonly itemInventorySystem: ItemInventorySystem<UserLike>;
   private readonly platformSystem: PlatformSystem;
   private readonly locationRootSystem: LocationRootSystem;
@@ -246,7 +247,7 @@ export class GameSimulation {
     const npcPlayerAlertRadius = this.resolvePositiveEnvNumber("NPC_PLAYER_ALERT_RADIUS", 220);
     this.npcPlayerAlertMemorySeconds = this.resolvePositiveEnvNumber("NPC_PLAYER_ALERT_MEMORY", 1.25);
     this.npcPlayerAlertShape = new RAPIER.Ball(npcPlayerAlertRadius);
-    this.abilityCreatorSystem = new AbilityCreatorSystem(this.persistence);
+    this.creatorSystem = new CreatorSystem();
     this.replication = new ServerReplicationCoordinator<UserLike, RuntimePlayerState | NpcCharacter>({
       nearChannel: this.nearChannel,
       farChannel: this.farChannel,
@@ -567,50 +568,82 @@ export class GameSimulation {
     this.abilityCommandHandler.apply(user, command);
   }
 
-  public applyAbilityCreatorCommand(user: UserLike, command: Partial<AbilityCreatorWireCommand>): void {
-    const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+  public applyCreatorCommand(user: UserLike, command: {
+    sessionId: number;
+    sequence: number;
+    applyName?: boolean;
+    name?: string;
+    selectBaseArchetype?: boolean;
+    baseArchetypeId?: number;
+    allocateStat?: boolean;
+    statId?: string;
+    statDelta?: number;
+    toggleTrait?: boolean;
+    traitId?: string;
+    submitCreate?: boolean;
+    forgetArchetypeId?: number;
+  }): void {
     const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
-    if (!abilityState || accountId === null) {
-      return;
-    }
-    const result = this.abilityCreatorSystem.applyCommand({
+    if (accountId === null) return;
+
+    const ownedIds = this.creatorSystem.resolveOwnedArchetypeIds(
+      accountId,
+      this.simulationEcs.getPlayerAbilityStateByUserId(user.id)?.unlockedAbilityIds ?? []
+    );
+    const result = this.creatorSystem.applyCommand({
       userId: user.id,
       accountId,
-      ownedAbilityIds: abilityState.unlockedAbilityIds,
+      ownedArchetypeIds: ownedIds,
       command
     });
 
-    if (result.createdAbility && result.nextOwnedAbilityIds) {
+    // Send creator state back via ReplicationMessagingSystem (proper layering)
+    this.replication.queueCreatorStateMessage(user, result.snapshot);
+
+    if (result.createdArchetype && result.nextOwnedArchetypeIds) {
+      // Update ECS state for ability-owned tracking
       const ownedChanged = this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(
         user.id,
-        result.nextOwnedAbilityIds
+        result.nextOwnedArchetypeIds
       );
-      let hotbarChanged = false;
-      if (typeof result.replacedAbilityId === "number" && result.replacedAbilityId > 0) {
-        hotbarChanged = this.simulationEcs.replacePlayerAbilityOnHotbarByUserId(
-          user.id,
-          result.replacedAbilityId,
-          result.createdAbility.id
-        );
+
+      // If the created archetype is an ability, broadcast its definition
+      if (result.createdArchetype.kind === "ability") {
+        // Custom archetypes aren't in the static catalog; build from resolved stats
+        const custom = result.createdArchetype;
+        const baseApt = custom.abilityPoints ?? { power: 0, velocity: 0, efficiency: 0, control: 0 };
+        const rs = custom.baseStats as Record<string, number>;
+        const abilityDef: AbilityDefinition = {
+          id: custom.id,
+          key: custom.key,
+          name: custom.name,
+          description: custom.description,
+          category: custom.abilityCategory ?? "projectile",
+          points: {
+            power: rs.power ?? baseApt.power,
+            velocity: rs.velocity ?? baseApt.velocity,
+            efficiency: rs.efficiency ?? baseApt.efficiency,
+            control: rs.control ?? baseApt.control
+          },
+          attributes: [...(custom.abilityAttributes ?? [])]
+        };
+        this.replication.queueAbilityDefinitionMessage(user, abilityDef);
       }
 
-      this.replication.queueAbilityDefinitionMessage(user, result.createdAbility);
-
+      // Re-broadcast ownership
       const refreshed = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
       if (refreshed) {
         this.replication.queueAbilityOwnershipMessage(user, refreshed.unlockedAbilityIds);
         this.replication.queueAbilityStateMessageFromSnapshot(user, refreshed);
       }
 
-      if (ownedChanged || hotbarChanged) {
+      if (ownedChanged) {
         this.persistenceSyncSystem.markAccountDirty(accountId, {
           dirtyCharacter: false,
           dirtyAbilityState: true
         });
       }
     }
-
-    this.replication.queueAbilityCreatorStateMessage(user, result.snapshot);
   }
 
   public applyItemCommand(user: UserLike, command: Partial<ItemWireCommand>): void {
@@ -634,41 +667,33 @@ export class GameSimulation {
     if (targetAbilityId <= ABILITY_ID_NONE) {
       this.replication.queueAbilityOwnershipMessage(user, abilityStateBefore.unlockedAbilityIds);
       this.replication.queueAbilityStateMessageFromSnapshot(user, abilityStateBefore);
-      const creatorSnapshot = this.abilityCreatorSystem.synchronizeSessionOwnedAbilities(
+      const snapshot = this.creatorSystem.synchronizeSessionOwnedCount(
         user.id,
-        abilityStateBefore.unlockedAbilityIds
+        abilityStateBefore.unlockedAbilityIds.length
       );
-      if (creatorSnapshot) {
-        this.replication.queueAbilityCreatorStateMessage(user, creatorSnapshot);
-      }
+      if (snapshot) this.replication.queueCreatorStateMessage(user, snapshot);
       return;
     }
 
-    const forgetResult = this.abilityCreatorSystem.forgetOwnedAbility({
-      accountId,
-      ownedAbilityIds: abilityStateBefore.unlockedAbilityIds,
-      abilityId: targetAbilityId
-    });
-    if (!forgetResult.ok) {
+    const forgetResult = this.creatorSystem.forgetArchetype(accountId, targetAbilityId);
+    if (!forgetResult.ok || !forgetResult.nextOwnedArchetypeIds) {
       this.replication.queueAbilityOwnershipMessage(user, abilityStateBefore.unlockedAbilityIds);
       this.replication.queueAbilityStateMessageFromSnapshot(user, abilityStateBefore);
-      const creatorSnapshot = this.abilityCreatorSystem.synchronizeSessionOwnedAbilities(
+      const snapshot = this.creatorSystem.synchronizeSessionOwnedCount(
         user.id,
-        abilityStateBefore.unlockedAbilityIds
+        abilityStateBefore.unlockedAbilityIds.length
       );
-      if (creatorSnapshot) {
-        this.replication.queueAbilityCreatorStateMessage(user, creatorSnapshot);
-      }
+      if (snapshot) this.replication.queueCreatorStateMessage(user, snapshot);
       return;
     }
 
     const ownedChanged = this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(
       user.id,
-      forgetResult.nextOwnedAbilityIds
+      forgetResult.nextOwnedArchetypeIds
     );
     const hotbarChanged = this.simulationEcs.clearPlayerAbilityOnHotbarByUserId(
       user.id,
-      forgetResult.forgottenAbilityId
+      forgetResult.forgottenArchetypeId ?? 0
     );
 
     const abilityStateAfter = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
@@ -678,12 +703,12 @@ export class GameSimulation {
 
     this.replication.queueAbilityOwnershipMessage(user, abilityStateAfter.unlockedAbilityIds);
     this.replication.queueAbilityStateMessageFromSnapshot(user, abilityStateAfter);
-    const creatorSnapshot = this.abilityCreatorSystem.synchronizeSessionOwnedAbilities(
+    const snapshot = this.creatorSystem.synchronizeSessionOwnedCount(
       user.id,
-      abilityStateAfter.unlockedAbilityIds
+      abilityStateAfter.unlockedAbilityIds.length
     );
-    if (creatorSnapshot) {
-      this.replication.queueAbilityCreatorStateMessage(user, creatorSnapshot);
+    if (snapshot) {
+      this.replication.queueCreatorStateMessage(user, snapshot);
     }
 
     if (ownedChanged || hotbarChanged) {
@@ -866,7 +891,25 @@ export class GameSimulation {
   }
 
   private resolveAbilityDefinitionById(abilityId: number): AbilityDefinition | null {
-    return this.abilityCreatorSystem.resolveAbilityDefinitionById(abilityId);
+    // Check static ability catalog first (legacy injected data)
+    const staticDef = getAbilityDefinitionById(abilityId);
+    if (staticDef) return staticDef;
+    // Check new unified system for custom archetypes
+    const archetype = this.creatorSystem.resolveArchetypeDefinitionById(abilityId);
+    if (archetype && archetype.kind === "ability") {
+      return {
+        id: archetype.id,
+        key: archetype.key,
+        name: archetype.name,
+        description: archetype.description,
+        category: archetype.abilityCategory ?? "projectile",
+        points: archetype.abilityPoints ?? { power: 0, velocity: 0, efficiency: 0, control: 0 },
+        attributes: [...(archetype.abilityAttributes ?? [])] as AbilityDefinition["attributes"],
+        projectile: archetype.projectileProfile,
+        melee: archetype.meleeProfile
+      };
+    }
+    return null;
   }
 
   private createInitialHotbar(savedHotbar?: number[]): number[] {
@@ -1271,8 +1314,11 @@ export class GameSimulation {
       playerCapsuleRadius: PLAYER_CAPSULE_RADIUS,
       maxPlayerHealth: this.archetypes.player.maxHealth,
       defaultUnlockedAbilityIds: DEFAULT_UNLOCKED_ABILITY_IDS,
-      resolveInitialUnlockedAbilityIds: (accountId, defaultUnlockedAbilityIds) =>
-        this.abilityCreatorSystem.resolveOwnedAbilityIds(accountId, defaultUnlockedAbilityIds),
+      resolveInitialUnlockedAbilityIds: (accountId, defaultUnlockedAbilityIds) => {
+        const fromNew = this.creatorSystem.resolveOwnedArchetypeIds(accountId, defaultUnlockedAbilityIds);
+        if (fromNew.length > 0) return fromNew;
+        return this.creatorSystem.resolveOwnedArchetypeIds(accountId, defaultUnlockedAbilityIds);
+      },
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       createInitialHotbar: (savedHotbar) => this.createInitialHotbar(savedHotbar),
       clampHealth: (value) => this.clampHealth(value),
@@ -1330,11 +1376,13 @@ export class GameSimulation {
         if (accountId === null) {
           return;
         }
-        const creatorState = this.abilityCreatorSystem.initializeUserSession(
+        const creatorState = this.creatorSystem.initializeSession(
           user.id,
-          abilityState.unlockedAbilityIds
+          abilityState.unlockedAbilityIds,
+          "ability"
         );
-        this.replication.queueAbilityCreatorStateMessage(user, creatorState);
+        this.replication.queueCreatorStateMessage(user, creatorState);
+
         const inventoryState = this.itemInventorySystem.ensureInventoryLoaded(accountId);
         this.queueInventoryStateMessage(user, inventoryState);
       },
@@ -1359,7 +1407,7 @@ export class GameSimulation {
         this.simulationEcs.bindPlayerLookupIndexes(player, user.id);
       },
       onPlayerRemoved: (user, player) => {
-        this.abilityCreatorSystem.removeUserSession(user.id);
+        this.creatorSystem.removeSession(user.id);
         this.controllerSystem.detachUser(user.id);
         this.simulationEcs.unbindPlayerLookupIndexes(player, user.id);
         const eid = this.simulationEcs.getEidForObject(player);

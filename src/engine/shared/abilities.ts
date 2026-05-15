@@ -4,13 +4,35 @@ import {
   MAGIC_BOLT_SPAWN_FORWARD_OFFSET,
   MAGIC_BOLT_SPAWN_VERTICAL_OFFSET
 } from "./config";
-import {
-  ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY,
-  ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY,
-  type AbilityCreatorType
-} from "./abilityCreator";
 // Archetype data is injected by the game layer at startup via injectAbilityCatalog().
 // All lookup functions return empty/null results until the catalog is initialized.
+
+export type AbilityCreatorType = "melee" | "projectile" | "beam" | "aoe" | "buff" | "movement";
+
+export const ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY = "example-upside";
+export const ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY = "example-downside";
+
+export function abilityCreatorTypeToCategory(type: AbilityCreatorType): AbilityCategory {
+  const map: Record<AbilityCreatorType, AbilityCategory> = {
+    melee: "melee",
+    projectile: "projectile",
+    beam: "beam",
+    aoe: "aoe",
+    buff: "buff",
+    movement: "movement"
+  };
+  return map[type];
+}
+
+export function abilityCategoryToCreatorType(category: AbilityCategory): AbilityCreatorType | null {
+  if (category === "melee") return "melee";
+  if (category === "projectile") return "projectile";
+  if (category === "beam") return "beam";
+  if (category === "aoe") return "aoe";
+  if (category === "buff") return "buff";
+  if (category === "movement") return "movement";
+  return null;
+}
 
 export type AbilityCategory =
   | "projectile"

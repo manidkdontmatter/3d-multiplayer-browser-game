@@ -7,8 +7,8 @@ import {
   encodeAbilityAttributeMask,
   NType
 } from "../../shared/index";
-import type { AbilityDefinition, MovementMode } from "../../shared/index";
-import type { AbilityCreatorSessionSnapshot } from "../../shared/index";
+import type { AbilityDefinition, CreatorSessionSnapshot, MovementMode } from "../../shared/index";
+
 
 export interface ReplicationUser {
   id: number;
@@ -226,36 +226,18 @@ export class ReplicationMessagingSystem<
     });
   }
 
-  public queueAbilityCreatorStateMessage(
-    user: TUser,
-    snapshot: AbilityCreatorSessionSnapshot
-  ): void {
+  public queueCreatorStateMessage(user: TUser, snapshot: CreatorSessionSnapshot): void {
     user.queueMessage({
-      ntype: NType.AbilityCreatorStateMessage,
-      sessionId: Math.max(0, Math.floor(snapshot.sessionId)),
-      ackSequence: Math.max(0, Math.floor(snapshot.ackSequence)),
-      maxCreatorTier: Math.max(1, Math.floor(snapshot.maxCreatorTier)),
-      selectedTier: Math.max(1, Math.floor(snapshot.draft.tier)),
-      selectedType: abilityCategoryToWireValue(snapshot.draft.type),
-      abilityName: snapshot.draft.name,
-      coreExampleStat: Math.max(0, Math.floor(snapshot.draft.coreExampleStat)),
-      exampleUpsideEnabled: Boolean(snapshot.draft.exampleUpsideEnabled),
-      exampleDownsideEnabled: Boolean(snapshot.draft.exampleDownsideEnabled),
-      usingTemplate: Math.max(0, Math.floor(snapshot.draft.templateAbilityId)) > 0,
-      templateAbilityId: Math.max(0, Math.floor(snapshot.draft.templateAbilityId)),
-      totalPointBudget: Math.max(0, Math.floor(snapshot.capacity.totalPointBudget)),
-      spentPoints: Math.max(0, Math.floor(snapshot.capacity.spentPoints)),
-      remainingPoints: Math.max(0, Math.floor(snapshot.capacity.remainingPoints)),
-      upsideSlots: Math.max(0, Math.floor(snapshot.capacity.upsideSlots)),
-      downsideMax: Math.max(0, Math.floor(snapshot.capacity.downsideMax)),
-      usedUpsideSlots: Math.max(0, Math.floor(snapshot.capacity.usedUpsideSlots)),
-      usedDownsideSlots: Math.max(0, Math.floor(snapshot.capacity.usedDownsideSlots)),
-      derivedExamplePower: snapshot.derived.examplePower,
-      derivedExampleStability: snapshot.derived.exampleStability,
-      derivedExampleComplexity: snapshot.derived.exampleComplexity,
-      isValid: snapshot.validation.valid,
-      validationMessage: snapshot.validation.message,
-      ownedAbilityCount: Math.max(0, Math.floor(snapshot.ownedAbilityCount))
+      ntype: NType.CreatorStateMessage,
+      stateJson: JSON.stringify({
+        sessionId: Math.max(0, Math.floor(snapshot.sessionId)),
+        ackSequence: Math.max(0, Math.floor(snapshot.ackSequence)),
+        kind: snapshot.kind,
+        draftJson: JSON.stringify(snapshot.draft),
+        capacityJson: JSON.stringify(snapshot.capacity),
+        validationJson: JSON.stringify(snapshot.validation),
+        ownedArchetypeCount: Math.max(0, Math.floor(snapshot.ownedArchetypeCount))
+      })
     });
   }
 }

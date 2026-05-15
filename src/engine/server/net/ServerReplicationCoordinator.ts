@@ -1,6 +1,6 @@
 // Bridges simulation state changes into nengi replication entities and server messages.
 import type { AbilityDefinition } from "../../shared/index";
-import type { AbilityCreatorSessionSnapshot } from "../../shared/index";
+import type { CreatorSessionSnapshot } from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
 import { NType } from "../../shared/netcode";
 import { NetReplicationBridge, type ReplicatedSnapshot } from "../netcode/NetReplicationBridge";
@@ -129,8 +129,8 @@ export class ServerReplicationCoordinator<
     this.replicationMessaging.queueAbilityDefinitionMessage(user, ability);
   }
 
-  public queueAbilityCreatorStateMessage(user: TUser, snapshot: AbilityCreatorSessionSnapshot): void {
-    this.replicationMessaging.queueAbilityCreatorStateMessage(user, snapshot);
+  public queueCreatorStateMessage(user: TUser, snapshot: CreatorSessionSnapshot): void {
+    this.replicationMessaging.queueCreatorStateMessage(user, snapshot);
   }
 
   public broadcastAbilityUseMessage(player: TPlayer, ability: AbilityDefinition): void {

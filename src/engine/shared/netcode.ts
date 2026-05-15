@@ -12,13 +12,13 @@ export enum NType {
   AbilityUseMessage = 13,
   ServerPopulationMessage = 14,
   AbilityOwnershipMessage = 15,
-  AbilityCreatorCommand = 16,
-  AbilityCreatorStateMessage = 17,
   MapTransferCommand = 18,
   MapTransferMessage = 19,
   LocationRootEntity = 20,
   ItemCommand = 21,
-  InventoryStateMessage = 22
+  InventoryStateMessage = 22,
+  CreatorCommand = 23,
+  CreatorStateMessage = 24
 }
 
 export const inputCommandSchema = defineSchema({
@@ -49,26 +49,6 @@ export const abilityCommandSchema = defineSchema({
   secondaryMouseSlot: Binary.UInt8,
   applyForgetAbility: Binary.Boolean,
   forgetAbilityId: Binary.UInt16
-});
-
-export const abilityCreatorCommandSchema = defineSchema({
-  sessionId: Binary.UInt16,
-  sequence: Binary.UInt16,
-  applyName: Binary.Boolean,
-  abilityName: Binary.String,
-  applyType: Binary.Boolean,
-  abilityType: Binary.UInt8,
-  applyTier: Binary.Boolean,
-  tier: Binary.UInt8,
-  incrementExampleStat: Binary.Boolean,
-  decrementExampleStat: Binary.Boolean,
-  applyExampleUpsideEnabled: Binary.Boolean,
-  exampleUpsideEnabled: Binary.Boolean,
-  applyExampleDownsideEnabled: Binary.Boolean,
-  exampleDownsideEnabled: Binary.Boolean,
-  applyTemplateAbilityId: Binary.Boolean,
-  templateAbilityId: Binary.UInt16,
-  submitCreate: Binary.Boolean
 });
 
 export const mapTransferCommandSchema = defineSchema({
@@ -179,33 +159,6 @@ export const abilityOwnershipMessageSchema = defineSchema({
   unlockedAbilityIdsCsv: Binary.String
 });
 
-export const abilityCreatorStateMessageSchema = defineSchema({
-  sessionId: Binary.UInt16,
-  ackSequence: Binary.UInt16,
-  maxCreatorTier: Binary.UInt8,
-  selectedTier: Binary.UInt8,
-  selectedType: Binary.UInt8,
-  abilityName: Binary.String,
-  coreExampleStat: Binary.UInt8,
-  exampleUpsideEnabled: Binary.Boolean,
-  exampleDownsideEnabled: Binary.Boolean,
-  usingTemplate: Binary.Boolean,
-  templateAbilityId: Binary.UInt16,
-  totalPointBudget: Binary.UInt8,
-  spentPoints: Binary.UInt8,
-  remainingPoints: Binary.UInt8,
-  upsideSlots: Binary.UInt8,
-  downsideMax: Binary.UInt8,
-  usedUpsideSlots: Binary.UInt8,
-  usedDownsideSlots: Binary.UInt8,
-  derivedExamplePower: Binary.Float32,
-  derivedExampleStability: Binary.Float32,
-  derivedExampleComplexity: Binary.Float32,
-  isValid: Binary.Boolean,
-  validationMessage: Binary.String,
-  ownedAbilityCount: Binary.UInt8
-});
-
 export const serverPopulationMessageSchema = defineSchema({
   onlinePlayers: Binary.UInt16
 });
@@ -225,10 +178,17 @@ export const inventoryStateMessageSchema = defineSchema({
   inventoryJson: Binary.String
 });
 
+export const creatorCommandSchema = defineSchema({
+  commandJson: Binary.String
+});
+
+export const creatorStateMessageSchema = defineSchema({
+  stateJson: Binary.String
+});
+
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCommand, abilityCommandSchema);
-ncontext.register(NType.AbilityCreatorCommand, abilityCreatorCommandSchema);
 ncontext.register(NType.ItemCommand, itemCommandSchema);
 ncontext.register(NType.BaseEntity, baseEntitySchema);
 ncontext.register(NType.LocationRootEntity, locationRootEntitySchema);
@@ -239,10 +199,11 @@ ncontext.register(NType.AbilityStateMessage, abilityStateMessageSchema);
 ncontext.register(NType.AbilityUseMessage, abilityUseMessageSchema);
 ncontext.register(NType.ServerPopulationMessage, serverPopulationMessageSchema);
 ncontext.register(NType.AbilityOwnershipMessage, abilityOwnershipMessageSchema);
-ncontext.register(NType.AbilityCreatorStateMessage, abilityCreatorStateMessageSchema);
 ncontext.register(NType.MapTransferCommand, mapTransferCommandSchema);
 ncontext.register(NType.MapTransferMessage, mapTransferMessageSchema);
 ncontext.register(NType.InventoryStateMessage, inventoryStateMessageSchema);
+ncontext.register(NType.CreatorCommand, creatorCommandSchema);
+ncontext.register(NType.CreatorStateMessage, creatorStateMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -274,27 +235,6 @@ export interface AbilityCommand {
   secondaryMouseSlot: number;
   applyForgetAbility: boolean;
   forgetAbilityId: number;
-}
-
-export interface AbilityCreatorCommand {
-  ntype: NType.AbilityCreatorCommand;
-  sessionId: number;
-  sequence: number;
-  applyName: boolean;
-  abilityName: string;
-  applyType: boolean;
-  abilityType: number;
-  applyTier: boolean;
-  tier: number;
-  incrementExampleStat: boolean;
-  decrementExampleStat: boolean;
-  applyExampleUpsideEnabled: boolean;
-  exampleUpsideEnabled: boolean;
-  applyExampleDownsideEnabled: boolean;
-  exampleDownsideEnabled: boolean;
-  applyTemplateAbilityId: boolean;
-  templateAbilityId: number;
-  submitCreate: boolean;
 }
 
 export interface MapTransferCommand {
@@ -417,34 +357,6 @@ export interface AbilityOwnershipMessage {
   unlockedAbilityIdsCsv: string;
 }
 
-export interface AbilityCreatorStateMessage {
-  ntype: NType.AbilityCreatorStateMessage;
-  sessionId: number;
-  ackSequence: number;
-  maxCreatorTier: number;
-  selectedTier: number;
-  selectedType: number;
-  abilityName: string;
-  coreExampleStat: number;
-  exampleUpsideEnabled: boolean;
-  exampleDownsideEnabled: boolean;
-  usingTemplate: boolean;
-  templateAbilityId: number;
-  totalPointBudget: number;
-  spentPoints: number;
-  remainingPoints: number;
-  upsideSlots: number;
-  downsideMax: number;
-  usedUpsideSlots: number;
-  usedDownsideSlots: number;
-  derivedExamplePower: number;
-  derivedExampleStability: number;
-  derivedExampleComplexity: number;
-  isValid: boolean;
-  validationMessage: string;
-  ownedAbilityCount: number;
-}
-
 export interface ServerPopulationMessage {
   ntype: NType.ServerPopulationMessage;
   onlinePlayers: number;
@@ -465,4 +377,40 @@ export interface MapTransferMessage {
 export interface InventoryStateMessage {
   ntype: NType.InventoryStateMessage;
   inventoryJson: string;
+}
+
+// ── Generalized creator network messages ───────────────────────────────────────
+
+export interface CreatorCommandWire {
+  ntype: NType.CreatorCommand;
+  commandJson: string;
+}
+
+export interface CreatorStateMessageWire {
+  ntype: NType.CreatorStateMessage;
+  stateJson: string;
+}
+
+export type CreatorCommandAction =
+  | { kind: "allocate_stat"; statId: string; delta: number }
+  | { kind: "toggle_trait"; traitId: string }
+  | { kind: "apply_name"; name: string }
+  | { kind: "select_base_archetype"; archetypeId: number }
+  | { kind: "submit_create" }
+  | { kind: "forget"; archetypeId: number };
+
+export interface CreatorCommandPayload {
+  sessionId: number;
+  sequence: number;
+  actions: CreatorCommandAction[];
+}
+
+export interface CreatorStatePayload {
+  sessionId: number;
+  ackSequence: number;
+  kind: string;
+  draftJson: string;
+  capacityJson: string;
+  validationJson: string;
+  ownedArchetypeCount: number;
 }

@@ -970,6 +970,230 @@ body {
   opacity: 0.85;
 }
 
+/* Generalized creator panel (reuses ability-creator layout with creator-* prefix) */
+.main-ui-panel-creator {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.creator-top-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.creator-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.creator-control-label {
+  font-size: 0.75rem;
+  color: var(--ui-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.creator-input,
+.creator-select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-2);
+  color: var(--ui-text-primary);
+  font-size: 0.9rem;
+  min-width: 120px;
+}
+
+.creator-input:focus,
+.creator-select:focus {
+  border-color: var(--ui-border-accent);
+  box-shadow: var(--ui-shadow-focus);
+  outline: none;
+}
+
+.creator-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.creator-pane {
+  flex: 1;
+  min-width: 220px;
+  background: var(--ui-surface-1);
+  border: 1px solid var(--ui-border-soft);
+  border-radius: var(--ui-radius-md);
+  padding: 14px;
+}
+
+.creator-pane h4 {
+  margin: 0 0 10px;
+  font-size: 0.9rem;
+  color: var(--ui-text-strong);
+  border-bottom: 1px solid var(--ui-border-soft);
+  padding-bottom: 6px;
+}
+
+.creator-stat-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.creator-stat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.creator-stat-name {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--ui-text-primary);
+  text-transform: capitalize;
+}
+
+.creator-stat-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.creator-stat-button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-2);
+  color: var(--ui-text-primary);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.creator-stat-button:hover {
+  background: var(--ui-surface-0);
+  border-color: var(--ui-border-strong);
+}
+
+.creator-stat-value {
+  min-width: 32px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--ui-text-accent);
+}
+
+.creator-detail {
+  font-size: 0.75rem;
+  color: var(--ui-text-muted);
+  margin-top: 8px;
+}
+
+.creator-trait-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.creator-trait-section h5 {
+  font-size: 0.78rem;
+  color: var(--ui-text-muted);
+  margin: 0 0 4px;
+}
+
+.creator-trait-section > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.creator-trait-card {
+  padding: 6px 10px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-2);
+  color: var(--ui-text-primary);
+  cursor: pointer;
+  font-size: 0.78rem;
+  transition: background var(--ui-fast);
+}
+
+.creator-trait-card:hover {
+  border-color: var(--ui-border-strong);
+}
+
+.creator-trait-selected {
+  background: rgba(139, 245, 203, 0.15);
+  border-color: var(--ui-border-accent);
+  color: var(--ui-text-accent);
+}
+
+.creator-derived-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.creator-derived-list li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--ui-text-primary);
+}
+
+.creator-validation {
+  font-size: 0.78rem;
+  color: var(--ui-text-muted);
+  margin-top: 10px;
+}
+
+.creator-validation-invalid {
+  color: #f4a0a0;
+}
+
+.creator-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-border-soft);
+}
+
+.creator-create {
+  min-width: 160px;
+  height: 40px;
+  border: 1px solid var(--ui-border-accent);
+  border-radius: var(--ui-radius-md);
+  background: rgba(139, 245, 203, 0.12);
+  color: var(--ui-text-accent);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: background var(--ui-fast);
+}
+
+.creator-create:hover {
+  background: rgba(139, 245, 203, 0.22);
+}
+
+.creator-disabled {
+  opacity: 0.85;
+}
+
+.creator-input:disabled,
+.creator-select:disabled,
+.creator-stat-button:disabled,
+.creator-trait-card:disabled,
+.creator-create:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 @media (max-width: 1100px) {
   #main-ui-shell {
     grid-template-columns: 220px 1fr;

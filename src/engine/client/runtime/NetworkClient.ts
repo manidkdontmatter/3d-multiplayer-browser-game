@@ -14,7 +14,7 @@ import {
 import {
   NType,
   type AbilityCommand,
-  type AbilityCreatorCommand,
+  type CreatorCommandWire,
   type ItemCommand,
   type MapTransferCommand,
   ncontext
@@ -31,7 +31,9 @@ import type {
   AbilityUseEvent
 } from "./types";
 import { AbilityStateStore } from "./network/AbilityStateStore";
-import { AbilityCreatorStateStore } from "./network/AbilityCreatorStateStore";
+import { CreatorNetworkBridge } from "./network/CreatorNetworkBridge";
+import type { CreatorClientState } from "./network/CreatorStateStore";
+import type { CreatorPanelCommand } from "../ui/CreatorPanel";
 import { InventoryStateStore } from "./network/InventoryStateStore";
 import { AckReconciliationBuffer } from "./network/AckReconciliationBuffer";
 import { InterpolationController } from "./network/InterpolationController";
@@ -41,8 +43,6 @@ import { ServerTimeSync } from "./network/ServerTimeSync";
 import { SnapshotStore } from "./network/SnapshotStore";
 import type {
   AbilityEventBatch,
-  AbilityCreatorState,
-  QueuedAbilityCreatorCommand,
   AbilityState,
   InventoryState,
   NetSimulationConfig,
@@ -58,7 +58,7 @@ export class NetworkClient {
   private readonly transport: NetTransportClient;
   private readonly snapshots = new SnapshotStore();
   private readonly abilities = new AbilityStateStore();
-  private readonly abilityCreator = new AbilityCreatorStateStore();
+  private readonly creatorBridge = new CreatorNetworkBridge();
   private readonly inventory = new InventoryStateStore();
   private readonly interpolation = new InterpolationController();
   private readonly serverTimeSync = new ServerTimeSync();
@@ -66,8 +66,6 @@ export class NetworkClient {
   private readonly inboundMessageRouter = new InboundMessageRouter();
   private readonly netSimulation = this.resolveNetSimulationConfig();
   private queuedAbilityCommand: QueuedAbilityCommand | null = null;
-  private readonly queuedAbilityCreatorCommands: QueuedAbilityCreatorCommand[] = [];
-  private nextAbilityCreatorSequence = 1;
   private localPlayerNid: number | null = null;
   private serverPlayerCount: number | null = null;
   private pendingMapTransferInstruction: MapTransferInstruction | null = null;
@@ -84,14 +82,12 @@ export class NetworkClient {
       () => {
         this.snapshots.reset();
         this.abilities.reset();
-        this.abilityCreator.reset();
+        this.creatorBridge.reset();
         this.inventory.reset();
         this.interpolation.reset();
         this.serverTimeSync.reset();
         this.ackBuffer.reset();
         this.queuedAbilityCommand = null;
-        this.queuedAbilityCreatorCommands.length = 0;
-        this.nextAbilityCreatorSequence = 1;
         this.serverPlayerCount = null;
         this.pendingMapTransferInstruction = null;
       },
@@ -151,30 +147,14 @@ export class NetworkClient {
       this.queuedAbilityCommand = null;
     }
 
-    if (this.queuedAbilityCreatorCommands.length > 0) {
-      const drained = this.queuedAbilityCreatorCommands.splice(0, this.queuedAbilityCreatorCommands.length);
-      for (const creatorCommand of drained) {
-        this.transport.addCommand({
-          ntype: NType.AbilityCreatorCommand,
-          sessionId: this.clampUnsignedInt(creatorCommand.sessionId, 0xffff),
-          sequence: this.clampUnsignedInt(creatorCommand.sequence, 0xffff),
-          applyName: creatorCommand.applyName,
-          abilityName: creatorCommand.abilityName,
-          applyType: creatorCommand.applyType,
-          abilityType: this.clampUnsignedInt(creatorCommand.abilityType, 0xff),
-          applyTier: creatorCommand.applyTier,
-          tier: this.clampUnsignedInt(creatorCommand.tier, 0xff),
-          incrementExampleStat: creatorCommand.incrementExampleStat,
-          decrementExampleStat: creatorCommand.decrementExampleStat,
-          applyExampleUpsideEnabled: creatorCommand.applyExampleUpsideEnabled,
-          exampleUpsideEnabled: creatorCommand.exampleUpsideEnabled,
-          applyExampleDownsideEnabled: creatorCommand.applyExampleDownsideEnabled,
-          exampleDownsideEnabled: creatorCommand.exampleDownsideEnabled,
-          applyTemplateAbilityId: creatorCommand.applyTemplateAbilityId,
-          templateAbilityId: this.clampUnsignedInt(creatorCommand.templateAbilityId, 0xffff),
-          submitCreate: creatorCommand.submitCreate
-        } satisfies AbilityCreatorCommand);
-      }
+    // Drain generalized creator commands and send as NType 23
+    const sessionId = this.creatorBridge.getStateStore().getCurrentSessionId();
+    const creatorPayloads = this.creatorBridge.drainCommands(sessionId);
+    for (const payload of creatorPayloads) {
+      this.transport.addCommand({
+        ntype: NType.CreatorCommand,
+        commandJson: payload
+      } satisfies CreatorCommandWire);
     }
 
     this.transport.addCommand({
@@ -226,49 +206,6 @@ export class NetworkClient {
     queued.applyForgetAbility = true;
     queued.forgetAbilityId = abilityId;
     this.queuedAbilityCommand = queued;
-  }
-
-  public queueAbilityCreatorCommand(command: {
-    applyName?: boolean;
-    abilityName?: string;
-    applyType?: boolean;
-    abilityType?: number;
-    applyTier?: boolean;
-    tier?: number;
-    incrementExampleStat?: boolean;
-    decrementExampleStat?: boolean;
-    applyExampleUpsideEnabled?: boolean;
-    exampleUpsideEnabled?: boolean;
-    applyExampleDownsideEnabled?: boolean;
-    exampleDownsideEnabled?: boolean;
-    applyTemplateAbilityId?: boolean;
-    templateAbilityId?: number;
-    submitCreate?: boolean;
-  }): void {
-    if (!this.transport.isConnected()) {
-      return;
-    }
-    const nextSequence = this.nextAbilityCreatorSequence;
-    this.nextAbilityCreatorSequence = (this.nextAbilityCreatorSequence % 0xffff) + 1;
-    this.queuedAbilityCreatorCommands.push({
-      sessionId: this.abilityCreator.getCurrentSessionId(),
-      sequence: nextSequence,
-      applyName: Boolean(command.applyName),
-      abilityName: typeof command.abilityName === "string" ? command.abilityName : "",
-      applyType: Boolean(command.applyType),
-      abilityType: Number.isFinite(command.abilityType) ? Number(command.abilityType) : 0,
-      applyTier: Boolean(command.applyTier),
-      tier: Number.isFinite(command.tier) ? Number(command.tier) : 0,
-      incrementExampleStat: Boolean(command.incrementExampleStat),
-      decrementExampleStat: Boolean(command.decrementExampleStat),
-      applyExampleUpsideEnabled: Boolean(command.applyExampleUpsideEnabled),
-      exampleUpsideEnabled: Boolean(command.exampleUpsideEnabled),
-      applyExampleDownsideEnabled: Boolean(command.applyExampleDownsideEnabled),
-      exampleDownsideEnabled: Boolean(command.exampleDownsideEnabled),
-      applyTemplateAbilityId: Boolean(command.applyTemplateAbilityId),
-      templateAbilityId: Number.isFinite(command.templateAbilityId) ? Number(command.templateAbilityId) : 0,
-      submitCreate: Boolean(command.submitCreate)
-    });
   }
 
   public queueMapTransfer(targetMapInstanceId: string): void {
@@ -356,8 +293,17 @@ export class NetworkClient {
     return this.abilities.getOwnedAbilityIds();
   }
 
-  public consumeAbilityCreatorState(): AbilityCreatorState | null {
-    return this.abilityCreator.consumeState();
+  public queueCreatorCommand(command: CreatorPanelCommand): void {
+    const csid = this.creatorBridge.getStateStore().getCurrentSessionId();
+    this.creatorBridge.queueCommand(command, csid);
+  }
+
+  public consumeCreatorState(): CreatorClientState | null {
+    return this.creatorBridge.consumeState();
+  }
+
+  public getCreatorBridge(): CreatorNetworkBridge {
+    return this.creatorBridge;
   }
 
   public consumeInventoryState(): InventoryState | null {
@@ -499,7 +445,7 @@ export class NetworkClient {
         if (this.abilities.processMessage(message)) {
           return;
         }
-        this.abilityCreator.processMessage(message);
+        this.creatorBridge.processMessage(message);
       }
     });
 
