@@ -1,84 +1,5 @@
-// Type contracts for simulation ECS objects and component layout.
-import type RAPIER from "@dimforge/rapier3d-compat";
+// Type contracts for the bitecs world component layout.
 import type { MovementMode } from "../../shared/index";
-
-export type SimObject = {
-  nid: number;
-  modelId: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  health: number;
-  maxHealth: number;
-  itemArchetypeId?: number;
-  itemQuantity?: number;
-  grounded: boolean;
-  movementMode?: MovementMode;
-  locationKind?: number;
-  locationArchetypeId?: number;
-  locationSeed?: number;
-  locationEnvironmentId?: number;
-  locationStreamingRadius?: number;
-  locationInfluenceRadius?: number;
-  characterArchetypeId?: number;
-  controllerKind?: number;
-};
-
-export type CharacterObject = SimObject & {
-  movementMode: MovementMode;
-  accountId?: number;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  pitch: number;
-  lastProcessedSequence: number;
-  lastPrimaryFireAtSeconds: number;
-  primaryHeld: boolean;
-  secondaryHeld: boolean;
-  primaryMouseSlot: number;
-  secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
-  unlockedAbilityIds: Set<number>;
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
-  vx: number;
-  vy: number;
-  vz: number;
-  groundedPlatformPid: number | null;
-  carriedFramePid: number | null;
-};
-
-export type PlayerObject = CharacterObject & {
-  accountId: number;
-};
-
-export type DummyObject = SimObject & {
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
-};
-
-export type ProjectileCreateRequest = {
-  modelId: number;
-  ownerNid: number;
-  kind: number;
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  radius: number;
-  damage: number;
-  ttlSeconds: number;
-  remainingRange: number;
-  gravity: number;
-  drag: number;
-  maxSpeed: number;
-  minSpeed: number;
-  remainingPierces: number;
-  despawnOnDamageableHit: boolean;
-  despawnOnWorldHit: boolean;
-};
 
 export type WorldWithComponents = {
   components: {
@@ -147,4 +68,119 @@ export type WorldWithComponents = {
     DummyTag: number[];
     LocationRootTag: number[];
   };
+};
+
+// Runtime player state assembled from components — used as a temporary
+// working struct by systems that read/write ECS components directly.
+import type RAPIER from "@dimforge/rapier3d-compat";
+
+export interface PlayerStateSnapshot {
+  eid: number;
+  accountId: number;
+  nid: number;
+  modelId: number;
+  x: number; y: number; z: number;
+  yaw: number; pitch: number;
+  vx: number; vy: number; vz: number;
+  grounded: boolean;
+  movementMode: MovementMode;
+  groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
+  lastProcessedSequence: number;
+  lastPrimaryFireAtSeconds: number;
+  primaryHeld: boolean;
+  secondaryHeld: boolean;
+  health: number;
+  maxHealth: number;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
+  hotbarAbilityIds: number[];
+  unlockedAbilityIds: Set<number>;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
+}
+
+// Inline component value types used by replication and systems.
+export type ProjectileState = {
+  ownerNid: number;
+  kind: number;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  radius: number;
+  damage: number;
+  ttlSeconds: number;
+  remainingRange: number;
+  gravity: number;
+  drag: number;
+  maxSpeed: number;
+  minSpeed: number;
+  remainingPierces: number;
+  despawnOnDamageableHit: boolean;
+  despawnOnWorldHit: boolean;
+};
+
+export type DamageState = {
+  accountId: number;
+  nid: number;
+  health: number;
+  maxHealth: number;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  grounded: boolean;
+  movementMode: MovementMode;
+  groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
+};
+
+export type InputAckState = {
+  nid: number;
+  lastProcessedSequence: number;
+  x: number; y: number; z: number;
+  yaw: number;
+  pitch: number;
+  vx: number; vy: number; vz: number;
+  grounded: boolean;
+  movementMode: MovementMode;
+  groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
+};
+
+export type PersistenceState = {
+  accountId: number;
+  x: number; y: number; z: number;
+  yaw: number;
+  pitch: number;
+  vx: number; vy: number; vz: number;
+  health: number;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
+  hotbarAbilityIds: number[];
+};
+
+export type ReplicationSnapshot = {
+  nid: number;
+  modelId: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  grounded: boolean;
+  movementMode: MovementMode;
+  health: number;
+  maxHealth: number;
+  itemArchetypeId: number;
+  itemQuantity: number;
+  locationKind: number;
+  locationArchetypeId: number;
+  locationSeed: number;
+  locationEnvironmentId: number;
+  locationStreamingRadius: number;
+  locationInfluenceRadius: number;
+};
+
+export type AbilityState = {
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
+  hotbarAbilityIds: number[];
+  unlockedAbilityIds: number[];
 };

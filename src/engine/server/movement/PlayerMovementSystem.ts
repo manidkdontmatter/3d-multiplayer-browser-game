@@ -1,131 +1,129 @@
-// Authoritative fixed-step movement system that advances player kinematic controller state.
+// Authoritative fixed-step movement system. Reads/writes ECS components directly.
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   GROUND_CONTACT_MIN_NORMAL_Y,
   type GroundSupportHit,
-  type MovementMode,
+  MOVEMENT_MODE_GROUNDED,
   PLAYER_CAMERA_OFFSET_Y,
   quaternionFromYawPitchRoll,
   resolveGroundSupportColliderHandle as queryGroundSupportColliderHandle,
-  stepKinematicCharacterController
+  sanitizeMovementMode,
+  stepKinematicCharacterController,
+  type MovementMode
 } from "../../shared/index";
+import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 
 type PlayerCarry = { x: number; y: number; z: number; yaw: number; carriedFramePid: number | null };
 
-export interface PlayerMovementActor {
-  movementMode: MovementMode;
-  yaw: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  grounded: boolean;
-  groundedPlatformPid: number | null;
-  carriedFramePid: number | null;
-  x: number;
-  y: number;
-  z: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
-}
-
-export interface PlayerMovementSystemOptions<TPlayer extends PlayerMovementActor> {
+export interface PlayerMovementSystemOptions {
   readonly world?: RAPIER.World;
   readonly characterController: RAPIER.KinematicCharacterController;
   readonly playerCapsuleHalfHeight?: number;
   readonly playerCapsuleRadius?: number;
-  readonly beforePlayerMove?: (player: TPlayer) => void;
-  readonly samplePlayerPlatformCarry: (player: TPlayer) => PlayerCarry;
-  readonly resolvePlayerCarriedFramePid?: (
-    player: TPlayer,
-    movedBody: { x: number; y: number; z: number },
-    previousCarriedFramePid: number | null
-  ) => number | null;
-  readonly resolveGroundSupportColliderHandle?: (player: TPlayer, groundedByQuery: boolean) => GroundSupportHit;
+  readonly ecsComponents: WorldWithComponents["components"];
+  readonly getBody: (eid: number) => RAPIER.RigidBody | undefined;
+  readonly getCollider: (eid: number) => RAPIER.Collider | undefined;
+  readonly getUnlockedAbilityIds: (eid: number) => Set<number>;
+  readonly getHotbar: (eid: number) => number[];
+  readonly beforePlayerMove?: (eid: number, unlockedAbilityIds: Set<number>, primaryMouseSlot: number, secondaryMouseSlot: number, hotbar: number[]) => void;
+  readonly samplePlayerPlatformCarry: (eid: number) => PlayerCarry;
+  readonly resolvePlayerCarriedFramePid?: (eid: number, movedBody: { x: number; y: number; z: number }, previousCarriedFramePid: number | null) => number | null;
+  readonly resolveGroundSupportColliderHandle?: (eid: number, groundedByQuery: boolean) => GroundSupportHit;
   readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
-  readonly onPlayerStepped: (userId: number, player: TPlayer) => void;
+  readonly onPlayerStepped: (userId: number, eid: number) => void;
 }
 
-export class PlayerMovementSystem<TPlayer extends PlayerMovementActor> {
-  public constructor(private readonly options: PlayerMovementSystemOptions<TPlayer>) {}
+export class PlayerMovementSystem {
+  public constructor(private readonly options: PlayerMovementSystemOptions) {}
 
   public stepPlayers(
-    players: Iterable<readonly [number, TPlayer]>,
+    players: Iterable<readonly [number, number]>,
     deltaSeconds: number,
     simulationSeconds: number
   ): void {
-    for (const [userId, player] of players) {
-      this.options.beforePlayerMove?.(player);
-      const carry = this.options.samplePlayerPlatformCarry(player);
+    const c = this.options.ecsComponents;
+    for (const [userId, eid] of players) {
+      const body = this.options.getBody(eid);
+      const collider = this.options.getCollider(eid);
+      if (!body || !collider) continue;
+
+      const unlocked = this.options.getUnlockedAbilityIds(eid);
+      const hotbar = this.options.getHotbar(eid);
+      const primarySlot = c.PrimaryMouseSlot.value[eid] ?? 0;
+      const secondarySlot = c.SecondaryMouseSlot.value[eid] ?? 1;
+
+      this.options.beforePlayerMove?.(eid, unlocked, primarySlot, secondarySlot, hotbar);
+
+      const carry = this.options.samplePlayerPlatformCarry(eid);
+      const x = c.Position.x[eid] ?? 0;
+      const y = c.Position.y[eid] ?? 0;
+      const z = c.Position.z[eid] ?? 0;
+      const gp = c.GroundedPlatformPid.value[eid] ?? -1;
+      const cf = c.CarriedFramePid.value[eid] ?? -1;
+
+      const state = {
+        x, y, z,
+        yaw: c.Yaw.value[eid] ?? 0,
+        vx: c.Velocity.x[eid] ?? 0,
+        vy: c.Velocity.y[eid] ?? 0,
+        vz: c.Velocity.z[eid] ?? 0,
+        grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+        groundedPlatformPid: gp < 0 ? null : gp,
+        carriedFramePid: cf < 0 ? null : cf,
+        movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
+        position: { x, y, z },
+        rotation: { x: c.Rotation.x[eid] ?? 0, y: c.Rotation.y[eid] ?? 0, z: c.Rotation.z[eid] ?? 0, w: c.Rotation.w[eid] ?? 1 }
+      };
+
       const next = stepKinematicCharacterController({
-        state: {
-          ...player,
-          carriedFramePid: carry.carriedFramePid
-        },
-        deltaSeconds,
-        carry,
-        body: player.body,
-        collider: player.collider,
+        state: { ...state, carriedFramePid: carry.carriedFramePid },
+        deltaSeconds, carry, body, collider,
         characterController: this.options.characterController,
         playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
         groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y,
         simulationSeconds,
         resolveGroundSupportColliderHandle: (groundedByQuery) =>
-          this.resolveGroundSupportColliderHandle(player, groundedByQuery),
+          this.resolveGroundSupportColliderHandle(eid, groundedByQuery),
         resolvePlatformPidByColliderHandle: this.options.resolvePlatformPidByColliderHandle,
-        resolveCarriedFramePid: (movedBody, previousCarriedFramePid) =>
-          this.options.resolvePlayerCarriedFramePid?.(player, movedBody, previousCarriedFramePid) ??
-          previousCarriedFramePid
+        resolveCarriedFramePid: (movedBody, prev) =>
+          this.options.resolvePlayerCarriedFramePid?.(eid, movedBody, prev) ?? prev
       });
-      player.yaw = next.yaw;
-      player.grounded = next.grounded;
-      player.groundedPlatformPid = next.groundedPlatformPid;
-      player.carriedFramePid = next.carriedFramePid;
-      player.vy = next.vy;
-      player.x = next.x;
-      player.y = next.y;
-      player.z = next.z;
-      player.position.x = next.x;
-      player.position.y = next.y;
-      player.position.z = next.z;
-      const nextRotation = quaternionFromYawPitchRoll(player.yaw, 0);
-      player.rotation.x = nextRotation.x;
-      player.rotation.y = nextRotation.y;
-      player.rotation.z = nextRotation.z;
-      player.rotation.w = nextRotation.w;
-      this.options.onPlayerStepped(userId, player);
+
+      // Write back to ECS
+      c.Position.x[eid] = next.x;
+      c.Position.y[eid] = next.y;
+      c.Position.z[eid] = next.z;
+      c.Yaw.value[eid] = next.yaw;
+      c.Velocity.y[eid] = next.vy;
+      c.Grounded.value[eid] = next.grounded ? 1 : 0;
+      c.GroundedPlatformPid.value[eid] = next.groundedPlatformPid === null ? -1 : next.groundedPlatformPid;
+      c.CarriedFramePid.value[eid] = next.carriedFramePid === null ? -1 : next.carriedFramePid;
+      const rot = quaternionFromYawPitchRoll(next.yaw, 0);
+      c.Rotation.x[eid] = rot.x;
+      c.Rotation.y[eid] = rot.y;
+      c.Rotation.z[eid] = rot.z;
+      c.Rotation.w[eid] = rot.w;
+
+      this.options.onPlayerStepped(userId, eid);
     }
   }
 
-  private resolveGroundSupportColliderHandle(
-    player: TPlayer,
-    groundedByQuery: boolean
-  ): GroundSupportHit {
+  private resolveGroundSupportColliderHandle(eid: number, groundedByQuery: boolean): GroundSupportHit {
     if (this.options.resolveGroundSupportColliderHandle) {
-      return this.options.resolveGroundSupportColliderHandle(player, groundedByQuery);
+      return this.options.resolveGroundSupportColliderHandle(eid, groundedByQuery);
     }
-
     const world = this.options.world;
-    const capsuleHalfHeight = this.options.playerCapsuleHalfHeight;
-    const capsuleRadius = this.options.playerCapsuleRadius;
-    if (!world || !Number.isFinite(capsuleHalfHeight) || !Number.isFinite(capsuleRadius)) {
-      throw new Error(
-        "PlayerMovementSystem requires either resolveGroundSupportColliderHandle or world + capsule dimensions"
-      );
+    const hh = this.options.playerCapsuleHalfHeight;
+    const r = this.options.playerCapsuleRadius;
+    if (!world || !Number.isFinite(hh) || !Number.isFinite(r)) {
+      throw new Error("PlayerMovementSystem requires resolveGroundSupportColliderHandle or world + capsule dimensions");
     }
-
-    const resolvedCapsuleHalfHeight = capsuleHalfHeight as number;
-    const resolvedCapsuleRadius = capsuleRadius as number;
-
+    const body = this.options.getBody(eid);
+    const collider = this.options.getCollider(eid);
+    if (!body || !collider) return { hit: false, colliderHandle: null };
     return queryGroundSupportColliderHandle({
-      groundedByQuery,
-      world,
-      characterController: this.options.characterController,
-      body: player.body,
-      collider: player.collider,
-      capsuleHalfHeight: resolvedCapsuleHalfHeight,
-      capsuleRadius: resolvedCapsuleRadius,
+      groundedByQuery, world, characterController: this.options.characterController,
+      body, collider, capsuleHalfHeight: hh as number, capsuleRadius: r as number,
       groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y
     });
   }

@@ -1,88 +1,42 @@
-// Handles player connect/disconnect flow and runtime entity spawn/teardown wiring.
+// Player connect/disconnect flow. Creates Rapier bodies, calls back to create
+// ECS entities, manages channel subscriptions and lifecycle cleanup.
 import RAPIER from "@dimforge/rapier3d-compat";
 import { PHYSICS_GROUP_CHARACTER } from "../../shared/index";
-import type { MovementMode } from "../../shared/index";
 import type { PlayerSnapshot } from "../persistence/PersistenceService";
-
-export interface BroadcastSubscriptionChannel<TUser> {
-  subscribe(user: TUser): void;
-}
-
-export interface SpatialSubscriptionChannel<TUser, TView> {
-  subscribe(user: TUser, view: TView): void;
-}
 
 export interface LifecycleUser {
   id: number;
   queueMessage: (message: unknown) => void;
   accountId?: number;
-  view?: {
-    x: number;
-    y: number;
-    z: number;
-    halfWidth: number;
-    halfHeight: number;
-    halfDepth: number;
-  };
-  farView?: {
-    x: number;
-    y: number;
-    z: number;
-    halfWidth: number;
-    halfHeight: number;
-    halfDepth: number;
-  };
+  view?: { x: number; y: number; z: number; halfWidth: number; halfHeight: number; halfDepth: number };
+  farView?: { x: number; y: number; z: number; halfWidth: number; halfHeight: number; halfDepth: number };
 }
 
-export interface LifecyclePlayer {
+export interface PlayerSpawnContext {
   accountId: number;
-  nid: number;
-  modelId: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  pitch: number;
-  vy: number;
-  vx: number;
-  vz: number;
-  grounded: boolean;
-  movementMode: MovementMode;
-  groundedPlatformPid: number | null;
-  carriedFramePid: number | null;
-  health: number;
-  maxHealth: number;
-  primaryMouseSlot: number;
-  secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
-  lastPrimaryFireAtSeconds: number;
-  lastProcessedSequence: number;
-  primaryHeld: boolean;
-  secondaryHeld: boolean;
-  unlockedAbilityIds: Set<number>;
+  spawnX: number;
+  spawnZ: number;
+  initialBodyY: number;
+  initialCameraY: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
+  health: number;
+  hotbarAbilityIds: number[];
+  unlockedAbilityIds: number[];
+  yaw: number;
+  pitch: number;
+  vx: number;
+  vy: number;
+  vz: number;
 }
 
-export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlayer extends LifecyclePlayer> {
+export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser> {
   readonly world: RAPIER.World;
-  readonly globalChannel: BroadcastSubscriptionChannel<TUser>;
-  readonly nearChannel: SpatialSubscriptionChannel<TUser, TUser["view"]>;
-  readonly farChannel: SpatialSubscriptionChannel<TUser, TUser["farView"]>;
-  readonly createUserView: (position: {
-    x: number;
-    y: number;
-    z: number;
-    halfWidth: number;
-    halfHeight: number;
-    halfDepth: number;
-  }) => NonNullable<TUser["view"]>;
+  readonly globalChannel: { subscribe(user: TUser): void };
+  readonly nearChannel: { subscribe(user: TUser, view: TUser["view"]): void };
+  readonly farChannel: { subscribe(user: TUser, view: TUser["farView"]): void };
+  readonly createUserView: (position: { x: number; y: number; z: number; halfWidth: number; halfHeight: number; halfDepth: number }) => NonNullable<TUser["view"]>;
   readonly usersById: Map<number, TUser>;
-  readonly resolvePlayerByUserId: (userId: number) => TPlayer | undefined;
-  readonly takePendingSnapshotForLogin: (accountId: number) => PlayerSnapshot | null;
-  readonly loadPlayerState: (accountId: number) => PlayerSnapshot | null;
   readonly getSpawnPosition: () => { x: number; z: number };
   readonly getSpawnBodyY: (x: number, z: number) => number;
   readonly playerBodyCenterHeight: number;
@@ -91,58 +45,35 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser, TPlay
   readonly playerCapsuleRadius: number;
   readonly maxPlayerHealth: number;
   readonly defaultUnlockedAbilityIds: readonly number[];
-  readonly resolveInitialUnlockedAbilityIds: (
-    accountId: number,
-    defaultUnlockedAbilityIds: readonly number[]
-  ) => number[];
+  readonly resolveInitialUnlockedAbilityIds: (accountId: number, defaultIds: readonly number[]) => number[];
   readonly sanitizeHotbarSlot: (rawSlot: unknown, fallbackSlot: number) => number;
   readonly createInitialHotbar: (savedHotbar?: number[]) => number[];
   readonly clampHealth: (value: number) => number;
-  readonly ensurePunchAssigned: (player: TPlayer) => void;
-  readonly buildPlayerEntity: (options: {
-    accountId: number;
-    spawnX: number;
-    spawnZ: number;
-    spawnBodyY: number;
-    spawnCameraY: number;
-    loaded: PlayerSnapshot | null;
-    body: RAPIER.RigidBody;
-    collider: RAPIER.Collider;
-    health: number;
-    primaryMouseSlot: number;
-    secondaryMouseSlot: number;
-    hotbarAbilityIds: number[];
-    unlockedAbilityIds: Set<number>;
-  }) => TPlayer;
-  readonly markPlayerDirty: (
-    player: TPlayer,
-    options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }
-  ) => void;
-  readonly registerPlayerForDamage: (player: TPlayer) => void;
+  // Called after ECS entity is created. Returns void — all wiring is done here.
+  readonly spawnPlayer: (user: TUser, ctx: PlayerSpawnContext) => number;
+  readonly despawnPlayer: (user: TUser, eid: number) => void;
+  readonly sendInitialReplicationState: (user: TUser, accountId: number) => void;
+  readonly resolvePlayerEidByUserId: (userId: number) => number | undefined;
+  readonly takePendingSnapshotForLogin: (accountId: number) => PlayerSnapshot | null;
+  readonly loadPlayerState: (accountId: number) => PlayerSnapshot | null;
+  readonly queueOfflineSnapshot: (accountId: number, snapshot: PlayerSnapshot) => void;
+  readonly resolveOfflineSnapshotByAccountId: (accountId: number) => PlayerSnapshot | null;
+  readonly markPlayerDirty: (accountId: number, options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }) => void;
   readonly unregisterPlayerCollider: (colliderHandle: number) => void;
   readonly removeProjectilesByOwner: (ownerNid: number) => void;
   readonly queueIdentityMessage: (user: TUser, playerNid: number) => void;
-  readonly sendInitialReplicationState: (user: TUser, player: TPlayer) => void;
-  readonly queueOfflineSnapshot: (accountId: number, snapshot: PlayerSnapshot) => void;
-  readonly resolveOfflineSnapshotByAccountId: (accountId: number) => PlayerSnapshot | null;
-  readonly viewHalfWidth: number;
-  readonly viewHalfHeight: number;
-  readonly viewHalfDepth: number;
-  readonly farViewHalfWidth: number;
-  readonly farViewHalfHeight: number;
-  readonly farViewHalfDepth: number;
-  readonly onPlayerAdded?: (user: TUser, player: TPlayer) => void;
-  readonly onPlayerRemoved?: (user: TUser, player: TPlayer) => void;
+  readonly viewHalfWidth: number; readonly viewHalfHeight: number; readonly viewHalfDepth: number;
+  readonly farViewHalfWidth: number; readonly farViewHalfHeight: number; readonly farViewHalfDepth: number;
 }
 
-export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends LifecyclePlayer> {
-  public constructor(private readonly options: PlayerLifecycleSystemOptions<TUser, TPlayer>) {}
+export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
+  private readonly spawnedByUserId = new Map<number, { eid: number; nid: number; body: RAPIER.RigidBody; collider: RAPIER.Collider }>();
+
+  public constructor(private readonly options: PlayerLifecycleSystemOptions<TUser>) {}
 
   public addUser(user: TUser): void {
     const accountId = this.resolveAccountId(user.accountId);
-    if (accountId === null) {
-      return;
-    }
+    if (accountId === null) return;
 
     const pendingSnapshot = this.options.takePendingSnapshotForLogin(accountId);
     const loaded = pendingSnapshot ?? this.options.loadPlayerState(accountId);
@@ -150,12 +81,9 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     const spawnedBodyY = this.options.getSpawnBodyY(spawn.x, spawn.z);
     const initialCameraY = loaded?.y ?? (spawnedBodyY + this.options.playerCameraOffsetY);
     const initialBodyY = initialCameraY - this.options.playerCameraOffsetY;
+
     const body = this.options.world.createRigidBody(
-      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
-        spawn.x,
-        initialBodyY,
-        spawn.z
-      )
+      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(spawn.x, initialBodyY, spawn.z)
     );
     const collider = this.options.world.createCollider(
       RAPIER.ColliderDesc
@@ -166,38 +94,32 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
       body
     );
 
-    const player = this.options.buildPlayerEntity({
+    const ctx: PlayerSpawnContext = {
       accountId,
       spawnX: spawn.x,
       spawnZ: spawn.z,
-      spawnBodyY: initialBodyY,
-      spawnCameraY: initialCameraY,
-      loaded,
+      initialBodyY,
+      initialCameraY,
       body,
       collider,
       health: this.options.clampHealth(loaded?.health ?? this.options.maxPlayerHealth),
-      primaryMouseSlot: this.options.sanitizeHotbarSlot(loaded?.primaryMouseSlot ?? 0, 0),
-      secondaryMouseSlot: this.options.sanitizeHotbarSlot(loaded?.secondaryMouseSlot ?? 1, 1),
       hotbarAbilityIds: this.options.createInitialHotbar(loaded?.hotbarAbilityIds),
-      unlockedAbilityIds: new Set<number>(
-        this.options.resolveInitialUnlockedAbilityIds(
-          accountId,
-          this.options.defaultUnlockedAbilityIds
-        )
-      )
-    });
+      unlockedAbilityIds: this.options.resolveInitialUnlockedAbilityIds(accountId, this.options.defaultUnlockedAbilityIds),
+      yaw: loaded?.yaw ?? 0,
+      pitch: loaded?.pitch ?? 0,
+      vx: loaded?.vx ?? 0,
+      vy: loaded?.vy ?? 0,
+      vz: loaded?.vz ?? 0
+    };
 
-    this.options.ensurePunchAssigned(player);
+    const eid = this.options.spawnPlayer(user, ctx);
 
+    // Channel subscriptions
     this.options.globalChannel.subscribe(user);
     this.options.usersById.set(user.id, user);
-    this.options.onPlayerAdded?.(user, player);
-    this.options.registerPlayerForDamage(player);
 
     const view = this.options.createUserView({
-      x: player.x,
-      y: player.y,
-      z: player.z,
+      x: spawn.x, y: initialCameraY, z: spawn.z,
       halfWidth: this.options.viewHalfWidth,
       halfHeight: this.options.viewHalfHeight,
       halfDepth: this.options.viewHalfDepth
@@ -206,9 +128,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     this.options.nearChannel.subscribe(user, view);
 
     const farView = this.options.createUserView({
-      x: player.x,
-      y: player.y,
-      z: player.z,
+      x: spawn.x, y: initialCameraY, z: spawn.z,
       halfWidth: this.options.farViewHalfWidth,
       halfHeight: this.options.farViewHalfHeight,
       halfDepth: this.options.farViewHalfDepth
@@ -216,36 +136,46 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser, TPlayer extends 
     user.farView = farView;
     this.options.farChannel.subscribe(user, farView);
 
-    this.options.queueIdentityMessage(user, player.nid);
-    this.options.sendInitialReplicationState(user, player);
-    this.options.markPlayerDirty(player, {
-      dirtyCharacter: true,
-      dirtyAbilityState: true
-    });
+    this.options.sendInitialReplicationState(user, accountId);
+    this.options.markPlayerDirty(accountId, { dirtyCharacter: true, dirtyAbilityState: true });
+
+    this.spawnedByUserId.set(user.id, { eid, nid: 0, body, collider });
   }
 
   public removeUser(user: TUser): void {
-    const player = this.options.resolvePlayerByUserId(user.id);
-    if (!player) {
-      return;
+    const spawned = this.spawnedByUserId.get(user.id);
+    if (!spawned) return;
+
+    const eid = spawned.eid;
+    const accountId = user.accountId;
+
+    if (typeof accountId === "number" && Number.isFinite(accountId)) {
+      const offlineSnapshot = this.options.resolveOfflineSnapshotByAccountId(accountId);
+      if (offlineSnapshot) {
+        this.options.queueOfflineSnapshot(accountId, offlineSnapshot);
+      }
     }
 
-    const offlineSnapshot = this.options.resolveOfflineSnapshotByAccountId(player.accountId);
-    if (offlineSnapshot) {
-      this.options.queueOfflineSnapshot(player.accountId, offlineSnapshot);
-    }
-    this.options.onPlayerRemoved?.(user, player);
-    this.options.unregisterPlayerCollider(player.collider.handle);
+    this.options.unregisterPlayerCollider(spawned.collider.handle);
     this.options.usersById.delete(user.id);
-    this.options.removeProjectilesByOwner(player.nid);
-    this.options.world.removeCollider(player.collider, true);
-    this.options.world.removeRigidBody(player.body);
+    this.options.removeProjectilesByOwner(spawned.nid);
+    this.options.world.removeCollider(spawned.collider, true);
+    this.options.world.removeRigidBody(spawned.body);
+    this.options.despawnPlayer(user, eid);
+    this.spawnedByUserId.delete(user.id);
+  }
+
+  public getSpawnedEid(userId: number): number | undefined {
+    return this.spawnedByUserId.get(userId)?.eid;
+  }
+
+  public updateSpawnedNid(userId: number, nid: number): void {
+    const spawned = this.spawnedByUserId.get(userId);
+    if (spawned) spawned.nid = nid;
   }
 
   private resolveAccountId(rawAccountId: number | undefined): number | null {
-    if (typeof rawAccountId !== "number" || !Number.isFinite(rawAccountId)) {
-      return null;
-    }
+    if (typeof rawAccountId !== "number" || !Number.isFinite(rawAccountId)) return null;
     return Math.max(1, Math.floor(rawAccountId));
   }
 }

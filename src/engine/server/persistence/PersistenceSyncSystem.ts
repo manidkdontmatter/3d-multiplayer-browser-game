@@ -7,17 +7,10 @@ type PendingOfflineSnapshot = {
   dirtyAbilityState: boolean;
 };
 
-export class PersistenceSyncSystem<TPlayer extends { accountId: number }> {
+export class PersistenceSyncSystem {
   private readonly dirtyCharacterAccountIds = new Set<number>();
   private readonly dirtyAbilityStateAccountIds = new Set<number>();
   private readonly pendingOfflineSnapshots = new Map<number, PendingOfflineSnapshot>();
-
-  public markPlayerDirty(
-    player: TPlayer,
-    options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean }
-  ): void {
-    this.markAccountDirty(player.accountId, options);
-  }
 
   public markAccountDirty(
     accountId: number,

@@ -17,37 +17,11 @@ export interface ReplicationUser {
   farView?: { x: number; y: number; z: number };
 }
 
-export interface ReplicationPlayer {
-  nid: number;
-  lastProcessedSequence: number;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  pitch: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  grounded: boolean;
-  movementMode: MovementMode;
-  groundedPlatformPid: number | null;
-  carriedFramePid: number | null;
-  primaryMouseSlot: number;
-  secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
-  unlockedAbilityIds: Set<number>;
-}
-
 export interface InputAckStateSnapshot {
   lastProcessedSequence: number;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  pitch: number;
-  vx: number;
-  vy: number;
-  vz: number;
+  x: number; y: number; z: number;
+  yaw: number; pitch: number;
+  vx: number; vy: number; vz: number;
   grounded: boolean;
   movementMode: MovementMode;
   groundedPlatformPid: number | null;
@@ -61,10 +35,7 @@ export interface AbilityStateSnapshot {
   unlockedAbilityIds: number[];
 }
 
-export interface ReplicationMessagingSystemOptions<
-  TUser extends ReplicationUser,
-  TPlayer extends ReplicationPlayer
-> {
+export interface ReplicationMessagingSystemOptions<TUser extends ReplicationUser> {
   readonly getTickNumber: () => number;
   readonly getUserById: (userId: number) => TUser | undefined;
   readonly queueSpatialMessage: (message: unknown) => void;
@@ -72,15 +43,8 @@ export interface ReplicationMessagingSystemOptions<
   readonly getAbilityDefinitionById: (abilityId: number) => AbilityDefinition | null;
 }
 
-export class ReplicationMessagingSystem<
-  TUser extends ReplicationUser,
-  TPlayer extends ReplicationPlayer
-> {
-  public constructor(private readonly options: ReplicationMessagingSystemOptions<TUser, TPlayer>) {}
-
-  public syncUserView(userId: number, player: TPlayer): void {
-    this.syncUserViewPosition(userId, player.x, player.y, player.z);
-  }
+export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
+  public constructor(private readonly options: ReplicationMessagingSystemOptions<TUser>) {}
 
   public syncUserViewPosition(userId: number, x: number, y: number, z: number): void {
     const user = this.options.getUserById(userId);
@@ -97,10 +61,6 @@ export class ReplicationMessagingSystem<
       user.farView.y = y;
       user.farView.z = z;
     }
-  }
-
-  public queueInputAck(userId: number, player: TPlayer): void {
-    this.queueInputAckFromState(userId, player);
   }
 
   public queueInputAckFromState(userId: number, state: InputAckStateSnapshot): void {
@@ -160,18 +120,18 @@ export class ReplicationMessagingSystem<
     });
   }
 
-  public broadcastAbilityUseMessage(player: TPlayer, ability: AbilityDefinition): void {
+  public broadcastAbilityUseMessage(playerNid: number, ability: AbilityDefinition): void {
     const abilityId = Math.max(0, Math.min(0xffff, Math.floor(ability.id)));
     const category = abilityCategoryToWireValue(ability.category);
     this.options.queueSpatialMessage({
       ntype: NType.AbilityUseMessage,
-      ownerNid: player.nid,
+      ownerNid: playerNid,
       abilityId,
       category,
       serverTick: this.options.getTickNumber(),
-      x: player.x,
-      y: player.y,
-      z: player.z
+      x: 0,
+      y: 0,
+      z: 0
     });
   }
 

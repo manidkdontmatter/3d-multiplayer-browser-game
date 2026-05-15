@@ -1,176 +1,83 @@
-// ECS facade exposing high-level simulation operations used by game systems.
+// ECS facade — owns the store, indexes, and provides direct component read/write
+// for all simulation systems. No typed-object marshalling. Components are the
+// single source of truth.
 import type RAPIER from "@dimforge/rapier3d-compat";
 import { query } from "bitecs";
-import { HOTBAR_SLOT_COUNT, clampHotbarSlotIndex } from "../../shared/index";
+import {
+  HOTBAR_SLOT_COUNT,
+  MOVEMENT_MODE_GROUNDED,
+  clampHotbarSlotIndex,
+  sanitizeMovementMode
+} from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
+import type { ArchetypeDefinition } from "../../shared/archetype";
+import type { EntityFactoryOverrides } from "./EntityFactory";
 import { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
-import { SimulationEcsProjectors } from "./SimulationEcsProjectors";
 import { SimulationEcsStore } from "./SimulationEcsStore";
 import type {
-  CharacterObject,
-  DummyObject,
-  PlayerObject,
-  ProjectileCreateRequest,
-  SimObject
+  AbilityState,
+  DamageState,
+  InputAckState,
+  PersistenceState,
+  PlayerStateSnapshot,
+  ProjectileState,
+  ReplicationSnapshot
 } from "./SimulationEcsTypes";
 
 export class SimulationEcs {
   private readonly store = new SimulationEcsStore();
   private readonly indexes = new SimulationEcsIndexRegistry();
-  private readonly projectors = new SimulationEcsProjectors(this.store, this.indexes);
 
-  public registerPlayer(player: PlayerObject): void {
-    const eid = this.indexes.getOrCreateEid(player, () => this.store.createEid());
-    this.store.registerPlayerComponents(eid);
-    this.indexes.registerPlayerRuntimeRefs(eid, player.body, player.collider);
-    this.store.syncPlayerFromObject(eid, player);
+  public get world() { return this.store.world; }
+  public get registry() { return this.store.registry; }
+  public get factory() { return this.store.factory; }
+
+  // ── Entity lifecycle ──────────────────────────────────────────────────────
+
+  public createEntity(archetype: ArchetypeDefinition, overrides?: EntityFactoryOverrides): number {
+    return this.store.createEntity(archetype, overrides);
   }
 
-  public syncPlayer(player: PlayerObject): void {
-    const eid = this.indexes.getEid(player);
-    this.store.syncPlayerFromObject(eid, player);
+  public destroyEid(eid: number): void {
+    this.indexes.removeAllIndexesForEid(eid);
+    this.store.destroyEid(eid);
   }
 
-  public registerNpcCharacter(character: CharacterObject): void {
-    const eid = this.indexes.getOrCreateEid(character, () => this.store.createEid());
-    this.store.registerNpcComponents(eid);
-    this.indexes.registerCharacterRuntimeRefs(eid, character.body, character.collider);
-    this.store.syncCharacterFromObject(eid, character);
+  public setEntityNidByEid(eid: number, nid: number): void {
+    const prev = this.store.getEntityNid(eid);
+    this.store.setEntityNid(eid, nid);
+    this.indexes.updatePlayerNidIndex(eid, prev, nid);
   }
 
-  public syncCharacter(character: CharacterObject): void {
-    const eid = this.indexes.getEid(character);
-    this.store.syncCharacterFromObject(eid, character);
+  // ── Player index management ───────────────────────────────────────────────
+
+  public bindPlayerIndexes(userId: number, eid: number): void {
+    const nid = this.store.getEntityNid(eid);
+    const accountId = this.store.getEntityAccountId(eid);
+    this.indexes.bindPlayerIndexes(userId, eid, nid, accountId);
   }
 
-  public registerPlatform(platform: SimObject): void {
-    const eid = this.indexes.getOrCreateEid(platform, () => this.store.createEid());
-    this.store.registerPlatformComponents(eid);
-    this.store.syncPlatformFromObject(eid, platform);
+  public unbindPlayerIndexes(userId: number, eid: number): void {
+    const nid = this.store.getEntityNid(eid);
+    const accountId = this.store.getEntityAccountId(eid);
+    this.indexes.unbindPlayerIndexes(userId, eid, nid, accountId);
   }
 
-  public syncPlatform(platform: SimObject): void {
-    const eid = this.indexes.getEid(platform);
-    this.store.syncPlatformFromObject(eid, platform);
+  public getPlayerEidByUserId(userId: number): number | undefined {
+    return this.indexes.getPlayerEidByUserId(userId);
   }
 
-  public registerLocationRoot(location: SimObject): void {
-    const eid = this.indexes.getOrCreateEid(location, () => this.store.createEid());
-    this.store.registerLocationRootComponents(eid);
-    this.store.syncLocationRootFromObject(eid, location);
+  public getPlayerEidByNid(nid: number): number | undefined {
+    return this.indexes.getPlayerEidByNid(nid);
   }
 
-  public syncLocationRoot(location: SimObject): void {
-    const eid = this.indexes.getEid(location);
-    this.store.syncLocationRootFromObject(eid, location);
-  }
-
-  public createProjectile(projectile: ProjectileCreateRequest): number {
-    return this.store.createProjectile(projectile);
-  }
-
-  public registerDummy(dummy: DummyObject): void {
-    const eid = this.indexes.getOrCreateEid(dummy, () => this.store.createEid());
-    this.store.registerDummyComponents(eid);
-    this.indexes.registerDummyRuntimeRefs(eid, dummy.body, dummy.collider);
-    this.store.syncDummyFromObject(eid, dummy);
-  }
-
-  public syncDummy(dummy: DummyObject): void {
-    const eid = this.indexes.getEid(dummy);
-    this.store.syncDummyFromObject(eid, dummy);
-  }
-
-  public registerWorldItem(item: SimObject): void {
-    const eid = this.indexes.getOrCreateEid(item, () => this.store.createEid());
-    this.store.registerWorldItemComponents(eid);
-    this.store.syncWorldItemFromObject(eid, item);
-  }
-
-  public syncWorldItem(item: SimObject): void {
-    const eid = this.indexes.getEid(item);
-    this.store.syncWorldItemFromObject(eid, item);
-  }
-
-  public unregister(entity: object): void {
-    const eid = this.indexes.getEidOrNull(entity);
-    if (typeof eid !== "number") {
-      return;
-    }
-    this.removeEntityByEid(eid);
-  }
-
-  public getEidForObject(entity: object): number | null {
-    return this.indexes.getEidOrNull(entity);
-  }
-
-  public getPlayerPersistenceSnapshotByEid(eid: number): {
-    accountId: number;
-    x: number;
-    y: number;
-    z: number;
-    yaw: number;
-    pitch: number;
-    vx: number;
-    vy: number;
-    vz: number;
-    health: number;
-    primaryMouseSlot: number;
-    secondaryMouseSlot: number;
-    hotbarAbilityIds: number[];
-  } | null {
-    return this.projectors.getPlayerPersistenceSnapshotByEid(eid);
-  }
-
-  public bindPlayerLookupIndexes(entity: object, userId: number): void {
-    const eid = this.indexes.getEidOrNull(entity);
-    if (typeof eid !== "number") {
-      return;
-    }
-    this.indexes.bindPlayerLookupIndexes(
-      userId,
-      eid,
-      this.store.getEntityNid(eid),
-      this.store.getEntityAccountId(eid)
-    );
-  }
-
-  public unbindPlayerLookupIndexes(entity: object, userId: number): void {
-    const eid = this.indexes.getEidOrNull(entity);
-    if (typeof eid !== "number") {
-      this.indexes.unbindPlayerLookupIndexesByUserId(userId);
-      return;
-    }
-
-    this.indexes.unbindPlayerLookupIndexesByEntity(
-      userId,
-      eid,
-      this.store.getEntityNid(eid),
-      this.store.getEntityAccountId(eid)
-    );
-  }
-
-  public getPlayerObjectByUserId<T extends object>(userId: number): T | undefined {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return undefined;
-    }
-    return this.indexes.getObjectByEid<T>(eid);
-  }
-
-  public getPlayerNidByUserId(userId: number): number | null {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return null;
-    }
-    return this.store.getEntityNid(eid);
+  public getCharacterEidByNid(nid: number): number | undefined {
+    return this.indexes.getCharacterEidByNid(nid);
   }
 
   public getPlayerAccountIdByUserId(userId: number): number | null {
     const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return null;
-    }
+    if (typeof eid !== "number") return null;
     return this.store.getEntityAccountId(eid);
   }
 
@@ -178,224 +85,272 @@ export class SimulationEcs {
     return this.indexes.getOnlinePlayerUserIds();
   }
 
-  public getPlayerColliderByNid(nid: number): RAPIER.Collider | undefined {
-    const eid = this.indexes.getPlayerEidByNid(nid);
-    if (typeof eid !== "number") {
-      return undefined;
-    }
+  public getOnlinePlayerCount(): number {
+    return this.indexes.getOnlinePlayerCount();
+  }
+
+  // ── Physics refs ──────────────────────────────────────────────────────────
+
+  public registerPlayerPhysicsRefs(eid: number, body: RAPIER.RigidBody, collider: RAPIER.Collider): void {
+    this.indexes.registerPlayerRefs(eid, body, collider);
+  }
+
+  public registerCharacterPhysicsRefs(eid: number, body: RAPIER.RigidBody, collider: RAPIER.Collider): void {
+    this.indexes.registerCharacterRefs(eid, body, collider);
+  }
+
+  public registerDummyPhysicsRefs(eid: number, body: RAPIER.RigidBody, collider: RAPIER.Collider): void {
+    this.indexes.registerDummyRefs(eid, body, collider);
+  }
+
+  public getPlayerBody(eid: number): RAPIER.RigidBody | undefined {
+    return this.indexes.getPlayerBody(eid);
+  }
+
+  public getPlayerCollider(eid: number): RAPIER.Collider | undefined {
     return this.indexes.getPlayerCollider(eid);
   }
 
   public getCharacterColliderByNid(nid: number): RAPIER.Collider | undefined {
     const eid = this.indexes.getCharacterEidByNid(nid);
-    if (typeof eid !== "number") {
-      return undefined;
-    }
+    if (typeof eid !== "number") return undefined;
     return this.indexes.getCharacterCollider(eid);
   }
 
-  public getActiveProjectileEids(): number[] {
-    return this.store.getProjectileTagEids();
+  public getCharacterBody(eid: number): RAPIER.RigidBody | undefined {
+    return this.indexes.getCharacterBody(eid);
   }
 
-  public setProjectileNidByEid(eid: number, nid: number): void {
-    this.setEntityNidByEid(eid, nid);
+  public getCharacterCollider(eid: number): RAPIER.Collider | undefined {
+    return this.indexes.getCharacterCollider(eid);
   }
 
-  public setEntityNidByEid(eid: number, nid: number): void {
-    const previousNid = this.store.getEntityNid(eid);
-    this.store.setEntityNid(eid, nid);
-    const nextNid = this.store.getEntityNid(eid);
-    this.indexes.updatePlayerNidIndex(eid, previousNid, nextNid);
+  public getPlayerColliderByNid(nid: number): RAPIER.Collider | undefined {
+    const eid = this.indexes.getPlayerEidByNid(nid);
+    if (typeof eid !== "number") return undefined;
+    return this.indexes.getPlayerCollider(eid);
   }
 
-  public getReplicationSnapshotByEid(eid: number): {
+  public resolveCombatTargetRuntime(target: { kind: "character" | "player" | "dummy"; eid: number }): {
     nid: number;
-    modelId: number;
-    position: { x: number; y: number; z: number };
-    rotation: { x: number; y: number; z: number; w: number };
-    grounded: boolean;
-    movementMode: MovementMode;
-    health: number;
-    maxHealth: number;
-    itemArchetypeId: number;
-    itemQuantity: number;
-    locationKind: number;
-    locationArchetypeId: number;
-    locationSeed: number;
-    locationEnvironmentId: number;
-    locationStreamingRadius: number;
-    locationInfluenceRadius: number;
-  } {
-    return this.projectors.getReplicationSnapshotByEid(eid);
-  }
-
-  public getProjectileRuntimeStateByEid(eid: number): {
-    ownerNid: number;
-    kind: number;
-    x: number;
-    y: number;
-    z: number;
-    vx: number;
-    vy: number;
-    vz: number;
-    radius: number;
-    damage: number;
-    ttlSeconds: number;
-    remainingRange: number;
-    gravity: number;
-    drag: number;
-    maxSpeed: number;
-    minSpeed: number;
-    remainingPierces: number;
-    despawnOnDamageableHit: boolean;
-    despawnOnWorldHit: boolean;
-  } | null {
-    return this.projectors.getProjectileRuntimeStateByEid(eid);
-  }
-
-  public applyProjectileRuntimeStateByEid(
-    eid: number,
-    state: {
-      x: number;
-      y: number;
-      z: number;
-      vx: number;
-      vy: number;
-      vz: number;
-      ttlSeconds: number;
-      remainingRange: number;
-      remainingPierces: number;
-    }
-  ): void {
-    const c = this.store.world.components;
-    c.Position.x[eid] = state.x;
-    c.Position.y[eid] = state.y;
-    c.Position.z[eid] = state.z;
-    c.Velocity.x[eid] = state.vx;
-    c.Velocity.y[eid] = state.vy;
-    c.Velocity.z[eid] = state.vz;
-    c.ProjectileTtl.value[eid] = state.ttlSeconds;
-    c.ProjectileRemainingRange.value[eid] = state.remainingRange;
-    c.ProjectileRemainingPierces.value[eid] = Math.max(0, Math.floor(state.remainingPierces));
-  }
-
-  public removeEntityByEid(eid: number): void {
-    this.indexes.removeAllIndexesForEid(eid);
-    this.store.destroyEid(eid);
-  }
-
-  public getPlayerRuntimeStateByUserId(userId: number): {
-    accountId: number;
-    nid: number;
-    x: number;
-    y: number;
-    z: number;
-    yaw: number;
-    pitch: number;
-    vx: number;
-    vy: number;
-    vz: number;
-    grounded: boolean;
-    movementMode: MovementMode;
-    groundedPlatformPid: number | null;
-    carriedFramePid: number | null;
-    lastProcessedSequence: number;
-    lastPrimaryFireAtSeconds: number;
-    primaryHeld: boolean;
-    secondaryHeld: boolean;
-    health: number;
-    maxHealth: number;
-    primaryMouseSlot: number;
-    secondaryMouseSlot: number;
-    hotbarAbilityIds: number[];
-    unlockedAbilityIds: Set<number>;
-    position: { x: number; y: number; z: number };
-    rotation: { x: number; y: number; z: number; w: number };
     body: RAPIER.RigidBody;
     collider: RAPIER.Collider;
   } | null {
-    return this.projectors.getPlayerRuntimeStateByUserId(userId);
+    const c = this.world.components;
+    if (target.kind === "character" || target.kind === "player") {
+      const body = this.indexes.getCharacterBody(target.eid);
+      const collider = this.indexes.getCharacterCollider(target.eid);
+      if (!body || !collider) return null;
+      return { nid: c.NetworkId.value[target.eid] ?? 0, body, collider };
+    }
+    const body = this.indexes.getDummyBody(target.eid);
+    const collider = this.indexes.getDummyCollider(target.eid);
+    if (!body || !collider) return null;
+    return { nid: c.NetworkId.value[target.eid] ?? 0, body, collider };
   }
 
-  public getPlayerDamageStateByEid(eid: number): {
-    accountId: number;
-    nid: number;
-    health: number;
-    maxHealth: number;
-    x: number;
-    y: number;
-    z: number;
-    vx: number;
-    vy: number;
-    vz: number;
+  // ── Player runtime state (snapshot from components) ───────────────────────
+
+  public getPlayerRuntimeStateByUserId(userId: number): PlayerStateSnapshot | null {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return null;
+    const body = this.indexes.getPlayerBody(eid);
+    const collider = this.indexes.getPlayerCollider(eid);
+    if (!body || !collider) return null;
+
+    const c = this.world.components;
+    const gp = c.GroundedPlatformPid.value[eid] ?? -1;
+    const cf = c.CarriedFramePid.value[eid] ?? -1;
+    const x = c.Position.x[eid] ?? 0;
+    const y = c.Position.y[eid] ?? 0;
+    const z = c.Position.z[eid] ?? 0;
+
+    return {
+      eid,
+      accountId: Math.max(1, Math.floor(c.AccountId.value[eid] ?? 1)),
+      nid: c.NetworkId.value[eid] ?? 0,
+      modelId: c.ModelId.value[eid] ?? 0,
+      x, y, z,
+      yaw: c.Yaw.value[eid] ?? 0,
+      pitch: c.Pitch.value[eid] ?? 0,
+      vx: c.Velocity.x[eid] ?? 0,
+      vy: c.Velocity.y[eid] ?? 0,
+      vz: c.Velocity.z[eid] ?? 0,
+      grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
+      groundedPlatformPid: gp < 0 ? null : gp,
+      carriedFramePid: cf < 0 ? null : cf,
+      lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
+      lastPrimaryFireAtSeconds: c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY,
+      primaryHeld: (c.PrimaryHeld.value[eid] ?? 0) !== 0,
+      secondaryHeld: (c.SecondaryHeld.value[eid] ?? 0) !== 0,
+      health: c.Health.value[eid] ?? 0,
+      maxHealth: c.Health.max[eid] ?? 0,
+      primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
+      secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
+      hotbarAbilityIds: this.getHotbarArray(eid),
+      unlockedAbilityIds: this.store.getUnlockedAbilities(eid),
+      position: { x, y, z },
+      rotation: {
+        x: c.Rotation.x[eid] ?? 0,
+        y: c.Rotation.y[eid] ?? 0,
+        z: c.Rotation.z[eid] ?? 0,
+        w: c.Rotation.w[eid] ?? 1
+      },
+      body,
+      collider
+    };
+  }
+
+  // ── Input ack state ───────────────────────────────────────────────────────
+
+  public getPlayerInputAckStateByUserId(userId: number): InputAckState | null {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return null;
+    const c = this.world.components;
+    const gp = c.GroundedPlatformPid.value[eid] ?? -1;
+    const cf = c.CarriedFramePid.value[eid] ?? -1;
+    return {
+      nid: c.NetworkId.value[eid] ?? 0,
+      lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
+      x: c.Position.x[eid] ?? 0,
+      y: c.Position.y[eid] ?? 0,
+      z: c.Position.z[eid] ?? 0,
+      yaw: c.Yaw.value[eid] ?? 0,
+      pitch: c.Pitch.value[eid] ?? 0,
+      vx: c.Velocity.x[eid] ?? 0,
+      vy: c.Velocity.y[eid] ?? 0,
+      vz: c.Velocity.z[eid] ?? 0,
+      grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
+      groundedPlatformPid: gp < 0 ? null : gp,
+      carriedFramePid: cf < 0 ? null : cf
+    };
+  }
+
+  // ── Ability state ─────────────────────────────────────────────────────────
+
+  public getPlayerAbilityStateByUserId(userId: number): AbilityState | null {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return null;
+    return {
+      primaryMouseSlot: Math.max(0, Math.floor(this.world.components.PrimaryMouseSlot.value[eid] ?? 0)),
+      secondaryMouseSlot: Math.max(0, Math.floor(this.world.components.SecondaryMouseSlot.value[eid] ?? 1)),
+      hotbarAbilityIds: this.getHotbarArray(eid),
+      unlockedAbilityIds: this.store.getUnlockedAbilitiesArray(eid)
+    };
+  }
+
+  public setPlayerHotbarAbilityByUserId(userId: number, slot: number, abilityId: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return false;
+    return this.store.setHotbarAbilityBySlot(eid, slot, abilityId);
+  }
+
+  public setPlayerPrimaryMouseSlotByUserId(userId: number, slot: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return false;
+    const c = this.world.components;
+    const normalized = clampHotbarSlotIndex(slot);
+    const prev = c.PrimaryMouseSlot.value[eid] ?? 0;
+    c.PrimaryMouseSlot.value[eid] = normalized;
+    return prev !== normalized;
+  }
+
+  public setPlayerSecondaryMouseSlotByUserId(userId: number, slot: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return false;
+    const c = this.world.components;
+    const normalized = clampHotbarSlotIndex(slot);
+    const prev = c.SecondaryMouseSlot.value[eid] ?? 1;
+    c.SecondaryMouseSlot.value[eid] = normalized;
+    return prev !== normalized;
+  }
+
+  public setPlayerUnlockedAbilityIdsByUserId(userId: number, ids: ReadonlyArray<number>): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return false;
+    return this.store.setUnlockedAbilitiesFromList(eid, ids);
+  }
+
+  public replacePlayerAbilityOnHotbarByUserId(userId: number, oldId: number, newId: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return false;
+    const nOld = Math.max(0, Math.floor(Number.isFinite(oldId) ? oldId : 0));
+    const nNew = Math.max(0, Math.floor(Number.isFinite(newId) ? newId : 0));
+    if (nOld <= 0 || nNew <= 0) return false;
+    let changed = false;
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot++) {
+      if (this.store.getHotbarSlot(eid, slot) !== nOld) continue;
+      changed = this.store.setHotbarAbilityBySlot(eid, slot, nNew) || changed;
+    }
+    return changed;
+  }
+
+  public clearPlayerAbilityOnHotbarByUserId(userId: number, abilityId: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return false;
+    const nId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
+    if (nId <= 0) return false;
+    let changed = false;
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot++) {
+      if (this.store.getHotbarSlot(eid, slot) !== nId) continue;
+      changed = this.store.setHotbarAbilityBySlot(eid, slot, 0) || changed;
+    }
+    return changed;
+  }
+
+  public setPlayerHealthByUserId(userId: number, health: number): boolean {
+    const eid = this.indexes.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return false;
+    const c = this.world.components;
+    const maxH = Math.max(0, Math.floor(c.Health.max[eid] ?? 0));
+    const next = Math.max(0, Math.min(maxH, Math.floor(Number.isFinite(health) ? health : 0)));
+    const prev = Math.max(0, Math.floor(c.Health.value[eid] ?? 0));
+    c.Health.value[eid] = next;
+    return prev !== next;
+  }
+
+  // ── Damage state ──────────────────────────────────────────────────────────
+
+  public getPlayerDamageStateByEid(eid: number): DamageState | null {
+    return this.getCharacterDamageStateByEid(eid);
+  }
+
+  public getCharacterDamageStateByEid(eid: number): DamageState | null {
+    const body = this.indexes.getCharacterBody(eid);
+    if (!body) return null;
+    const c = this.world.components;
+    const gp = c.GroundedPlatformPid.value[eid] ?? -1;
+    const cf = c.CarriedFramePid.value[eid] ?? -1;
+    return {
+      accountId: Math.max(0, Math.floor(c.AccountId.value[eid] ?? 0)),
+      nid: c.NetworkId.value[eid] ?? 0,
+      health: c.Health.value[eid] ?? 0,
+      maxHealth: c.Health.max[eid] ?? 0,
+      x: c.Position.x[eid] ?? 0,
+      y: c.Position.y[eid] ?? 0,
+      z: c.Position.z[eid] ?? 0,
+      vx: c.Velocity.x[eid] ?? 0,
+      vy: c.Velocity.y[eid] ?? 0,
+      vz: c.Velocity.z[eid] ?? 0,
+      grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
+      groundedPlatformPid: gp < 0 ? null : gp,
+      carriedFramePid: cf < 0 ? null : cf
+    };
+  }
+
+  public applyCharacterDamageStateByEid(eid: number, state: {
+    health: number; maxHealth: number;
+    x: number; y: number; z: number;
+    vx: number; vy: number; vz: number;
     grounded: boolean;
     movementMode: MovementMode;
     groundedPlatformPid: number | null;
     carriedFramePid: number | null;
-    body: RAPIER.RigidBody;
-  } | null {
-    return this.projectors.getPlayerDamageStateByEid(eid);
-  }
-
-  public getCharacterDamageStateByEid(eid: number): {
-    accountId: number;
-    nid: number;
-    health: number;
-    maxHealth: number;
-    x: number;
-    y: number;
-    z: number;
-    vx: number;
-    vy: number;
-    vz: number;
-    grounded: boolean;
-    movementMode: MovementMode;
-    groundedPlatformPid: number | null;
-    carriedFramePid: number | null;
-    body: RAPIER.RigidBody;
-  } | null {
-    return this.projectors.getCharacterDamageStateByEid(eid);
-  }
-
-  public applyPlayerDamageStateByEid(
-    eid: number,
-    state: {
-      health: number;
-      maxHealth: number;
-      x: number;
-      y: number;
-      z: number;
-      vx: number;
-      vy: number;
-      vz: number;
-      grounded: boolean;
-      movementMode: MovementMode;
-      groundedPlatformPid: number | null;
-      carriedFramePid: number | null;
-    }
-  ): void {
-    this.applyCharacterDamageStateByEid(eid, state);
-  }
-
-  public applyCharacterDamageStateByEid(
-    eid: number,
-    state: {
-      health: number;
-      maxHealth: number;
-      x: number;
-      y: number;
-      z: number;
-      vx: number;
-      vy: number;
-      vz: number;
-      grounded: boolean;
-      movementMode: MovementMode;
-      groundedPlatformPid: number | null;
-      carriedFramePid: number | null;
-    }
-  ): void {
-    const c = this.store.world.components;
+  }): void {
+    const c = this.world.components;
     c.Health.value[eid] = Math.max(0, Math.floor(state.health));
     c.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
     c.Position.x[eid] = state.x;
@@ -406,59 +361,41 @@ export class SimulationEcs {
     c.Velocity.z[eid] = state.vz;
     c.Grounded.value[eid] = state.grounded ? 1 : 0;
     c.MovementMode.value[eid] = state.movementMode;
-    c.GroundedPlatformPid.value[eid] =
-      state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
-    c.CarriedFramePid.value[eid] =
-      state.carriedFramePid === null ? -1 : Math.floor(state.carriedFramePid);
+    c.GroundedPlatformPid.value[eid] = state.groundedPlatformPid === null ? -1 : state.groundedPlatformPid;
+    c.CarriedFramePid.value[eid] = state.carriedFramePid === null ? -1 : state.carriedFramePid;
   }
 
   public getDummyDamageStateByEid(eid: number): { health: number; maxHealth: number } | null {
-    return this.projectors.getDummyDamageStateByEid(eid);
+    if (!this.indexes.getDummyBody(eid)) return null;
+    const c = this.world.components;
+    return { health: c.Health.value[eid] ?? 0, maxHealth: c.Health.max[eid] ?? 0 };
   }
 
   public applyDummyDamageStateByEid(eid: number, state: { health: number; maxHealth: number }): void {
-    const c = this.store.world.components;
+    const c = this.world.components;
     c.Health.value[eid] = Math.max(0, Math.floor(state.health));
     c.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
   }
 
-  public resolveCombatTargetRuntime(target: { kind: "character" | "player" | "dummy"; eid: number }): {
-    nid: number;
-    body: RAPIER.RigidBody;
-    collider: RAPIER.Collider;
-  } | null {
-    return this.projectors.resolveCombatTargetRuntime(target);
-  }
+  // ── Movement state write-back ─────────────────────────────────────────────
 
-  public applyPlayerRuntimeStateByUserId(
-    userId: number,
-    state: {
-      x: number;
-      y: number;
-      z: number;
-      yaw: number;
-      pitch: number;
-      vx: number;
-      vy: number;
-      vz: number;
-      grounded: boolean;
-      movementMode: MovementMode;
-      groundedPlatformPid: number | null;
-      carriedFramePid: number | null;
-      lastProcessedSequence: number;
-      lastPrimaryFireAtSeconds: number;
-      primaryHeld: boolean;
-      secondaryHeld: boolean;
-      primaryMouseSlot: number;
-      secondaryMouseSlot: number;
-      rotation: { x: number; y: number; z: number; w: number };
-    }
-  ): void {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return;
-    }
-    const c = this.store.world.components;
+  public applyPlayerMovementState(eid: number, state: {
+    x: number; y: number; z: number;
+    yaw: number; pitch: number;
+    vx: number; vy: number; vz: number;
+    grounded: boolean;
+    movementMode: MovementMode;
+    groundedPlatformPid: number | null;
+    carriedFramePid: number | null;
+    lastProcessedSequence: number;
+    lastPrimaryFireAtSeconds: number;
+    primaryHeld: boolean;
+    secondaryHeld: boolean;
+    primaryMouseSlot: number;
+    secondaryMouseSlot: number;
+    rotation: { x: number; y: number; z: number; w: number };
+  }): void {
+    const c = this.world.components;
     c.Position.x[eid] = state.x;
     c.Position.y[eid] = state.y;
     c.Position.z[eid] = state.z;
@@ -469,11 +406,9 @@ export class SimulationEcs {
     c.Velocity.z[eid] = state.vz;
     c.Grounded.value[eid] = state.grounded ? 1 : 0;
     c.MovementMode.value[eid] = state.movementMode;
-    c.GroundedPlatformPid.value[eid] =
-      state.groundedPlatformPid === null ? -1 : Math.floor(state.groundedPlatformPid);
-    c.CarriedFramePid.value[eid] =
-      state.carriedFramePid === null ? -1 : Math.floor(state.carriedFramePid);
-    c.LastProcessedSequence.value[eid] = Math.max(0, Math.floor(state.lastProcessedSequence));
+    c.GroundedPlatformPid.value[eid] = state.groundedPlatformPid === null ? -1 : state.groundedPlatformPid;
+    c.CarriedFramePid.value[eid] = state.carriedFramePid === null ? -1 : state.carriedFramePid;
+    c.LastProcessedSequence.value[eid] = state.lastProcessedSequence;
     c.LastPrimaryFireAtSeconds.value[eid] = state.lastPrimaryFireAtSeconds;
     c.PrimaryHeld.value[eid] = state.primaryHeld ? 1 : 0;
     c.SecondaryHeld.value[eid] = state.secondaryHeld ? 1 : 0;
@@ -485,279 +420,151 @@ export class SimulationEcs {
     c.Rotation.w[eid] = state.rotation.w;
   }
 
-  public getPlayerInputAckStateByUserId(userId: number): {
-    nid: number;
-    lastProcessedSequence: number;
-    x: number;
-    y: number;
-    z: number;
-    yaw: number;
-    pitch: number;
-    vx: number;
-    vy: number;
-    vz: number;
-    grounded: boolean;
-    movementMode: MovementMode;
-    groundedPlatformPid: number | null;
-    carriedFramePid: number | null;
-  } | null {
-    return this.projectors.getPlayerInputAckStateByUserId(userId);
+  // ── Projectile state ──────────────────────────────────────────────────────
+
+  public createProjectileEid(overrides: EntityFactoryOverrides, archetype: ArchetypeDefinition): number {
+    return this.store.createEntity(archetype, overrides);
   }
 
-  public getPlayerAbilityStateByUserId(userId: number): {
-    primaryMouseSlot: number;
-    secondaryMouseSlot: number;
-    hotbarAbilityIds: number[];
-    unlockedAbilityIds: number[];
-  } | null {
-    return this.projectors.getPlayerAbilityStateByUserId(userId);
+  public getProjectileRuntimeStateByEid(eid: number): ProjectileState | null {
+    const c = this.world.components;
+    if (typeof c.NetworkId.value[eid] !== "number") return null;
+    return {
+      ownerNid: c.ProjectileOwnerNid.value[eid] ?? 0,
+      kind: c.ProjectileKind.value[eid] ?? 0,
+      x: c.Position.x[eid] ?? 0,
+      y: c.Position.y[eid] ?? 0,
+      z: c.Position.z[eid] ?? 0,
+      vx: c.Velocity.x[eid] ?? 0,
+      vy: c.Velocity.y[eid] ?? 0,
+      vz: c.Velocity.z[eid] ?? 0,
+      radius: c.ProjectileRadius.value[eid] ?? 0,
+      damage: c.ProjectileDamage.value[eid] ?? 0,
+      ttlSeconds: c.ProjectileTtl.value[eid] ?? 0,
+      remainingRange: c.ProjectileRemainingRange.value[eid] ?? 0,
+      gravity: c.ProjectileGravity.value[eid] ?? 0,
+      drag: c.ProjectileDrag.value[eid] ?? 0,
+      maxSpeed: c.ProjectileMaxSpeed.value[eid] ?? 0,
+      minSpeed: c.ProjectileMinSpeed.value[eid] ?? 0,
+      remainingPierces: c.ProjectileRemainingPierces.value[eid] ?? 0,
+      despawnOnDamageableHit: (c.ProjectileDespawnOnDamageableHit.value[eid] ?? 0) !== 0,
+      despawnOnWorldHit: (c.ProjectileDespawnOnWorldHit.value[eid] ?? 0) !== 0
+    };
   }
 
-  public setPlayerPrimaryMouseSlotByUserId(userId: number, slot: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return false;
-    }
-    const c = this.store.world.components;
-    const normalized = clampHotbarSlotIndex(slot);
-    const previous = c.PrimaryMouseSlot.value[eid] ?? 0;
-    c.PrimaryMouseSlot.value[eid] = normalized;
-    return previous !== normalized;
+  public applyProjectileRuntimeStateByEid(eid: number, state: {
+    x: number; y: number; z: number;
+    vx: number; vy: number; vz: number;
+    ttlSeconds: number; remainingRange: number; remainingPierces: number;
+  }): void {
+    const c = this.world.components;
+    c.Position.x[eid] = state.x;
+    c.Position.y[eid] = state.y;
+    c.Position.z[eid] = state.z;
+    c.Velocity.x[eid] = state.vx;
+    c.Velocity.y[eid] = state.vy;
+    c.Velocity.z[eid] = state.vz;
+    c.ProjectileTtl.value[eid] = state.ttlSeconds;
+    c.ProjectileRemainingRange.value[eid] = state.remainingRange;
+    c.ProjectileRemainingPierces.value[eid] = Math.max(0, Math.floor(state.remainingPierces));
   }
 
-  public setPlayerSecondaryMouseSlotByUserId(userId: number, slot: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return false;
-    }
-    const c = this.store.world.components;
-    const normalized = clampHotbarSlotIndex(slot);
-    const previous = c.SecondaryMouseSlot.value[eid] ?? 1;
-    c.SecondaryMouseSlot.value[eid] = normalized;
-    return previous !== normalized;
+  public getActiveProjectileEids(): number[] {
+    return this.store.getProjectileTagEids();
   }
 
-  public setPlayerHotbarAbilityByUserId(userId: number, slot: number, abilityId: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return false;
-    }
-    return this.store.setHotbarAbilityBySlot(eid, slot, abilityId);
-  }
+  // ── Persistence ───────────────────────────────────────────────────────────
 
-  public setPlayerUnlockedAbilityIdsByUserId(
-    userId: number,
-    unlockedAbilityIds: ReadonlyArray<number>
-  ): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return false;
-    }
-    return this.store.setUnlockedAbilitiesFromList(eid, unlockedAbilityIds);
-  }
-
-  public replacePlayerAbilityOnHotbarByUserId(
-    userId: number,
-    oldAbilityId: number,
-    newAbilityId: number
-  ): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return false;
-    }
-    const normalizedOld = Math.max(0, Math.floor(Number.isFinite(oldAbilityId) ? oldAbilityId : 0));
-    const normalizedNew = Math.max(0, Math.floor(Number.isFinite(newAbilityId) ? newAbilityId : 0));
-    if (normalizedOld <= 0 || normalizedNew <= 0) {
-      return false;
-    }
-    let changed = false;
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-      if (this.store.getHotbarSlot(eid, slot) !== normalizedOld) {
-        continue;
-      }
-      changed = this.store.setHotbarAbilityBySlot(eid, slot, normalizedNew) || changed;
-    }
-    return changed;
-  }
-
-  public clearPlayerAbilityOnHotbarByUserId(userId: number, abilityId: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return false;
-    }
-    const normalizedAbilityId = Math.max(
-      0,
-      Math.floor(Number.isFinite(abilityId) ? abilityId : 0)
-    );
-    if (normalizedAbilityId <= 0) {
-      return false;
-    }
-    let changed = false;
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-      if (this.store.getHotbarSlot(eid, slot) !== normalizedAbilityId) {
-        continue;
-      }
-      changed =
-        this.store.setHotbarAbilityBySlot(eid, slot, 0) || changed;
-    }
-    return changed;
-  }
-
-  public setPlayerHealthByUserId(userId: number, health: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") {
-      return false;
-    }
-    const c = this.store.world.components;
-    const maxHealth = Math.max(0, Math.floor(c.Health.max[eid] ?? 0));
-    const nextHealth = Math.max(0, Math.min(maxHealth, Math.floor(Number.isFinite(health) ? health : 0)));
-    const previousHealth = Math.max(0, Math.floor(c.Health.value[eid] ?? 0));
-    c.Health.value[eid] = nextHealth;
-    return previousHealth !== nextHealth;
-  }
-
-  public getPlayerPersistenceSnapshotByAccountId(accountId: number): {
-    accountId: number;
-    x: number;
-    y: number;
-    z: number;
-    yaw: number;
-    pitch: number;
-    vx: number;
-    vy: number;
-    vz: number;
-    health: number;
-    primaryMouseSlot: number;
-    secondaryMouseSlot: number;
-    hotbarAbilityIds: number[];
-  } | null {
+  public getPlayerPersistenceSnapshotByAccountId(accountId: number): PersistenceState | null {
     const eid = this.indexes.getPlayerEidByAccountId(accountId);
-    if (typeof eid !== "number") {
-      return null;
-    }
-    return this.projectors.getPlayerPersistenceSnapshotByEid(eid);
+    if (typeof eid !== "number") return null;
+    const c = this.world.components;
+    return {
+      accountId: Math.max(1, Math.floor(c.AccountId.value[eid] ?? 1)),
+      x: c.Position.x[eid] ?? 0,
+      y: c.Position.y[eid] ?? 0,
+      z: c.Position.z[eid] ?? 0,
+      yaw: c.Yaw.value[eid] ?? 0,
+      pitch: c.Pitch.value[eid] ?? 0,
+      vx: c.Velocity.x[eid] ?? 0,
+      vy: c.Velocity.y[eid] ?? 0,
+      vz: c.Velocity.z[eid] ?? 0,
+      health: Math.max(0, Math.floor(c.Health.value[eid] ?? 0)),
+      primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
+      secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
+      hotbarAbilityIds: this.getHotbarArray(eid)
+    };
   }
 
-  public getOnlinePlayerCount(): number {
-    return this.indexes.getOnlinePlayerCount();
+  // ── Replication ───────────────────────────────────────────────────────────
+
+  public getReplicationSnapshotByEid(eid: number): ReplicationSnapshot {
+    const c = this.world.components;
+    return {
+      nid: c.NetworkId.value[eid] ?? 0,
+      modelId: c.ModelId.value[eid] ?? 0,
+      position: { x: c.Position.x[eid] ?? 0, y: c.Position.y[eid] ?? 0, z: c.Position.z[eid] ?? 0 },
+      rotation: { x: c.Rotation.x[eid] ?? 0, y: c.Rotation.y[eid] ?? 0, z: c.Rotation.z[eid] ?? 0, w: c.Rotation.w[eid] ?? 1 },
+      grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+      movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
+      health: c.Health.value[eid] ?? 0,
+      maxHealth: c.Health.max[eid] ?? 0,
+      itemArchetypeId: c.ItemArchetypeId.value[eid] ?? 0,
+      itemQuantity: c.ItemQuantity.value[eid] ?? 0,
+      locationKind: c.LocationKind.value[eid] ?? 0,
+      locationArchetypeId: c.LocationArchetypeId.value[eid] ?? 0,
+      locationSeed: c.LocationSeed.value[eid] ?? 0,
+      locationEnvironmentId: c.LocationEnvironmentId.value[eid] ?? 0,
+      locationStreamingRadius: c.LocationStreamingRadius.value[eid] ?? 0,
+      locationInfluenceRadius: c.LocationInfluenceRadius.value[eid] ?? 0
+    };
+  }
+
+  public getReplicatedEids(): number[] {
+    return this.store.getReplicatedTagEids();
+  }
+
+  // ── Stats / queries ───────────────────────────────────────────────────────
+
+  public getOnlinePlayerPositionsXZ(): Array<{ x: number; z: number }> {
+    const occupied: Array<{ x: number; z: number }> = [];
+    for (const userId of this.indexes.getOnlinePlayerUserIds()) {
+      const eid = this.indexes.getPlayerEidByUserId(userId);
+      if (typeof eid !== "number") continue;
+      occupied.push({
+        x: this.world.components.Position.x[eid] ?? 0,
+        z: this.world.components.Position.z[eid] ?? 0
+      });
+    }
+    return occupied;
   }
 
   public getStats(): {
-    players: number;
-    npcs: number;
-    platforms: number;
-    locationRoots: number;
-    projectiles: number;
-    worldItems: number;
-    dummies: number;
-    total: number;
+    players: number; npcs: number; platforms: number;
+    locationRoots: number; projectiles: number; worldItems: number;
+    dummies: number; total: number;
   } {
-    const world = this.store.world;
-    const players = query(world, [world.components.PlayerTag]).length;
-    const npcs = query(world, [world.components.NpcTag]).length;
-    const platforms = query(world, [world.components.PlatformTag]).length;
-    const locationRoots = query(world, [world.components.LocationRootTag]).length;
-    const projectiles = query(world, [world.components.ProjectileTag]).length;
-    const dummies = query(world, [world.components.DummyTag]).length;
-    const worldItems = query(world, [world.components.WorldItemTag]).length;
+    const w = this.world;
+    const players = query(w, [w.components.PlayerTag]).length;
+    const npcs = query(w, [w.components.NpcTag]).length;
+    const platforms = query(w, [w.components.PlatformTag]).length;
+    const locationRoots = query(w, [w.components.LocationRootTag]).length;
+    const projectiles = query(w, [w.components.ProjectileTag]).length;
+    const dummies = query(w, [w.components.DummyTag]).length;
+    const worldItems = query(w, [w.components.WorldItemTag]).length;
     return {
-      players,
-      npcs,
-      platforms,
-      locationRoots,
-      projectiles,
-      worldItems,
-      dummies,
+      players, npcs, platforms, locationRoots, projectiles, worldItems, dummies,
       total: players + npcs + platforms + locationRoots + projectiles + worldItems + dummies
     };
   }
 
-  public forEachReplicatedSnapshot(
-    visitor: (
-      eid: number,
-      snapshot: {
-        nid: number;
-        modelId: number;
-        position: { x: number; y: number; z: number };
-        rotation: { x: number; y: number; z: number; w: number };
-        grounded: boolean;
-        movementMode: MovementMode;
-        health: number;
-        maxHealth: number;
-        itemArchetypeId: number;
-        itemQuantity: number;
-        locationKind: number;
-        locationArchetypeId: number;
-        locationSeed: number;
-        locationEnvironmentId: number;
-        locationStreamingRadius: number;
-        locationInfluenceRadius: number;
-      }
-    ) => void
-  ): void {
-    const replicatedEids = this.store.getReplicatedTagEids();
-    for (const eid of replicatedEids) {
-      visitor(eid, this.projectors.getReplicationSnapshotByEid(eid));
-    }
-  }
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
-  public forEachReplicatedState(
-    visitor: (
-      eid: number,
-      nid: number,
-      modelId: number,
-      x: number,
-      y: number,
-      z: number,
-      rx: number,
-      ry: number,
-      rz: number,
-      rw: number,
-      grounded: boolean,
-      movementMode: MovementMode,
-      health: number,
-      maxHealth: number,
-      itemArchetypeId: number,
-      itemQuantity: number,
-      locationKind: number,
-      locationArchetypeId: number,
-      locationSeed: number,
-      locationEnvironmentId: number,
-      locationStreamingRadius: number,
-      locationInfluenceRadius: number
-    ) => void
-  ): void {
-    const c = this.store.world.components;
-    const replicatedEids = this.store.getReplicatedTagEids();
-    for (const eid of replicatedEids) {
-      visitor(
-        eid,
-        c.NetworkId.value[eid] ?? 0,
-        c.ModelId.value[eid] ?? 0,
-        c.Position.x[eid] ?? 0,
-        c.Position.y[eid] ?? 0,
-        c.Position.z[eid] ?? 0,
-        c.Rotation.x[eid] ?? 0,
-        c.Rotation.y[eid] ?? 0,
-        c.Rotation.z[eid] ?? 0,
-        c.Rotation.w[eid] ?? 1,
-        (c.Grounded.value[eid] ?? 0) !== 0,
-        (c.MovementMode.value[eid] ?? 0) as MovementMode,
-        c.Health.value[eid] ?? 0,
-        c.Health.max[eid] ?? 0,
-        c.ItemArchetypeId.value[eid] ?? 0,
-        c.ItemQuantity.value[eid] ?? 0,
-        c.LocationKind.value[eid] ?? 0,
-        c.LocationArchetypeId.value[eid] ?? 0,
-        c.LocationSeed.value[eid] ?? 0,
-        c.LocationEnvironmentId.value[eid] ?? 0,
-        c.LocationStreamingRadius.value[eid] ?? 0,
-        c.LocationInfluenceRadius.value[eid] ?? 0
-      );
+  private getHotbarArray(eid: number): number[] {
+    const hotbar: number[] = new Array(HOTBAR_SLOT_COUNT);
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot++) {
+      hotbar[slot] = this.store.getHotbarSlot(eid, slot);
     }
-  }
-
-  public getOnlinePlayerPositionsXZ(): Array<{ x: number; z: number }> {
-    return this.projectors.getOnlinePlayerPositionsXZ();
+    return hotbar;
   }
 }

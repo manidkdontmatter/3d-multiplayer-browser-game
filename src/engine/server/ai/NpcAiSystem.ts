@@ -8,7 +8,7 @@ import {
   PHYSICS_GROUP_CHARACTER,
   quaternionFromYawPitchRoll
 } from "../../shared/index";
-import type { CharacterObject } from "../ecs/SimulationEcsTypes";
+import type { ArchetypeDefinition } from "../../shared/archetype";
 import type {
   CharacterArchetypeDefinition,
   NpcSpawnDefinition
@@ -22,9 +22,34 @@ import type {
 export type NpcLifecycleState = "active" | "inactive" | "hibernating";
 export type NpcBehaviorState = "idle" | "patrol" | "wander" | "chase" | "attack" | "flee";
 
-export type NpcCharacter = CharacterObject & {
+export type NpcCharacter = {
+  nid: number;
+  modelId: number;
+  x: number; y: number; z: number;
+  yaw: number; pitch: number;
+  vx: number; vy: number; vz: number;
+  grounded: boolean;
+  movementMode: number;
+  groundedPlatformPid: number | null;
+  carriedFramePid: number | null;
+  health: number;
+  maxHealth: number;
+  primaryMouseSlot: number;
+  secondaryMouseSlot: number;
+  hotbarAbilityIds: number[];
+  unlockedAbilityIds: Set<number>;
+  lastPrimaryFireAtSeconds: number;
+  lastProcessedSequence: number;
+  primaryHeld: boolean;
+  secondaryHeld: boolean;
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
   characterArchetypeId: number;
   controllerKind: number;
+  definition: ArchetypeDefinition;
+  _ecsEid?: number;
 };
 
 export interface AiVisibleTarget {
@@ -233,6 +258,15 @@ export class NpcAiSystem {
 
   public getCharacters(): readonly NpcCharacter[] {
     return this.npcs.map((guard) => guard.character);
+  }
+
+  public getCharacterEids(): number[] {
+    const eids: number[] = [];
+    for (const npc of this.npcs) {
+      const eid = npc.character._ecsEid;
+      if (typeof eid === "number") eids.push(eid);
+    }
+    return eids;
   }
 
   public getActiveCount(): number {
@@ -860,11 +894,11 @@ export class NpcAiSystem {
     const hotbarAbilityIds = new Array<number>(HOTBAR_SLOT_COUNT).fill(0);
     hotbarAbilityIds[0] = ABILITY_ID_PUNCH;
     return {
-      accountId: 0,
       nid: 0,
       modelId: archetype.modelId,
       characterArchetypeId: archetype.id,
       controllerKind: this.options.controllerKindAi,
+      definition: null!,
       position: { x: spawn.x, y: spawn.y, z: spawn.z },
       rotation: quaternionFromYawPitchRoll(spawn.yaw, 0),
       x: spawn.x,

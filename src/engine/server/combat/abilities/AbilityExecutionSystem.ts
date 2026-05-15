@@ -3,121 +3,88 @@ import { clampHotbarSlotIndex } from "../../../shared/index";
 import type { AbilityDefinition } from "../../../shared/index";
 import { resolveProjectileProfile } from "../../../shared/index";
 
-export interface AbilityExecutionPlayer {
+export interface AbilityExecutionSystemOptions {
+  readonly getElapsedSeconds: () => number;
+  readonly resolveAbilityById: (unlockedAbilityIds: Set<number>, abilityId: number) => AbilityDefinition | null;
+  readonly broadcastAbilityUse: (playerNid: number, ability: AbilityDefinition) => void;
+  readonly spawnProjectile: (request: {
+    ownerNid: number; kind: number;
+    x: number; y: number; z: number;
+    vx: number; vy: number; vz: number;
+    radius: number; damage: number; lifetimeSeconds: number;
+    maxRange: number; gravity: number; drag: number;
+    maxSpeed: number; minSpeed: number; pierceCount: number;
+    despawnOnDamageableHit: boolean; despawnOnWorldHit: boolean;
+  }) => void;
+  readonly applyMeleeHit: (playerNid: number, meleeProfile: NonNullable<AbilityDefinition["melee"]>) => void;
+}
+
+export interface AbilityUseContext {
   nid: number;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  pitch: number;
+  x: number; y: number; z: number;
+  yaw: number; pitch: number;
+  hotbarAbilityIds: number[];
+  unlockedAbilityIds: Set<number>;
+  lastPrimaryFireAtSeconds: number;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
-  lastPrimaryFireAtSeconds: number;
 }
 
-export interface AbilityExecutionSystemOptions<TPlayer extends AbilityExecutionPlayer> {
-  readonly getElapsedSeconds: () => number;
-  readonly resolveAbilityById: (player: TPlayer, abilityId: number) => AbilityDefinition | null;
-  readonly broadcastAbilityUse: (player: TPlayer, ability: AbilityDefinition) => void;
-  readonly spawnProjectile: (request: {
-    ownerNid: number;
-    kind: number;
-    x: number;
-    y: number;
-    z: number;
-    vx: number;
-    vy: number;
-    vz: number;
-    radius: number;
-    damage: number;
-    lifetimeSeconds: number;
-    maxRange: number;
-    gravity: number;
-    drag: number;
-    maxSpeed: number;
-    minSpeed: number;
-    pierceCount: number;
-    despawnOnDamageableHit: boolean;
-    despawnOnWorldHit: boolean;
-  }) => void;
-  readonly applyMeleeHit: (player: TPlayer, meleeProfile: NonNullable<AbilityDefinition["melee"]>) => void;
-}
+export class AbilityExecutionSystem {
+  public constructor(private readonly options: AbilityExecutionSystemOptions) {}
 
-export class AbilityExecutionSystem<TPlayer extends AbilityExecutionPlayer> {
-  public constructor(private readonly options: AbilityExecutionSystemOptions<TPlayer>) {}
-
-  public tryUsePrimaryMouseAbility(player: TPlayer): void {
-    this.tryUseAbilityBySlot(player, player.primaryMouseSlot);
+  public tryUsePrimaryMouseAbility(ctx: AbilityUseContext): void {
+    this.tryUseAbilityBySlot(ctx, ctx.primaryMouseSlot);
   }
 
-  public tryUseSecondaryMouseAbility(player: TPlayer): void {
-    this.tryUseAbilityBySlot(player, player.secondaryMouseSlot);
+  public tryUseSecondaryMouseAbility(ctx: AbilityUseContext): void {
+    this.tryUseAbilityBySlot(ctx, ctx.secondaryMouseSlot);
   }
 
-  public tryUseAbilityBySlot(player: TPlayer, rawSlot: number): void {
+  public tryUseAbilityBySlot(ctx: AbilityUseContext, rawSlot: number): void {
     const slot = clampHotbarSlotIndex(rawSlot);
-    const abilityId = player.hotbarAbilityIds[slot] ?? 0;
-    const ability = this.options.resolveAbilityById(player, abilityId);
-    if (!ability) {
-      return;
-    }
+    const abilityId = ctx.hotbarAbilityIds[slot] ?? 0;
+    const ability = this.options.resolveAbilityById(ctx.unlockedAbilityIds, abilityId);
+    if (!ability) return;
 
-    const projectileProfile = ability.projectile;
-    const meleeProfile = ability.melee;
-    const activeCooldownSeconds = projectileProfile?.cooldownSeconds ?? meleeProfile?.cooldownSeconds;
-    if (activeCooldownSeconds === undefined) {
-      return;
-    }
+    const pp = ability.projectile;
+    const mp = ability.melee;
+    const cooldown = pp?.cooldownSeconds ?? mp?.cooldownSeconds;
+    if (cooldown === undefined) return;
 
-    const secondsSinceLastFire = this.options.getElapsedSeconds() - player.lastPrimaryFireAtSeconds;
-    if (secondsSinceLastFire < activeCooldownSeconds) {
-      return;
-    }
-    player.lastPrimaryFireAtSeconds = this.options.getElapsedSeconds();
-    this.options.broadcastAbilityUse(player, ability);
+    const elapsed = this.options.getElapsedSeconds();
+    if (elapsed - ctx.lastPrimaryFireAtSeconds < cooldown) return;
 
-    if (projectileProfile) {
-      this.spawnProjectileFromAbility(player, projectileProfile);
+    ctx.lastPrimaryFireAtSeconds = elapsed;
+    this.options.broadcastAbilityUse(ctx.nid, ability);
+
+    if (pp) {
+      this.spawnProjectileFromContext(ctx, pp);
       return;
     }
-    if (meleeProfile) {
-      this.options.applyMeleeHit(player, meleeProfile);
+    if (mp) {
+      this.options.applyMeleeHit(ctx.nid, mp);
     }
   }
 
-  private spawnProjectileFromAbility(
-    player: TPlayer,
-    projectileProfile: NonNullable<AbilityDefinition["projectile"]>
+  private spawnProjectileFromContext(
+    ctx: { nid: number; x: number; y: number; z: number; yaw: number; pitch: number },
+    pp: NonNullable<AbilityDefinition["projectile"]>
   ): void {
-    const resolved = resolveProjectileProfile(projectileProfile);
-    const direction = this.computeViewDirection(player.yaw, player.pitch);
-    const dirX = direction.x;
-    const dirY = direction.y;
-    const dirZ = direction.z;
-
-    const spawnX = player.x + dirX * resolved.spawnForwardOffset;
-    const spawnY =
-      player.y + resolved.spawnVerticalOffset + dirY * resolved.spawnForwardOffset;
-    const spawnZ = player.z + dirZ * resolved.spawnForwardOffset;
-
+    const resolved = resolveProjectileProfile(pp);
+    const d = this.computeViewDirection(ctx.yaw, ctx.pitch);
+    const sx = ctx.x + d.x * resolved.spawnForwardOffset;
+    const sy = ctx.y + resolved.spawnVerticalOffset + d.y * resolved.spawnForwardOffset;
+    const sz = ctx.z + d.z * resolved.spawnForwardOffset;
     this.options.spawnProjectile({
-      ownerNid: player.nid,
+      ownerNid: ctx.nid,
       kind: resolved.kind,
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: dirX * resolved.speed,
-      vy: dirY * resolved.speed,
-      vz: dirZ * resolved.speed,
-      radius: resolved.radius,
-      damage: resolved.damage,
-      lifetimeSeconds: resolved.lifetimeSeconds,
-      maxRange: resolved.maxRange,
-      gravity: resolved.gravity,
-      drag: resolved.drag,
-      maxSpeed: resolved.maxSpeed,
-      minSpeed: resolved.minSpeed,
+      x: sx, y: sy, z: sz,
+      vx: d.x * resolved.speed, vy: d.y * resolved.speed, vz: d.z * resolved.speed,
+      radius: resolved.radius, damage: resolved.damage,
+      lifetimeSeconds: resolved.lifetimeSeconds, maxRange: resolved.maxRange,
+      gravity: resolved.gravity, drag: resolved.drag,
+      maxSpeed: resolved.maxSpeed, minSpeed: resolved.minSpeed,
       pierceCount: resolved.pierceCount,
       despawnOnDamageableHit: resolved.despawnOnDamageableHit,
       despawnOnWorldHit: resolved.despawnOnWorldHit
@@ -125,19 +92,13 @@ export class AbilityExecutionSystem<TPlayer extends AbilityExecutionPlayer> {
   }
 
   private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
-    const cosPitch = Math.cos(pitch);
-    const x = -Math.sin(yaw) * cosPitch;
+    const cp = Math.cos(pitch);
+    const x = -Math.sin(yaw) * cp;
     const y = Math.sin(pitch);
-    const z = -Math.cos(yaw) * cosPitch;
-    const magnitude = Math.hypot(x, y, z);
-    if (magnitude <= 1e-6) {
-      return { x: 0, y: 0, z: -1 };
-    }
-    const invMagnitude = 1 / magnitude;
-    return {
-      x: x * invMagnitude,
-      y: y * invMagnitude,
-      z: z * invMagnitude
-    };
+    const z = -Math.cos(yaw) * cp;
+    const m = Math.hypot(x, y, z);
+    if (m <= 1e-6) return { x: 0, y: 0, z: -1 };
+    const inv = 1 / m;
+    return { x: x * inv, y: y * inv, z: z * inv };
   }
 }

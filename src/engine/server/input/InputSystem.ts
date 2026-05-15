@@ -1,4 +1,4 @@
-// Applies client input commands to server-authoritative player input state and action triggers.
+// Applies client input commands to server-authoritative player state. Mutates a state snapshot.
 import {
   MOVEMENT_MODE_FLYING,
   MOVEMENT_MODE_GROUNDED,
@@ -12,36 +12,23 @@ import {
 } from "../../shared/index";
 import type { InputCommand as InputWireCommand } from "../../shared/netcode";
 import { NType } from "../../shared/netcode";
+import type { PlayerStateSnapshot } from "../ecs/SimulationEcsTypes";
 
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
 const LOOK_PITCH_MIN = -1.45;
 const LOOK_PITCH_MAX = 1.45;
 
-export interface InputCommandActor {
-  lastProcessedSequence: number;
-  pitch: number;
-  primaryHeld: boolean;
-  secondaryHeld: boolean;
-  yaw: number;
-  grounded: boolean;
-  movementMode: MovementMode;
-  vy: number;
-  groundedPlatformPid: number | null;
-  vx: number;
-  vz: number;
+export interface InputSystemOptions {
+  readonly onPrimaryPressed: (unlockedAbilityIds: Set<number>, primaryMouseSlot: number, hotbarAbilityIds: number[]) => void;
+  readonly onSecondaryPressed: (unlockedAbilityIds: Set<number>, secondaryMouseSlot: number, hotbarAbilityIds: number[]) => void;
+  readonly onCastSlotPressed: (unlockedAbilityIds: Set<number>, slot: number, hotbarAbilityIds: number[]) => void;
 }
 
-export interface InputSystemOptions<TPlayer extends InputCommandActor> {
-  readonly onPrimaryPressed: (player: TPlayer) => void;
-  readonly onSecondaryPressed: (player: TPlayer) => void;
-  readonly onCastSlotPressed: (player: TPlayer, slot: number) => void;
-}
+export class InputSystem {
+  public constructor(private readonly options: InputSystemOptions) {}
 
-export class InputSystem<TPlayer extends InputCommandActor> {
-  public constructor(private readonly options: InputSystemOptions<TPlayer>) {}
-
-  public applyCommands(player: TPlayer, commands: Partial<InputWireCommand>[]): void {
+  public applyCommands(player: PlayerStateSnapshot, commands: Partial<InputWireCommand>[]): void {
     let latestSequence = player.lastProcessedSequence;
     let hasAcceptedCommand = false;
     let mergedForward = 0;
@@ -58,39 +45,27 @@ export class InputSystem<TPlayer extends InputCommandActor> {
     let mergedYaw = player.yaw;
 
     for (const command of commands) {
-      if (command.ntype !== NType.InputCommand) {
-        continue;
-      }
+      if (command.ntype !== NType.InputCommand) continue;
       if (
-        typeof command.forward !== "number" ||
-        !Number.isFinite(command.forward) ||
-        typeof command.strafe !== "number" ||
-        !Number.isFinite(command.strafe) ||
-        typeof command.pitch !== "number" ||
-        !Number.isFinite(command.pitch)
-      ) {
-        continue;
-      }
+        typeof command.forward !== "number" || !Number.isFinite(command.forward) ||
+        typeof command.strafe !== "number" || !Number.isFinite(command.strafe) ||
+        typeof command.pitch !== "number" || !Number.isFinite(command.pitch)
+      ) continue;
 
       const pitch = command.pitch ?? mergedPitch;
-      const hasAbsoluteYaw = typeof command.yaw === "number" && Number.isFinite(command.yaw);
+      const hasAbsYaw = typeof command.yaw === "number" && Number.isFinite(command.yaw);
       const hasYawDelta = typeof command.yawDelta === "number" && Number.isFinite(command.yawDelta);
-      if (!hasAbsoluteYaw && !hasYawDelta) {
-        continue;
-      }
-      const yaw = hasAbsoluteYaw
+      if (!hasAbsYaw && !hasYawDelta) continue;
+
+      const yaw = hasAbsYaw
         ? normalizeYaw(command.yaw as number)
         : normalizeYaw(mergedYaw + normalizeYaw(command.yawDelta ?? 0));
       const forward = this.clampAxis(command.forward ?? mergedForward);
       const strafe = this.clampAxis(command.strafe ?? mergedStrafe);
       const sprint = Boolean(command.sprint);
-      const sequence =
-        typeof command.sequence === "number" && Number.isFinite(command.sequence)
-          ? (command.sequence & 0xffff)
-          : ((latestSequence + 1) & 0xffff);
-      if (!this.isSequenceAheadOf(latestSequence, sequence)) {
-        continue;
-      }
+      const sequence = typeof command.sequence === "number" && Number.isFinite(command.sequence)
+        ? (command.sequence & 0xffff) : ((latestSequence + 1) & 0xffff);
+      if (!this.isSequenceAheadOf(latestSequence, sequence)) continue;
 
       hasAcceptedCommand = true;
       latestSequence = sequence;
@@ -106,16 +81,12 @@ export class InputSystem<TPlayer extends InputCommandActor> {
       queuedJump = queuedJump || Boolean(command.jump);
       queuedToggleFly = queuedToggleFly || Boolean(command.toggleFlyPressed);
       if (Boolean(command.castSlotPressed)) {
-        queuedCastSlot =
-          typeof command.castSlotIndex === "number" && Number.isFinite(command.castSlotIndex)
-            ? Math.max(0, Math.floor(command.castSlotIndex))
-            : 0;
+        queuedCastSlot = typeof command.castSlotIndex === "number" && Number.isFinite(command.castSlotIndex)
+          ? Math.max(0, Math.floor(command.castSlotIndex)) : 0;
       }
     }
 
-    if (!hasAcceptedCommand) {
-      return;
-    }
+    if (!hasAcceptedCommand) return;
 
     if (queuedToggleFly) {
       player.movementMode = toggleMovementMode(player.movementMode);
@@ -135,54 +106,42 @@ export class InputSystem<TPlayer extends InputCommandActor> {
     if (player.movementMode === MOVEMENT_MODE_FLYING) {
       player.grounded = false;
       player.groundedPlatformPid = null;
-      const directional = stepFlyingMovement(
+      const d = stepFlyingMovement(
         { vx: player.vx, vy: player.vy, vz: player.vz },
-        {
-          forward: mergedForward,
-          strafe: mergedStrafe,
-          sprint: mergedSprint,
-          yaw: player.yaw,
-          pitch: clampedPitch
-        },
+        { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw, pitch: clampedPitch },
         SERVER_TICK_SECONDS
       );
-      player.vx = directional.vx;
-      player.vy = directional.vy;
-      player.vz = directional.vz;
+      player.vx = d.vx; player.vy = d.vy; player.vz = d.vz;
     } else {
-      const horizontal = stepHorizontalMovement(
+      const h = stepHorizontalMovement(
         { vx: player.vx, vz: player.vz },
         { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw },
-        player.grounded,
-        SERVER_TICK_SECONDS
+        player.grounded, SERVER_TICK_SECONDS
       );
-      player.vx = horizontal.vx;
-      player.vz = horizontal.vz;
+      player.vx = h.vx; player.vz = h.vz;
     }
     player.pitch = clampedPitch;
     player.primaryHeld = mergedUsePrimaryHeld;
     player.secondaryHeld = mergedUseSecondaryHeld;
+
     if (queuedUsePrimaryPressed) {
-      this.options.onPrimaryPressed(player);
+      this.options.onPrimaryPressed(player.unlockedAbilityIds, player.primaryMouseSlot, player.hotbarAbilityIds);
     }
     if (queuedUseSecondaryPressed) {
-      this.options.onSecondaryPressed(player);
+      this.options.onSecondaryPressed(player.unlockedAbilityIds, player.secondaryMouseSlot, player.hotbarAbilityIds);
     }
     if (queuedCastSlot !== null) {
-      this.options.onCastSlotPressed(player, queuedCastSlot);
+      this.options.onCastSlotPressed(player.unlockedAbilityIds, queuedCastSlot, player.hotbarAbilityIds);
     }
     player.lastProcessedSequence = latestSequence;
   }
 
   private clampAxis(value: number): number {
-    if (!Number.isFinite(value)) {
-      return 0;
-    }
-    return Math.max(-1, Math.min(1, value));
+    return Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
   }
 
-  private isSequenceAheadOf(lastSequence: number, candidateSequence: number): boolean {
-    const delta = (candidateSequence - lastSequence + INPUT_SEQUENCE_MODULO) % INPUT_SEQUENCE_MODULO;
+  private isSequenceAheadOf(last: number, candidate: number): boolean {
+    const delta = (candidate - last + INPUT_SEQUENCE_MODULO) % INPUT_SEQUENCE_MODULO;
     return delta > 0 && delta < INPUT_SEQUENCE_HALF_RANGE;
   }
 }

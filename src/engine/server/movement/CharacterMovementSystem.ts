@@ -1,137 +1,108 @@
-// Authoritative fixed-step movement system for kinematic characters, regardless of controller source.
+// Authoritative fixed-step movement for NPC characters. Reads/writes ECS components directly.
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   GROUND_CONTACT_MIN_NORMAL_Y,
   type GroundSupportHit,
-  type MovementMode,
+  MOVEMENT_MODE_GROUNDED,
   PLAYER_CAMERA_OFFSET_Y,
   quaternionFromYawPitchRoll,
   resolveGroundSupportColliderHandle as queryGroundSupportColliderHandle,
+  sanitizeMovementMode,
   stepKinematicCharacterController
 } from "../../shared/index";
+import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 
-export type CharacterCarry = {
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  carriedFramePid: number | null;
-};
+export type CharacterCarry = { x: number; y: number; z: number; yaw: number; carriedFramePid: number | null };
 
-export interface CharacterMovementActor {
-  movementMode: MovementMode;
-  yaw: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  grounded: boolean;
-  groundedPlatformPid: number | null;
-  carriedFramePid: number | null;
-  x: number;
-  y: number;
-  z: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
-}
-
-export interface CharacterMovementSystemOptions<TCharacter extends CharacterMovementActor> {
+export interface CharacterMovementSystemOptions {
   readonly world?: RAPIER.World;
   readonly characterController: RAPIER.KinematicCharacterController;
   readonly capsuleHalfHeight?: number;
   readonly capsuleRadius?: number;
-  readonly beforeCharacterMove?: (character: TCharacter) => void;
-  readonly sampleCharacterCarry: (character: TCharacter) => CharacterCarry;
-  readonly resolveCharacterCarriedFramePid?: (
-    character: TCharacter,
-    movedBody: { x: number; y: number; z: number },
-    previousCarriedFramePid: number | null
-  ) => number | null;
-  readonly resolveGroundSupportColliderHandle?: (
-    character: TCharacter,
-    groundedByQuery: boolean
-  ) => GroundSupportHit;
+  readonly ecsComponents: WorldWithComponents["components"];
+  readonly getBody: (eid: number) => RAPIER.RigidBody | undefined;
+  readonly getCollider: (eid: number) => RAPIER.Collider | undefined;
+  readonly sampleCharacterCarry: (eid: number) => CharacterCarry;
+  readonly resolveCharacterCarriedFramePid?: (eid: number, movedBody: { x: number; y: number; z: number }, prev: number | null) => number | null;
+  readonly resolveGroundSupportColliderHandle?: (eid: number, groundedByQuery: boolean) => GroundSupportHit;
   readonly resolvePlatformPidByColliderHandle: (colliderHandle: number) => number | null;
-  readonly onCharacterStepped: (key: number, character: TCharacter) => void;
 }
 
-export class CharacterMovementSystem<TCharacter extends CharacterMovementActor> {
-  public constructor(private readonly options: CharacterMovementSystemOptions<TCharacter>) {}
+export class CharacterMovementSystem {
+  public constructor(private readonly options: CharacterMovementSystemOptions) {}
 
-  public stepCharacters(
-    characters: Iterable<readonly [number, TCharacter]>,
-    deltaSeconds: number,
-    simulationSeconds: number
-  ): void {
-    for (const [key, character] of characters) {
-      this.options.beforeCharacterMove?.(character);
-      const carry = this.options.sampleCharacterCarry(character);
+  public stepCharacters(eids: number[], deltaSeconds: number, simulationSeconds: number): void {
+    const c = this.options.ecsComponents;
+    for (const eid of eids) {
+      const body = this.options.getBody(eid);
+      const collider = this.options.getCollider(eid);
+      if (!body || !collider) continue;
+
+      const carry = this.options.sampleCharacterCarry(eid);
+      const x = c.Position.x[eid] ?? 0;
+      const y = c.Position.y[eid] ?? 0;
+      const z = c.Position.z[eid] ?? 0;
+
+      const state = {
+        x, y, z,
+        yaw: c.Yaw.value[eid] ?? 0,
+        vx: c.Velocity.x[eid] ?? 0,
+        vy: c.Velocity.y[eid] ?? 0,
+        vz: c.Velocity.z[eid] ?? 0,
+        grounded: (c.Grounded.value[eid] ?? 0) !== 0,
+        groundedPlatformPid: ((c.GroundedPlatformPid.value[eid] ?? -1) < 0 ? null : c.GroundedPlatformPid.value[eid]) as number | null,
+        carriedFramePid: ((c.CarriedFramePid.value[eid] ?? -1) < 0 ? null : c.CarriedFramePid.value[eid]) as number | null,
+        movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
+        position: { x, y, z },
+        rotation: { x: c.Rotation.x[eid] ?? 0, y: c.Rotation.y[eid] ?? 0, z: c.Rotation.z[eid] ?? 0, w: c.Rotation.w[eid] ?? 1 }
+      };
+
       const next = stepKinematicCharacterController({
-        state: {
-          ...character,
-          carriedFramePid: carry.carriedFramePid
-        },
-        deltaSeconds,
-        carry,
-        body: character.body,
-        collider: character.collider,
+        state: { ...state, carriedFramePid: carry.carriedFramePid },
+        deltaSeconds, carry, body, collider,
         characterController: this.options.characterController,
         playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
         groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y,
         simulationSeconds,
         resolveGroundSupportColliderHandle: (groundedByQuery) =>
-          this.resolveGroundSupportColliderHandle(character, groundedByQuery),
+          this.resolveGroundSupportColliderHandle(eid, groundedByQuery),
         resolvePlatformPidByColliderHandle: this.options.resolvePlatformPidByColliderHandle,
-        resolveCarriedFramePid: (movedBody, previousCarriedFramePid) =>
-          this.options.resolveCharacterCarriedFramePid?.(character, movedBody, previousCarriedFramePid) ??
-          previousCarriedFramePid
+        resolveCarriedFramePid: (movedBody, prev) =>
+          this.options.resolveCharacterCarriedFramePid?.(eid, movedBody, prev) ?? prev
       });
-      character.yaw = next.yaw;
-      character.grounded = next.grounded;
-      character.groundedPlatformPid = next.groundedPlatformPid;
-      character.carriedFramePid = next.carriedFramePid;
-      character.vy = next.vy;
-      character.x = next.x;
-      character.y = next.y;
-      character.z = next.z;
-      character.position.x = next.x;
-      character.position.y = next.y;
-      character.position.z = next.z;
-      const nextRotation = quaternionFromYawPitchRoll(character.yaw, 0);
-      character.rotation.x = nextRotation.x;
-      character.rotation.y = nextRotation.y;
-      character.rotation.z = nextRotation.z;
-      character.rotation.w = nextRotation.w;
-      this.options.onCharacterStepped(key, character);
+
+      c.Position.x[eid] = next.x;
+      c.Position.y[eid] = next.y;
+      c.Position.z[eid] = next.z;
+      c.Yaw.value[eid] = next.yaw;
+      c.Velocity.y[eid] = next.vy;
+      c.Grounded.value[eid] = next.grounded ? 1 : 0;
+      c.GroundedPlatformPid.value[eid] = next.groundedPlatformPid === null ? -1 : next.groundedPlatformPid;
+      c.CarriedFramePid.value[eid] = next.carriedFramePid === null ? -1 : next.carriedFramePid;
+      const rot = quaternionFromYawPitchRoll(next.yaw, 0);
+      c.Rotation.x[eid] = rot.x;
+      c.Rotation.y[eid] = rot.y;
+      c.Rotation.z[eid] = rot.z;
+      c.Rotation.w[eid] = rot.w;
     }
   }
 
-  private resolveGroundSupportColliderHandle(
-    character: TCharacter,
-    groundedByQuery: boolean
-  ): GroundSupportHit {
+  private resolveGroundSupportColliderHandle(eid: number, groundedByQuery: boolean): GroundSupportHit {
     if (this.options.resolveGroundSupportColliderHandle) {
-      return this.options.resolveGroundSupportColliderHandle(character, groundedByQuery);
+      return this.options.resolveGroundSupportColliderHandle(eid, groundedByQuery);
     }
-
     const world = this.options.world;
-    const capsuleHalfHeight = this.options.capsuleHalfHeight;
-    const capsuleRadius = this.options.capsuleRadius;
-    if (!world || !Number.isFinite(capsuleHalfHeight) || !Number.isFinite(capsuleRadius)) {
-      throw new Error(
-        "CharacterMovementSystem requires either resolveGroundSupportColliderHandle or world + capsule dimensions"
-      );
+    const hh = this.options.capsuleHalfHeight;
+    const r = this.options.capsuleRadius;
+    if (!world || !Number.isFinite(hh) || !Number.isFinite(r)) {
+      throw new Error("CharacterMovementSystem requires resolveGroundSupportColliderHandle or world + capsule dimensions");
     }
-
+    const body = this.options.getBody(eid);
+    const collider = this.options.getCollider(eid);
+    if (!body || !collider) return { hit: false, colliderHandle: null };
     return queryGroundSupportColliderHandle({
-      groundedByQuery,
-      world,
-      characterController: this.options.characterController,
-      body: character.body,
-      collider: character.collider,
-      capsuleHalfHeight: capsuleHalfHeight as number,
-      capsuleRadius: capsuleRadius as number,
+      groundedByQuery, world, characterController: this.options.characterController,
+      body, collider, capsuleHalfHeight: hh as number, capsuleRadius: r as number,
       groundContactMinNormalY: GROUND_CONTACT_MIN_NORMAL_Y
     });
   }

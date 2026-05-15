@@ -1,19 +1,16 @@
-// ECS storage layer owning component arrays and low-level mutation helpers.
+// ECS storage layer — owns the bitecs world with all component arrays.
+// Entity creation is delegated to EntityFactory; the store provides
+// low-level component accessors and hotbar/abilities helpers.
 import { addComponent, addEntity, createWorld, query, removeEntity } from "bitecs";
 import {
   HOTBAR_SLOT_COUNT,
-  MOVEMENT_MODE_GROUNDED,
-  clampHotbarSlotIndex,
-  sanitizeMovementMode
+  clampHotbarSlotIndex
 } from "../../shared/index";
-import type {
-  CharacterObject,
-  DummyObject,
-  PlayerObject,
-  ProjectileCreateRequest,
-  SimObject,
-  WorldWithComponents
-} from "./SimulationEcsTypes";
+import type { WorldWithComponents } from "./SimulationEcsTypes";
+import { ComponentRegistry } from "./ComponentRegistry";
+import { EntityFactory } from "./EntityFactory";
+import type { ArchetypeDefinition } from "../../shared/archetype";
+import type { EntityFactoryOverrides } from "./EntityFactory";
 
 export class SimulationEcsStore {
   public readonly world = createWorld({
@@ -85,6 +82,11 @@ export class SimulationEcsStore {
     }
   }) as WorldWithComponents;
 
+  public readonly registry = new ComponentRegistry(this.world.components);
+  public readonly factory = new EntityFactory(this.registry, this.world);
+
+  // ── Entity lifecycle ──────────────────────────────────────────────────────
+
   public createEid(): number {
     return addEntity(this.world);
   }
@@ -93,209 +95,118 @@ export class SimulationEcsStore {
     removeEntity(this.world, eid);
   }
 
-  public registerPlayerComponents(eid: number): void {
-    this.registerCharacterComponents(eid);
-    addComponent(this.world, eid, this.world.components.ReplicatedTag);
-    addComponent(this.world, eid, this.world.components.PlayerTag);
-    addComponent(this.world, eid, this.world.components.AccountId);
+  public createEntity(archetype: ArchetypeDefinition, overrides?: EntityFactoryOverrides): number {
+    return this.factory.createEntity(archetype, overrides);
   }
 
-  public registerNpcComponents(eid: number): void {
-    this.registerCharacterComponents(eid);
-    addComponent(this.world, eid, this.world.components.ReplicatedTag);
-    addComponent(this.world, eid, this.world.components.NpcTag);
+  // ── Component value helpers ───────────────────────────────────────────────
+
+  public getEntityNid(eid: number): number {
+    return this.world.components.NetworkId.value[eid] ?? 0;
   }
 
-  public registerCharacterComponents(eid: number): void {
-    this.ensureBaseComponents(eid);
-    addComponent(this.world, eid, this.world.components.CharacterTag);
-    addComponent(this.world, eid, this.world.components.Velocity);
-    addComponent(this.world, eid, this.world.components.GroundedPlatformPid);
-    addComponent(this.world, eid, this.world.components.CarriedFramePid);
-    addComponent(this.world, eid, this.world.components.Yaw);
-    addComponent(this.world, eid, this.world.components.Pitch);
-    addComponent(this.world, eid, this.world.components.LastProcessedSequence);
-    addComponent(this.world, eid, this.world.components.LastPrimaryFireAtSeconds);
-    addComponent(this.world, eid, this.world.components.PrimaryHeld);
-    addComponent(this.world, eid, this.world.components.SecondaryHeld);
-    addComponent(this.world, eid, this.world.components.PrimaryMouseSlot);
-    addComponent(this.world, eid, this.world.components.SecondaryMouseSlot);
-    addComponent(this.world, eid, this.world.components.Hotbar);
-    addComponent(this.world, eid, this.world.components.UnlockedAbilityCsv);
+  public setEntityNid(eid: number, nid: number): void {
+    this.world.components.NetworkId.value[eid] = Math.max(0, Math.floor(nid));
   }
 
-  public registerPlatformComponents(eid: number): void {
-    this.ensureBaseComponents(eid);
-    addComponent(this.world, eid, this.world.components.PlatformTag);
+  public getEntityAccountId(eid: number): number {
+    return this.world.components.AccountId.value[eid] ?? 0;
   }
 
-  public registerLocationRootComponents(eid: number): void {
-    this.ensureBaseComponents(eid);
-    addComponent(this.world, eid, this.world.components.ReplicatedTag);
-    addComponent(this.world, eid, this.world.components.LocationRootTag);
+  public setPosition(eid: number, x: number, y: number, z: number): void {
+    const c = this.world.components;
+    c.Position.x[eid] = x;
+    c.Position.y[eid] = y;
+    c.Position.z[eid] = z;
   }
 
-  public registerDummyComponents(eid: number): void {
-    this.ensureBaseComponents(eid);
-    addComponent(this.world, eid, this.world.components.ReplicatedTag);
-    addComponent(this.world, eid, this.world.components.DummyTag);
+  public setRotation(eid: number, x: number, y: number, z: number, w: number): void {
+    const c = this.world.components;
+    c.Rotation.x[eid] = x;
+    c.Rotation.y[eid] = y;
+    c.Rotation.z[eid] = z;
+    c.Rotation.w[eid] = w;
   }
 
-  public registerWorldItemComponents(eid: number): void {
-    this.ensureBaseComponents(eid);
-    addComponent(this.world, eid, this.world.components.ReplicatedTag);
-    addComponent(this.world, eid, this.world.components.WorldItemTag);
+  public setVelocity(eid: number, vx: number, vy: number, vz: number): void {
+    const c = this.world.components;
+    c.Velocity.x[eid] = vx;
+    c.Velocity.y[eid] = vy;
+    c.Velocity.z[eid] = vz;
   }
 
-  public createProjectile(request: ProjectileCreateRequest): number {
-    const eid = this.createEid();
-    this.ensureBaseComponents(eid);
-    addComponent(this.world, eid, this.world.components.ReplicatedTag);
-    addComponent(this.world, eid, this.world.components.ProjectileTag);
-    addComponent(this.world, eid, this.world.components.Velocity);
-    addComponent(this.world, eid, this.world.components.ProjectileOwnerNid);
-    addComponent(this.world, eid, this.world.components.ProjectileKind);
-    addComponent(this.world, eid, this.world.components.ProjectileRadius);
-    addComponent(this.world, eid, this.world.components.ProjectileDamage);
-    addComponent(this.world, eid, this.world.components.ProjectileTtl);
-    addComponent(this.world, eid, this.world.components.ProjectileRemainingRange);
-    addComponent(this.world, eid, this.world.components.ProjectileGravity);
-    addComponent(this.world, eid, this.world.components.ProjectileDrag);
-    addComponent(this.world, eid, this.world.components.ProjectileMaxSpeed);
-    addComponent(this.world, eid, this.world.components.ProjectileMinSpeed);
-    addComponent(this.world, eid, this.world.components.ProjectileRemainingPierces);
-    addComponent(this.world, eid, this.world.components.ProjectileDespawnOnDamageableHit);
-    addComponent(this.world, eid, this.world.components.ProjectileDespawnOnWorldHit);
-
-    this.world.components.NetworkId.value[eid] = 0;
-    this.world.components.ModelId.value[eid] = Math.max(0, Math.floor(request.modelId));
-    this.world.components.Position.x[eid] = request.x;
-    this.world.components.Position.y[eid] = request.y;
-    this.world.components.Position.z[eid] = request.z;
-    this.world.components.Rotation.x[eid] = 0;
-    this.world.components.Rotation.y[eid] = 0;
-    this.world.components.Rotation.z[eid] = 0;
-    this.world.components.Rotation.w[eid] = 1;
-    this.world.components.Grounded.value[eid] = 0;
-    this.world.components.MovementMode.value[eid] = MOVEMENT_MODE_GROUNDED;
-    this.world.components.Health.value[eid] = 0;
-    this.world.components.Health.max[eid] = 0;
-    this.world.components.Velocity.x[eid] = request.vx;
-    this.world.components.Velocity.y[eid] = request.vy;
-    this.world.components.Velocity.z[eid] = request.vz;
-    this.world.components.ProjectileOwnerNid.value[eid] = Math.max(0, Math.floor(request.ownerNid));
-    this.world.components.ProjectileKind.value[eid] = Math.max(0, Math.floor(request.kind));
-    this.world.components.ProjectileRadius.value[eid] = Math.max(0, request.radius);
-    this.world.components.ProjectileDamage.value[eid] = Math.max(0, request.damage);
-    this.world.components.ProjectileTtl.value[eid] = request.ttlSeconds;
-    this.world.components.ProjectileRemainingRange.value[eid] = request.remainingRange;
-    this.world.components.ProjectileGravity.value[eid] = request.gravity;
-    this.world.components.ProjectileDrag.value[eid] = Math.max(0, request.drag);
-    this.world.components.ProjectileMaxSpeed.value[eid] = Math.max(0, request.maxSpeed);
-    this.world.components.ProjectileMinSpeed.value[eid] = Math.max(0, request.minSpeed);
-    this.world.components.ProjectileRemainingPierces.value[eid] = Math.max(0, Math.floor(request.remainingPierces));
-    this.world.components.ProjectileDespawnOnDamageableHit.value[eid] = request.despawnOnDamageableHit ? 1 : 0;
-    this.world.components.ProjectileDespawnOnWorldHit.value[eid] = request.despawnOnWorldHit ? 1 : 0;
-    return eid;
+  public setHealth(eid: number, value: number, max: number): void {
+    const c = this.world.components;
+    c.Health.value[eid] = Math.max(0, value);
+    c.Health.max[eid] = Math.max(0, max);
   }
 
-  public syncBaseFromObject(eid: number, entity: SimObject): void {
-    this.world.components.NetworkId.value[eid] = Math.max(0, Math.floor(entity.nid));
-    this.world.components.ModelId.value[eid] = Math.max(0, Math.floor(entity.modelId));
-    this.world.components.Position.x[eid] = entity.position.x;
-    this.world.components.Position.y[eid] = entity.position.y;
-    this.world.components.Position.z[eid] = entity.position.z;
-    this.world.components.Rotation.x[eid] = entity.rotation.x;
-    this.world.components.Rotation.y[eid] = entity.rotation.y;
-    this.world.components.Rotation.z[eid] = entity.rotation.z;
-    this.world.components.Rotation.w[eid] = entity.rotation.w;
-    this.world.components.Grounded.value[eid] = entity.grounded ? 1 : 0;
-    this.world.components.MovementMode.value[eid] = sanitizeMovementMode(
-      entity.movementMode,
-      MOVEMENT_MODE_GROUNDED
-    );
-    this.world.components.Health.value[eid] = Math.max(0, Math.floor(entity.health));
-    this.world.components.Health.max[eid] = Math.max(0, Math.floor(entity.maxHealth));
-    this.world.components.ItemArchetypeId.value[eid] = Math.max(0, Math.floor(entity.itemArchetypeId ?? 0));
-    this.world.components.ItemQuantity.value[eid] = Math.max(0, Math.floor(entity.itemQuantity ?? 0));
-    this.world.components.LocationKind.value[eid] = Math.max(0, Math.floor(entity.locationKind ?? 0));
-    this.world.components.LocationArchetypeId.value[eid] = Math.max(0, Math.floor(entity.locationArchetypeId ?? 0));
-    this.world.components.LocationSeed.value[eid] = Math.floor(entity.locationSeed ?? 0);
-    this.world.components.LocationEnvironmentId.value[eid] = Math.max(0, Math.floor(entity.locationEnvironmentId ?? 0));
-    this.world.components.LocationStreamingRadius.value[eid] = Math.max(0, entity.locationStreamingRadius ?? 0);
-    this.world.components.LocationInfluenceRadius.value[eid] = Math.max(0, entity.locationInfluenceRadius ?? 0);
-    this.world.components.CharacterArchetypeId.value[eid] = Math.max(0, Math.floor(entity.characterArchetypeId ?? 0));
-    this.world.components.ControllerKind.value[eid] = Math.max(0, Math.floor(entity.controllerKind ?? 0));
+  public setGrounded(eid: number, grounded: boolean): void {
+    this.world.components.Grounded.value[eid] = grounded ? 1 : 0;
   }
 
-  public syncCharacterFromObject(eid: number, character: CharacterObject): void {
-    this.syncBaseFromObject(eid, character);
-    this.world.components.Velocity.x[eid] = character.vx;
-    this.world.components.Velocity.y[eid] = character.vy;
-    this.world.components.Velocity.z[eid] = character.vz;
-    this.world.components.GroundedPlatformPid.value[eid] =
-      character.groundedPlatformPid === null ? -1 : Math.floor(character.groundedPlatformPid);
-    this.world.components.CarriedFramePid.value[eid] =
-      character.carriedFramePid === null ? -1 : Math.floor(character.carriedFramePid);
-    this.world.components.AccountId.value[eid] = Math.max(0, Math.floor(character.accountId ?? 0));
-    this.world.components.Yaw.value[eid] = character.yaw;
-    this.world.components.Pitch.value[eid] = character.pitch;
-    this.world.components.LastProcessedSequence.value[eid] = Math.max(
-      0,
-      Math.floor(character.lastProcessedSequence)
-    );
-    this.world.components.LastPrimaryFireAtSeconds.value[eid] = character.lastPrimaryFireAtSeconds;
-    this.world.components.PrimaryHeld.value[eid] = character.primaryHeld ? 1 : 0;
-    this.world.components.SecondaryHeld.value[eid] = character.secondaryHeld ? 1 : 0;
-    this.world.components.PrimaryMouseSlot.value[eid] = clampHotbarSlotIndex(character.primaryMouseSlot);
-    this.world.components.SecondaryMouseSlot.value[eid] = clampHotbarSlotIndex(character.secondaryMouseSlot);
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-      this.setHotbarAbilityBySlot(eid, slot, character.hotbarAbilityIds[slot] ?? 0);
+  public setMovementMode(eid: number, mode: number): void {
+    this.world.components.MovementMode.value[eid] = mode;
+  }
+
+  public setGroundedPlatformPid(eid: number, pid: number | null): void {
+    this.world.components.GroundedPlatformPid.value[eid] = pid === null ? -1 : Math.floor(pid);
+  }
+
+  public setCarriedFramePid(eid: number, pid: number | null): void {
+    this.world.components.CarriedFramePid.value[eid] = pid === null ? -1 : Math.floor(pid);
+  }
+
+  // ── Hotbar ────────────────────────────────────────────────────────────────
+
+  public getHotbarSlot(eid: number, slot: number): number {
+    const normalizedSlot = clampHotbarSlotIndex(slot);
+    const h = this.world.components.Hotbar;
+    switch (normalizedSlot) {
+      case 0: return h.slot0[eid] ?? 0;
+      case 1: return h.slot1[eid] ?? 0;
+      case 2: return h.slot2[eid] ?? 0;
+      case 3: return h.slot3[eid] ?? 0;
+      case 4: return h.slot4[eid] ?? 0;
+      case 5: return h.slot5[eid] ?? 0;
+      case 6: return h.slot6[eid] ?? 0;
+      case 7: return h.slot7[eid] ?? 0;
+      case 8: return h.slot8[eid] ?? 0;
+      default: return h.slot9[eid] ?? 0;
     }
-    this.setUnlockedAbilities(eid, character.unlockedAbilityIds);
   }
 
-  public syncPlayerFromObject(eid: number, player: PlayerObject): void {
-    this.syncCharacterFromObject(eid, player);
+  public setHotbarAbilityBySlot(eid: number, slot: number, abilityId: number): boolean {
+    const normalizedAbilityId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
+    const normalizedSlot = clampHotbarSlotIndex(slot);
+    const h = this.world.components.Hotbar;
+    let previous: number;
+    switch (normalizedSlot) {
+      case 0: previous = h.slot0[eid] ?? 0; h.slot0[eid] = normalizedAbilityId; break;
+      case 1: previous = h.slot1[eid] ?? 0; h.slot1[eid] = normalizedAbilityId; break;
+      case 2: previous = h.slot2[eid] ?? 0; h.slot2[eid] = normalizedAbilityId; break;
+      case 3: previous = h.slot3[eid] ?? 0; h.slot3[eid] = normalizedAbilityId; break;
+      case 4: previous = h.slot4[eid] ?? 0; h.slot4[eid] = normalizedAbilityId; break;
+      case 5: previous = h.slot5[eid] ?? 0; h.slot5[eid] = normalizedAbilityId; break;
+      case 6: previous = h.slot6[eid] ?? 0; h.slot6[eid] = normalizedAbilityId; break;
+      case 7: previous = h.slot7[eid] ?? 0; h.slot7[eid] = normalizedAbilityId; break;
+      case 8: previous = h.slot8[eid] ?? 0; h.slot8[eid] = normalizedAbilityId; break;
+      default: previous = h.slot9[eid] ?? 0; h.slot9[eid] = normalizedAbilityId; break;
+    }
+    return previous !== normalizedAbilityId;
   }
 
-  public setUnlockedAbilities(eid: number, unlocked: Set<number>): boolean {
-    const ids = Array.from(unlocked)
-      .map((abilityId) => Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0)))
-      .sort((a, b) => a - b);
-    const nextCsv = ids.join(",");
-    const previousCsv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
-    this.world.components.UnlockedAbilityCsv.value[eid] = nextCsv;
-    return previousCsv !== nextCsv;
-  }
-
-  public setUnlockedAbilitiesFromList(eid: number, unlocked: ReadonlyArray<number>): boolean {
-    const ids = Array.from(
-      new Set(
-        unlocked.map((abilityId) =>
-          Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0))
-        )
-      )
-    ).sort((a, b) => a - b);
-    const nextCsv = ids.join(",");
-    const previousCsv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
-    this.world.components.UnlockedAbilityCsv.value[eid] = nextCsv;
-    return previousCsv !== nextCsv;
-  }
+  // ── Unlocked abilities ────────────────────────────────────────────────────
 
   public getUnlockedAbilities(eid: number): Set<number> {
     const unlocked = new Set<number>();
     const csv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
-    if (!csv) {
-      return unlocked;
-    }
-    const parts = csv.split(",");
-    for (const part of parts) {
+    if (!csv) return unlocked;
+    for (const part of csv.split(",")) {
       const value = Number.parseInt(part, 10);
-      if (!Number.isFinite(value)) {
-        continue;
+      if (Number.isFinite(value)) {
+        unlocked.add(Math.max(0, Math.floor(value)));
       }
-      unlocked.add(Math.max(0, Math.floor(value)));
     }
     return unlocked;
   }
@@ -304,158 +215,44 @@ export class SimulationEcsStore {
     return Array.from(this.getUnlockedAbilities(eid));
   }
 
-  public syncPlatformFromObject(eid: number, platform: SimObject): void {
-    this.syncBaseFromObject(eid, platform);
+  public setUnlockedAbilitiesFromList(eid: number, unlocked: ReadonlyArray<number>): boolean {
+    const ids = Array.from(
+      new Set(unlocked.map(id => Math.max(0, Math.floor(Number.isFinite(id) ? id : 0))))
+    ).sort((a, b) => a - b);
+    const nextCsv = ids.join(",");
+    const previousCsv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
+    this.world.components.UnlockedAbilityCsv.value[eid] = nextCsv;
+    return previousCsv !== nextCsv;
   }
 
-  public syncLocationRootFromObject(eid: number, location: SimObject): void {
-    this.syncBaseFromObject(eid, location);
+  public setUnlockedAbilities(eid: number, unlocked: Set<number>): boolean {
+    return this.setUnlockedAbilitiesFromList(eid, Array.from(unlocked));
   }
 
-  public syncDummyFromObject(eid: number, dummy: DummyObject): void {
-    this.syncBaseFromObject(eid, dummy);
-  }
-
-  public syncWorldItemFromObject(eid: number, item: SimObject): void {
-    this.syncBaseFromObject(eid, item);
-  }
-
-  public setEntityNid(eid: number, nid: number): void {
-    this.world.components.NetworkId.value[eid] = Math.max(0, Math.floor(nid));
-  }
-
-  public getEntityNid(eid: number): number {
-    return this.world.components.NetworkId.value[eid] ?? 0;
-  }
-
-  public getEntityAccountId(eid: number): number {
-    return this.world.components.AccountId.value[eid] ?? 0;
-  }
+  // ── Tag queries ───────────────────────────────────────────────────────────
 
   public getPlayerTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.PlayerTag]));
   }
-
-  public getCharacterTagEids(): number[] {
-    return Array.from(query(this.world, [this.world.components.CharacterTag]));
-  }
-
   public getNpcTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.NpcTag]));
   }
-
   public getProjectileTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.ProjectileTag]));
   }
-
   public getWorldItemTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.WorldItemTag]));
   }
-
   public getPlatformTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.PlatformTag]));
   }
-
   public getDummyTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.DummyTag]));
   }
-
   public getLocationRootTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.LocationRootTag]));
   }
-
   public getReplicatedTagEids(): number[] {
     return Array.from(query(this.world, [this.world.components.ReplicatedTag]));
-  }
-
-  public getHotbarSlot(eid: number, slot: number): number {
-    const normalizedSlot = clampHotbarSlotIndex(slot);
-    const hotbar = this.world.components.Hotbar;
-    if (normalizedSlot === 0) return hotbar.slot0[eid] ?? 0;
-    if (normalizedSlot === 1) return hotbar.slot1[eid] ?? 0;
-    if (normalizedSlot === 2) return hotbar.slot2[eid] ?? 0;
-    if (normalizedSlot === 3) return hotbar.slot3[eid] ?? 0;
-    if (normalizedSlot === 4) return hotbar.slot4[eid] ?? 0;
-    if (normalizedSlot === 5) return hotbar.slot5[eid] ?? 0;
-    if (normalizedSlot === 6) return hotbar.slot6[eid] ?? 0;
-    if (normalizedSlot === 7) return hotbar.slot7[eid] ?? 0;
-    if (normalizedSlot === 8) return hotbar.slot8[eid] ?? 0;
-    return hotbar.slot9[eid] ?? 0;
-  }
-
-  public setHotbarAbilityBySlot(eid: number, slot: number, abilityId: number): boolean {
-    const normalizedAbilityId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
-    const normalizedSlot = clampHotbarSlotIndex(slot);
-
-    const hotbar = this.world.components.Hotbar;
-    if (normalizedSlot === 0) {
-      const previous = hotbar.slot0[eid] ?? 0;
-      hotbar.slot0[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 1) {
-      const previous = hotbar.slot1[eid] ?? 0;
-      hotbar.slot1[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 2) {
-      const previous = hotbar.slot2[eid] ?? 0;
-      hotbar.slot2[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 3) {
-      const previous = hotbar.slot3[eid] ?? 0;
-      hotbar.slot3[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 4) {
-      const previous = hotbar.slot4[eid] ?? 0;
-      hotbar.slot4[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 5) {
-      const previous = hotbar.slot5[eid] ?? 0;
-      hotbar.slot5[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 6) {
-      const previous = hotbar.slot6[eid] ?? 0;
-      hotbar.slot6[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 7) {
-      const previous = hotbar.slot7[eid] ?? 0;
-      hotbar.slot7[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-    if (normalizedSlot === 8) {
-      const previous = hotbar.slot8[eid] ?? 0;
-      hotbar.slot8[eid] = normalizedAbilityId;
-      return previous !== normalizedAbilityId;
-    }
-
-    const previous = hotbar.slot9[eid] ?? 0;
-    hotbar.slot9[eid] = normalizedAbilityId;
-    return previous !== normalizedAbilityId;
-  }
-
-  private ensureBaseComponents(eid: number): void {
-    addComponent(this.world, eid, this.world.components.NetworkId);
-    addComponent(this.world, eid, this.world.components.ModelId);
-    addComponent(this.world, eid, this.world.components.Position);
-    addComponent(this.world, eid, this.world.components.Rotation);
-    addComponent(this.world, eid, this.world.components.Grounded);
-    addComponent(this.world, eid, this.world.components.MovementMode);
-    addComponent(this.world, eid, this.world.components.Health);
-    addComponent(this.world, eid, this.world.components.ItemArchetypeId);
-    addComponent(this.world, eid, this.world.components.ItemQuantity);
-    addComponent(this.world, eid, this.world.components.LocationKind);
-    addComponent(this.world, eid, this.world.components.LocationArchetypeId);
-    addComponent(this.world, eid, this.world.components.LocationSeed);
-    addComponent(this.world, eid, this.world.components.LocationEnvironmentId);
-    addComponent(this.world, eid, this.world.components.LocationStreamingRadius);
-    addComponent(this.world, eid, this.world.components.LocationInfluenceRadius);
-    addComponent(this.world, eid, this.world.components.CharacterArchetypeId);
-    addComponent(this.world, eid, this.world.components.ControllerKind);
   }
 }
