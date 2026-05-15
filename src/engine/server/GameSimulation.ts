@@ -161,7 +161,8 @@ export class GameSimulation {
       getCharacterStateByEid: (eid) => this.simulationEcs.getCharacterDamageStateByEid(eid) as any,
       applyCharacterStateByEid: (eid, state) => this.simulationEcs.applyCharacterDamageStateByEid(eid, state),
       getDummyStateByEid: (eid) => this.simulationEcs.getDummyDamageStateByEid(eid) as any,
-      applyDummyStateByEid: (eid, state) => this.simulationEcs.applyDummyDamageStateByEid(eid, state)
+      applyDummyStateByEid: (eid, state) => this.simulationEcs.applyDummyDamageStateByEid(eid, state),
+      events: this.events
     });
 
     // ── World content ─────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 // Authoritative damage application and player respawn handling for combat targets.
 import RAPIER from "@dimforge/rapier3d-compat";
 import { MOVEMENT_MODE_GROUNDED, type MovementMode } from "../../../shared/index";
+import type { EventBus } from "../../events/EventBus";
+import { GameEvent, type DamageDealtPayload, type HealthChangedPayload } from "../../events/GameEvents";
 
 export interface DamageableCharacterState {
   accountId: number;
@@ -44,8 +46,7 @@ export interface DamageSystemOptions {
   readonly applyCharacterStateByEid: (eid: number, next: DamageableCharacterState) => void;
   readonly getDummyStateByEid: (eid: number) => DamageableDummyState | null;
   readonly applyDummyStateByEid: (eid: number, next: DamageableDummyState) => void;
-  readonly onPlayerDamaged?: (eid: number) => void;
-  readonly onDummyDamaged?: (eid: number) => void;
+  readonly events: EventBus;
 }
 
 export class DamageSystem {
@@ -77,24 +78,28 @@ export class DamageSystem {
     return this.targetsByColliderHandle.values();
   }
 
-  public applyDamage(target: CombatTarget, damage: number): void {
+  public applyDamage(target: CombatTarget, damage: number, sourceEid: number | null = null): void {
     const appliedDamage = Math.max(0, Math.floor(damage));
-    if (appliedDamage <= 0) {
-      return;
-    }
+    if (appliedDamage <= 0) return;
+
     if (target.kind === "character" || target.kind === "player") {
       const character = this.options.getCharacterStateByEid(target.eid);
-      if (!character) {
-        return;
-      }
+      if (!character) return;
+      const previousHealth = character.health;
       character.health = Math.max(0, character.health - appliedDamage);
       if (character.accountId > 0) {
         this.options.markCharacterDirtyByAccountId(character.accountId, {
-          dirtyCharacter: true,
-          dirtyAbilityState: false
+          dirtyCharacter: true, dirtyAbilityState: false
         });
       }
-      this.options.onPlayerDamaged?.(target.eid);
+      this.options.events.emit<DamageDealtPayload>(GameEvent.DAMAGE_DEALT, {
+        sourceEid, targetEid: target.eid, amount: appliedDamage,
+        kind: sourceEid !== null ? "melee" : "environment"
+      });
+      this.options.events.emit<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, {
+        eid: target.eid, previous: previousHealth,
+        current: character.health, max: character.maxHealth
+      });
       if (character.health <= 0) {
         this.resolveZeroHealth(character);
       }
@@ -102,15 +107,16 @@ export class DamageSystem {
       return;
     }
     const dummy = this.options.getDummyStateByEid(target.eid);
-    if (!dummy) {
-      return;
-    }
+    if (!dummy) return;
+    const prevDummyHp = dummy.health;
     dummy.health = Math.max(0, dummy.health - appliedDamage);
     if (dummy.health <= 0) {
       dummy.health = dummy.maxHealth;
     }
+    this.options.events.emit<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, {
+      eid: target.eid, previous: prevDummyHp, current: dummy.health, max: dummy.maxHealth
+    });
     this.options.applyDummyStateByEid(target.eid, dummy);
-    this.options.onDummyDamaged?.(target.eid);
   }
 
   private resolveZeroHealth(character: DamageableCharacterState): void {

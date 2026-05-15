@@ -4,7 +4,7 @@
 
 import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";
 import type { EventBus } from "../../events/EventBus";
-import { GameEvent, type DamageDealtPayload, type HealthChangedPayload } from "../../events/GameEvents";
+import { GameEvent, type HealthChangedPayload } from "../../events/GameEvents";
 
 export type StackPolicy = "replace" | "refresh" | "stack_add" | "max";
 
@@ -95,7 +95,6 @@ export class StatusEffectSystem {
           existing.expiresAtMs = durationMs > 0 ? Math.max(existing.expiresAtMs, elapsedMs + durationMs) : existing.expiresAtMs;
           break;
       }
-      this.active.set(targetEid, activeList);
     } else {
       activeList.push({
         statusId,
@@ -239,16 +238,6 @@ export class StatusEffectSystem {
     this.events.on<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, (payload) => {
       if (payload.current <= 0) {
         this.removeAll(payload.eid, "death");
-      }
-    });
-
-    // Scale incoming damage by damageTakenMultiplier
-    this.events.on<DamageDealtPayload>(GameEvent.DAMAGE_DEALT, (payload) => {
-      const mult = this.getDamageMultiplier(payload.targetEid);
-      if (mult !== 1) {
-        // Note: damage scaling is passive (read by DamageSystem), not applied here.
-        // This event listener is for future use (logging, VFX triggers, etc.)
-        void mult;
       }
     });
   }
