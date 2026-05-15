@@ -11,6 +11,7 @@ import type {
   ProjectileAbilityProfile
 } from "./abilities";
 import type { ItemCategory, EquipmentSlot, ItemUseDefinition } from "./items";
+import type { EffectModifier } from "./traits";
 
 export interface ComponentTemplate {
   readonly component: string;
@@ -62,6 +63,8 @@ export interface ArchetypeDefinition {
   readonly platformBaseY?: number;
   readonly platformBaseZ?: number;
   readonly platformBaseYaw?: number;
+  // Effect graph compiled from selected traits — executed by EffectResolver at runtime
+  readonly resolvedEffects?: readonly EffectModifier[];
 }
 
 export interface CustomizedArchetype {

@@ -8,6 +8,7 @@ import {
 } from "../../shared/archetype";
 import {
   collectStatModifiers,
+  collectTraitEffects,
   checkTraitConstraints
 } from "../../shared/traits";
 import {
@@ -308,6 +309,8 @@ export class CreatorSystem {
       statModifiers
     );
 
+    const resolvedEffects = collectTraitEffects(draft.selectedTraits);
+
     const customized: ArchetypeDefinition = {
       id: archetypeId,
       kind: baseArchetype.kind,
@@ -320,6 +323,7 @@ export class CreatorSystem {
       statBudget: 0,
       traitBudget: 0,
       availableTraits: [],
+      resolvedEffects: resolvedEffects.length > 0 ? resolvedEffects : undefined,
       abilityCategory: baseArchetype.abilityCategory,
       abilityPoints: baseArchetype.abilityPoints,
       abilityAttributes: baseArchetype.abilityAttributes,

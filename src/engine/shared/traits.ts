@@ -66,6 +66,22 @@ export function getTraitsForKind(kind: string): readonly TraitDefinition[] {
   return TRAIT_DEFINITIONS.filter((t) => t.appliesTo.includes(kind));
 }
 
+// Compiler: collects all EffectModifiers from a set of selected traits.
+// This is the bridge between player trait choices and the EffectResolver.
+export function collectTraitEffects(traitIds: readonly string[]): EffectModifier[] {
+  const effects: EffectModifier[] = [];
+  for (const traitId of traitIds) {
+    const trait = TRAIT_BY_ID.get(traitId);
+    if (!trait) continue;
+    for (const effect of trait.effects) {
+      for (const modifier of effect.modifiers) {
+        effects.push(modifier);
+      }
+    }
+  }
+  return effects;
+}
+
 export interface TraitBudget {
   total: number;
   spent: number;
