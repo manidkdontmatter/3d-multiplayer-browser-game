@@ -27,6 +27,7 @@ export const GameEvent = {
   STATUS_REMOVED: "status.removed",
   ENTITY_CREATED: "entity.created",
   TICK_POST_MOVEMENT: "tick.postMovement",
+  EFFECT_SPAWN_ENTITY: "effect.spawnEntity",
 } as const;
 
 export type GameEventType = (typeof GameEvent)[keyof typeof GameEvent];
@@ -149,4 +150,10 @@ export interface EntityCreatedPayload {
 export interface TickPostMovementPayload {
   tickNumber: number;
   elapsedSeconds: number;
+}
+
+export interface EffectSpawnEntityPayload {
+  archetypeId: number;
+  sourceEid: number | null;
+  position: { x: number; y: number; z: number };
 }

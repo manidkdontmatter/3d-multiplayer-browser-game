@@ -7,12 +7,21 @@ import type { StatModifier } from "./stats";
 export type StackPolicy = "replace" | "refresh" | "stack_add" | "max";
 
 export type EffectModifier =
+  // Stat/damage modifiers — applied passively by combat systems
   | { type: "block_damage" }
   | { type: "damage_multiplier"; value: number }
   | { type: "flat_damage_delta"; value: number }
   | { type: "min_damage"; value: number }
   | { type: "max_damage"; value: number }
-  | { type: "immunity_tag"; tag: string };
+  | { type: "immunity_tag"; tag: string }
+  // Gameplay effects — resolved at runtime by EffectResolver
+  | { type: "apply_status"; statusId: string; durationMs: number; stacks: number }
+  | { type: "deal_damage"; element: string; amount: number }
+  | { type: "heal"; amount: number; percentMaxHealth?: number }
+  | { type: "modify_stat"; stat: string; additive?: number; multiplier?: number; durationMs: number }
+  | { type: "modify_speed"; multiplier: number; durationMs: number }
+  | { type: "spawn_entity"; archetypeId: number; durationMs?: number }
+  | { type: "teleport"; range: number; direction: "forward" | "random" | "target" };
 
 export interface EffectTemplate {
   readonly effectId: string;
