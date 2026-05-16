@@ -1,5 +1,6 @@
-// Shared orchestrator and map-process contract types for join/bootstrap control-plane RPC.
-import type { RuntimeMapConfig } from "./world";
+// Server-side orchestrator and map-process contract types for control-plane RPC and persistence.
+import type { InventoryStateSnapshot } from "../../shared/items";
+import type { RuntimeMapConfig } from "../../shared/world";
 
 export interface PersistedPlayerSnapshot {
   accountId: number;
@@ -17,18 +18,6 @@ export interface PersistedPlayerSnapshot {
   hotbarAbilityIds: number[];
 }
 
-export interface BootstrapRequest {
-  authKey: string | null;
-}
-
-export interface BootstrapResponse {
-  ok: boolean;
-  wsUrl?: string;
-  joinTicket?: string;
-  mapConfig?: RuntimeMapConfig;
-  error?: string;
-}
-
 export interface ValidateJoinTicketRequest {
   joinTicket: string;
   mapInstanceId: string;
@@ -39,6 +28,8 @@ export interface ValidateJoinTicketResponse {
   authKey: string | null;
   accountId?: number;
   playerSnapshot?: PersistedPlayerSnapshot | null;
+  inventoryState?: InventoryStateSnapshot | null;
+  transferId?: string | null;
   error?: string;
 }
 
@@ -69,6 +60,7 @@ export interface TransferRequest {
   fromMapInstanceId: string;
   toMapInstanceId: string;
   playerSnapshot: PersistedPlayerSnapshot | null;
+  inventoryState?: InventoryStateSnapshot | null;
 }
 
 export interface TransferResponse {
@@ -87,12 +79,25 @@ export interface PersistSnapshotRequest {
   saveAbilityState: boolean;
 }
 
+export interface PersistSnapshotBatchRequest {
+  snapshots: PersistSnapshotRequest[];
+}
+
 export interface PersistCriticalEventRequest {
   eventId: string;
   instanceId: string;
   accountId: number;
   eventType: string;
   eventPayload: unknown;
+  eventAtMs: number;
+}
+
+export interface PersistInventoryMutationRequest {
+  accountId: number;
+  instanceId: string;
+  action: number;
+  snapshot: InventoryStateSnapshot;
+  eventId: string;
   eventAtMs: number;
 }
 

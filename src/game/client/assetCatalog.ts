@@ -1,28 +1,24 @@
-// Game-specific asset catalog definitions.
-// Provides the asset manifest data that the engine needs for runtime asset loading.
-
-import {
-  injectAssetCatalog,
-  type AssetCatalogDefinition
-} from "../../engine/client/assets/assetManifest";
+// Game-specific client asset catalog bootstrap.
 import {
   ASSET_GROUP_CORE,
+  ASSET_GROUP_SFX,
   ASSET_GROUP_WORLD_DEFAULT,
   ASSET_GROUP_WORLD_SKYBOXES,
-  ASSET_GROUP_SFX,
-  CHARACTER_MALE_ASSET_ID,
   CHARACTER_ANIM_IDLE_ASSET_ID,
-  CHARACTER_ANIM_WALK_ASSET_ID,
-  CHARACTER_ANIM_RUN_ASSET_ID,
   CHARACTER_ANIM_JUMP_ASSET_ID,
   CHARACTER_ANIM_PUNCH_ASSET_ID,
+  CHARACTER_ANIM_RUN_ASSET_ID,
+  CHARACTER_ANIM_WALK_ASSET_ID,
+  CHARACTER_MALE_ASSET_ID,
   SFX_HIT_ASSET_ID,
   WORLD_FOLIAGE_GRASS_PLAIN_ASSET_ID,
   WORLD_SKYBOX_1_ASSET_ID,
   WORLD_SKYBOX_2_ASSET_ID,
   WORLD_SKYBOX_3_ASSET_ID,
   WORLD_SKYBOX_4_ASSET_ID,
-  WORLD_SKYBOX_5_ASSET_ID
+  WORLD_SKYBOX_5_ASSET_ID,
+  injectAssetCatalog,
+  type AssetCatalogDefinition
 } from "../../engine/client/assets/assetManifest";
 
 function skyboxFaceUrls(folder: string): string[] {
@@ -138,6 +134,6 @@ export const ASSET_CATALOG_DEFINITIONS: AssetCatalogDefinition[] = [
   }
 ];
 
-export function initAssetCatalog(): void {
+export function initClientAssetCatalog(): void {
   injectAssetCatalog(ASSET_CATALOG_DEFINITIONS);
 }

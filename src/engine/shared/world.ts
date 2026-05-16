@@ -142,11 +142,6 @@ export const DEFAULT_VISUAL_GRASS_VARIANTS: readonly VisualGrassVariantDefinitio
   }
 ] as const;
 
-export function resolveRuntimeMapConfig(): RuntimeMapConfig {
-  const runtime = getRuntimeMapSource();
-  return coerceRuntimeMapConfig(runtime);
-}
-
 export function coerceRuntimeMapConfig(source: Record<string, unknown> | Partial<RuntimeMapConfig>): RuntimeMapConfig {
   return {
     mapId: normalizeString(source.mapId, RUNTIME_MAP_CONFIG_DEFAULTS.mapId),
@@ -305,10 +300,6 @@ export function generateRuntimeMapLayout(
   };
 }
 
-export function getRuntimeMapLayout(options?: RuntimeMapLayoutOptions): RuntimeMapLayout {
-  return generateRuntimeMapLayout(resolveRuntimeMapConfig(), options);
-}
-
 export function sampleTerrainHeightAt(config: RuntimeMapConfig, x: number, z: number): number {
   const clampedX = clampNumber(x, -TERRAIN_MAX_WORLD_RADIUS, TERRAIN_MAX_WORLD_RADIUS);
   const clampedZ = clampNumber(z, -TERRAIN_MAX_WORLD_RADIUS, TERRAIN_MAX_WORLD_RADIUS);
@@ -415,44 +406,6 @@ export function buildTerrainMeshData(config: RuntimeMapConfig): RuntimeTerrainMe
     indices,
     quadsPerAxis
   };
-}
-
-function getRuntimeMapSource(): Record<string, unknown> {
-  const source: Record<string, unknown> = {};
-
-  if (typeof process !== "undefined" && process.env) {
-    if (process.env.MAP_ID) source.mapId = process.env.MAP_ID;
-    if (process.env.MAP_INSTANCE_ID) source.instanceId = process.env.MAP_INSTANCE_ID;
-    if (process.env.MAP_SEED) source.seed = process.env.MAP_SEED;
-    if (process.env.MAP_GROUND_HALF_EXTENT) source.groundHalfExtent = process.env.MAP_GROUND_HALF_EXTENT;
-    if (process.env.MAP_GROUND_HALF_THICKNESS) {
-      source.groundHalfThickness = process.env.MAP_GROUND_HALF_THICKNESS;
-    }
-    if (process.env.MAP_CUBE_COUNT) source.cubeCount = process.env.MAP_CUBE_COUNT;
-  }
-
-  const globalObject = globalThis as unknown as {
-    __runtimeMapConfig?: Partial<RuntimeMapConfig>;
-  };
-  const runtimeConfig = globalObject.__runtimeMapConfig;
-  if (runtimeConfig) {
-    Object.assign(source, runtimeConfig);
-  }
-
-  const maybeWindow = globalThis as unknown as { window?: { location?: { search?: string } } };
-  if (maybeWindow.window?.location?.search) {
-    const params = new URLSearchParams(maybeWindow.window.location.search);
-    if (params.has("mapId")) source.mapId = params.get("mapId");
-    if (params.has("mapInstanceId")) source.instanceId = params.get("mapInstanceId");
-    if (params.has("mapSeed")) source.seed = params.get("mapSeed");
-    if (params.has("mapGroundHalfExtent")) source.groundHalfExtent = params.get("mapGroundHalfExtent");
-    if (params.has("mapGroundHalfThickness")) {
-      source.groundHalfThickness = params.get("mapGroundHalfThickness");
-    }
-    if (params.has("mapCubeCount")) source.cubeCount = params.get("mapCubeCount");
-  }
-
-  return source;
 }
 
 function normalizeString(value: unknown, fallback: string): string {

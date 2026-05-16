@@ -22,7 +22,6 @@ import {
   PLAYER_CAPSULE_HALF_HEIGHT,
   PLAYER_CAPSULE_RADIUS,
   PLAYER_JUMP_VELOCITY,
-  resolveRuntimeMapConfig,
   resolveGroundSupportColliderHandle,
   sampleLocationTransform,
   samplePlatformTransform,
@@ -92,7 +91,6 @@ export class LocalPhysicsWorld {
   private readonly platformBodies = new Map<number, LocalPlatformBody>();
   private readonly platformPidByColliderHandle = new Map<number, number>();
   private readonly movingLocationBodies = new Map<number, LocalMovingLocationBody>();
-  private readonly runtimeMapConfig = resolveRuntimeMapConfig();
   private grounded = false;
   private groundedPlatformPid: number | null = null;
   private carriedFramePid: number | null = null;

@@ -42,10 +42,11 @@ It is written so a future AI can implement the systems without prior chat contex
 - Resolve identity from `authKey` (or mark as disposable session).
 - Route initial join to default map instance.
 - Supervise map processes (spawn/restart/health registry).
-- Issue + validate transfer tokens.
+- Issue, consume, and audit one-time join tickets and transfer tokens.
 - Single persistence writer for SQLite.
 - Store latest in-memory snapshots received from map processes.
 - Flush snapshots/events to DB on configured cadence and critical-event policy.
+- Remain control-plane only; never sit on the hot path for per-tick gameplay simulation, replication, or physics.
 
 #### Map Process
 
@@ -92,8 +93,13 @@ Operational rules:
 - IPC messages must use explicit schema-validated contracts.
 - Every request message must include a correlation id.
 - Commands, responses, and events should use distinct message kinds.
+- Orchestrator <-> map IPC is for lifecycle, transfer, and persistence control only; do not route per-tick gameplay, replication, or high-frequency entity state through it.
 - Map processes never communicate directly with each other in Phase 1.
 - Cross-map coordination always routes through orchestrator IPC.
+- No internal HTTP or internal WebSocket control plane between orchestrator and map processes in Phase 1.
+- IPC payloads must stay compact and bounded; use partitioned snapshots/events rather than giant world-state blobs.
+- Snapshot IPC must be coalescing/backpressured: if a newer non-critical snapshot for the same partition exists, overwrite the older queued snapshot instead of allowing unbounded queue growth.
+- Critical durability flows may require ack, but they must stall only the protected gameplay action/subsystem, not the entire map tick loop.
 
 ## Player Lifecycle
 
@@ -103,18 +109,26 @@ Operational rules:
 2. Client submits `authKey` (if present) to orchestrator bootstrap endpoint.
 3. Orchestrator resolves saved/default/disposable character state. If no persisted character exists, spawn default human and allow in-world customization later.
 4. Orchestrator returns `JoinTicket` with target default map endpoint + one-time token.
-5. Client connects to that map process via nengi handshake using the token.
+5. Client connects to that map process via nengi handshake using the ticket/token.
+6. Receiving map process sends synchronous IPC to orchestrator to consume the `JoinTicket`.
+7. Orchestrator atomically validates one-time use, expiry, target map binding, and identity context, then returns the spawn context.
+8. Map process admits the player only after successful consume/ack.
 
 ### Map transfer
 
 1. Player triggers portal/gate/cave transfer in source map.
 2. Source map sends transfer request to orchestrator (`fromMapId`, `toMapId`, `characterId`).
 3. Orchestrator ensures destination map exists (spawn if needed).
-4. Orchestrator issues one-time short-TTL transfer token.
-5. Source map sends transfer payload to client.
-6. Client disconnects source and reconnects destination endpoint with token.
-7. Destination validates token with orchestrator, loads state, spawns player.
-8. Source process finalizes old session cleanup after success/timeout.
+4. Orchestrator asks destination map process to reserve the incoming transfer slot/state.
+5. Destination acknowledges reservation readiness, but does not activate authority for the character yet.
+6. Orchestrator issues one-time short-TTL transfer token bound to that reservation.
+7. Source map sends transfer payload to client.
+8. Client disconnects source and reconnects destination endpoint with token.
+9. Destination map sends synchronous IPC to orchestrator to consume the transfer token.
+10. Orchestrator atomically validates one-time use, expiry, source/destination binding, and reservation match.
+11. Orchestrator commands source map to release authority.
+12. Destination activates authority only after release confirmation, then spawns the player.
+13. Source process finalizes old session cleanup after success/timeout.
 
 ### Join ticket requirements (initial entry)
 
@@ -134,6 +148,7 @@ Rules:
 - One-time use.
 - Short TTL.
 - Bound to exact target map instance and identity context.
+- Consumed centrally by orchestrator so replay protection has one source of truth.
 
 ## Transfer Token Requirements
 
@@ -158,21 +173,25 @@ Rules:
 - Invalid after consume.
 - Bound to destination map and character.
 - Signed with host secret (HMAC or equivalent server-side signature verification).
+- Consumed centrally by orchestrator; destination map admission is not valid until consume succeeds.
 
 ### Transfer state machine invariants
 
 Use an explicit transfer lifecycle to prevent dupes and split-brain ownership:
 
 1. `requested` (source asked orchestrator to transfer)
-2. `token_issued` (orchestrator minted transfer token)
-3. `destination_accepted` (destination validated token and reserved spawn)
-4. `source_released` (source removed active player authority)
-5. `completed` (destination active authority)
-6. `aborted` (timeout/error; player returns via fallback path)
+2. `destination_reserved` (destination has reserved incoming spawn/state but is not authoritative yet)
+3. `token_issued` (orchestrator minted transfer token bound to reservation)
+4. `token_consumed` (destination consumed token through orchestrator)
+5. `source_released` (source removed active player authority)
+6. `destination_activated` (destination became authoritative)
+7. `completed` (destination active authority confirmed to orchestrator)
+8. `aborted` (timeout/error; player returns via fallback path)
 
 Hard invariant:
 
 - One character may be authoritative in at most one map process at a time.
+- Destination reservation alone does not grant authority; only `destination_activated` does.
 
 ## Procedural Map Generation Model
 
@@ -238,6 +257,7 @@ Minimum `MapConfig` fields:
 
 - `mapId`
 - `instanceId`
+- `generationRevision`
 - `seed`
 - `bounds`
 - `terrain` params
@@ -278,6 +298,8 @@ Minimum `MapConfig` fields:
 - Snapshot payloads should include `instanceId`, `revision`, and server timestamp.
 - Snapshot pushes are in-memory ingestion first; DB durability follows checkpoint/critical policy.
 - Snapshot ingest must be idempotent by `(instanceId, revision)` or equivalent monotonic key.
+- Non-critical snapshots must be coalesced by partition so stale queued revisions are dropped in favor of the newest revision.
+- Orchestrator must enforce bounded per-map snapshot queues/bytes to prevent one unhealthy process or large burst from exhausting memory.
 
 ### Hybrid durability policy
 
@@ -287,6 +309,7 @@ Minimum `MapConfig` fields:
   - spend/drop/trade
   - map transfer boundary commit points
   - any exploit-sensitive mutation
+- If the durability path is unavailable, protected actions must fail or remain pending; do not silently continue and "hope" periodic checkpoints make it safe later.
 
 ### Idempotency and ordering
 
@@ -316,7 +339,8 @@ Minimum `MapConfig` fields:
 
 - Client is never authoritative for gameplay state.
 - Seed/config generation on client is a rendering/prediction convenience for static world only.
-- Orchestrator validates transfer tokens and map join tickets.
+- Orchestrator is the source of truth for issuing and consuming transfer tokens and map join tickets.
+- Receiving map processes must never self-authorize joins/transfers purely from client-provided data; admission requires orchestrator-issued ticket/token consumption.
 - Avoid exposing raw `authKey` in logs/telemetry; use redacted/hash form.
 - Internal orchestrator <-> map-process control traffic must use supervised process IPC only.
 - IPC payloads must be schema-validated and accepted only from the direct supervised parent/child relationship.
@@ -351,13 +375,14 @@ Minimum `MapConfig` fields:
 - `src/orchestrator/main.ts`
 - `src/orchestrator/process/MapProcessSupervisor.ts`
 - `src/orchestrator/process/MapProcessRegistry.ts`
+- `src/orchestrator/session/JoinTicketService.ts`
 - `src/orchestrator/transfer/TransferTokenService.ts`
 - `src/orchestrator/persistence/OrchestratorPersistenceWriter.ts`
 - `src/orchestrator/ipc/IpcMessageEnvelope.ts`
-- `src/orchestrator/ipc/OrchestratorIpcServer.ts`
+- `src/orchestrator/ipc/OrchestratorIpcRouter.ts`
 - `src/server-map/main.ts`
 - `src/server-map/runtime/MapRuntime.ts`
-- `src/server-map/ipc/MapProcessIpcClient.ts`
+- `src/server-map/ipc/MapProcessIpcChannel.ts`
 - `src/shared/maps/MapConfig.ts`
 - `src/shared/maps/DeterministicMapGenerator.ts`
 
@@ -387,8 +412,7 @@ All IPC messages should use a typed envelope with at least:
 
 - `BootMapProcess`
   - boot confirmation only; process must reject if already booted
-- `ValidateJoinTicket`
-- `PrepareIncomingTransfer`
+- `ReserveIncomingTransfer`
 - `FinalizeSourceRelease`
 - `ShutdownMapProcess`
 
@@ -396,9 +420,12 @@ All IPC messages should use a typed envelope with at least:
 
 - `MapProcessBooted`
 - `MapHeartbeat`
+- `ConsumeJoinTicket`
+- `ConsumeTransferToken`
 - `RequestTransfer`
 - `PersistSnapshot`
 - `PersistCriticalEvent`
+- `IncomingTransferReserved`
 - `TransferCompleted`
 - `TransferAborted`
 - `MapProcessFaulted`
@@ -407,8 +434,11 @@ All IPC messages should use a typed envelope with at least:
 
 - `BootMapProcess` exists only as a boot handshake for the already-spawned single-instance process, not as a generic "start arbitrary instance" command.
 - `ShutdownMapProcess` targets the receiving process itself, not an arbitrary `instanceId` hosted inside it.
-- `ValidateJoinTicket` and `PrepareIncomingTransfer` are synchronous request/response IPC flows with bounded timeouts.
+- `ConsumeJoinTicket` and `ConsumeTransferToken` are synchronous map -> orchestrator request/response IPC flows with bounded timeouts and atomic consume semantics.
+- `ReserveIncomingTransfer` is an orchestrator -> destination-map request/response flow used to reserve incoming state before the client reconnects.
 - `PersistSnapshot` and `PersistCriticalEvent` are delivery-confirmed IPC messages; critical events require explicit durability ack before the map process continues the protected flow.
+- `FinalizeSourceRelease` must occur before destination activation; reservation or token consumption alone is insufficient.
+- IPC message handlers must be non-blocking and bounded; expensive serialization/validation work should not be allowed to starve the map tick.
 
 Cross-map communication rule:
 
@@ -433,6 +463,8 @@ Cross-map communication rule:
 7. Non-critical state may roll back up to checkpoint window after crash.
 8. Critical durability events survive crash/restart according to policy.
 9. Static procedural geometry generated by server and client matches deterministically for same `MapConfig` + seed.
+10. Orchestrator does not sit on the hot path for per-tick gameplay or replication between client and map process.
+11. Non-critical snapshot pressure is coalesced/bounded rather than allowed to grow without limit.
 
 ## Recommended Initial Tunables
 
@@ -445,7 +477,9 @@ Cross-map communication rule:
 - `ORCH_MAP_RESTART_WINDOW_MS=60000`
 - `ORCH_MAP_RESTART_MAX_IN_WINDOW=3`
 - `ORCH_MAP_QUARANTINE_MS=60000`
-- `ORCH_INTERNAL_RPC_SECRET=<random-long-secret>`
-- `MAP_CONTROL_PORT_BASE=9100`
+- `ORCH_IPC_RPC_TIMEOUT_MS=3000`
+- `ORCH_SNAPSHOT_QUEUE_MAX_PER_MAP=256`
+- `ORCH_SNAPSHOT_QUEUE_MAX_BYTES_PER_MAP=8388608`
+- `MAP_PUBLIC_WS_PORT_BASE=9100`
 
 These should be env-configurable; values above are starting defaults, not hard requirements.

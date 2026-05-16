@@ -8,11 +8,10 @@ import {
   getAbilityDefinitionById,
   getItemDefinitionById,
   movementModeToLabel,
-  type BootstrapRequest,
-  type BootstrapResponse,
   type InventoryStateSnapshot,
   type RuntimeMapConfig
 } from "../../shared/index";
+import type { BootstrapRequest, BootstrapResponse } from "../../shared/bootstrapProtocol";
 import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
 import { LocalPhysicsWorld } from "./LocalPhysicsWorld";
@@ -23,7 +22,10 @@ import { ClientNetworkOrchestrator } from "./network/ClientNetworkOrchestrator";
 import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
 import { AbilityHud } from "../ui/AbilityHud";
 import { resolveAccessKey } from "../auth/accessKey";
-import { AuthPanel } from "../ui/AuthPanel";
+import {
+  NetworkDiagnosticsPanel,
+  type NetworkDiagnosticsSnapshot
+} from "../ui/NetworkDiagnosticsPanel";
 import { preloadAssetGroup } from "../assets/assetLoader";
 import { ASSET_GROUP_SFX, ASSET_GROUP_WORLD_DEFAULT } from "../assets/assetManifest";
 
@@ -47,7 +49,7 @@ export class GameClientApp {
   private readonly input: InputController;
   private readonly renderer: WorldRenderer;
   private readonly abilityHud: AbilityHud;
-  private readonly authPanel: AuthPanel;
+  private readonly diagnosticsPanel: NetworkDiagnosticsPanel;
   private readonly connectedPlayersNode: HTMLDivElement;
   private readonly interactPromptNode: HTMLDivElement;
   private readonly network = new NetworkClient();
@@ -59,7 +61,6 @@ export class GameClientApp {
   private accumulator = 0;
   private running = false;
   private rafId = 0;
-  private readonly statusNode: HTMLElement | null;
   private fps = 0;
   private fpsSampleSeconds = 0;
   private fpsSampleFrames = 0;
@@ -85,10 +86,10 @@ export class GameClientApp {
   private transferInProgress = false;
   private currentInteractTargetNid: number | null = null;
   private inventoryState: InventoryStateSnapshot = { maxSlots: 32, items: [], equipment: {} };
+  private diagnosticsVisible = false;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
-    statusNode: HTMLElement | null,
     physics: LocalPhysicsWorld,
     cspEnabled: boolean,
     e2eSimulationOnly: boolean,
@@ -96,7 +97,6 @@ export class GameClientApp {
     initialAccessKey: string,
     private readonly joinTicket: string | null
   ) {
-    this.statusNode = statusNode;
     this.physics = physics;
     this.cspEnabled = cspEnabled;
     this.e2eSimulationOnly = e2eSimulationOnly;
@@ -127,10 +127,8 @@ export class GameClientApp {
         this.network.queueUnequipInventorySlot(slot);
       }
     });
-    this.authPanel = AuthPanel.mount(document, {
-      serverUrl: this.serverUrl,
-      initialAccessKey
-    });
+    this.diagnosticsPanel = NetworkDiagnosticsPanel.mount(document);
+    this.diagnosticsPanel.setVisible(false);
     this.activeAccessKey = initialAccessKey.length > 0 ? initialAccessKey : null;
     this.connectedPlayersNode = document.createElement("div");
     this.connectedPlayersNode.id = "connected-players-indicator";
@@ -149,7 +147,6 @@ export class GameClientApp {
 
   public static async create(
     canvas: HTMLCanvasElement,
-    statusNode: HTMLElement | null,
     onCreatePhase?: (phase: ClientCreatePhase) => void
   ): Promise<GameClientApp> {
     const connectionTarget = await GameClientApp.resolveConnectionTarget();
@@ -163,7 +160,6 @@ export class GameClientApp {
     const accessKey = resolvedAccessKey.key.length > 0 ? resolvedAccessKey.key : null;
     const app = new GameClientApp(
       canvas,
-      statusNode,
       physics,
       GameClientApp.resolveCspEnabled(),
       GameClientApp.resolveE2eSimulationOnly(),
@@ -187,7 +183,7 @@ export class GameClientApp {
       }
     }
     onCreatePhase?.("ready");
-    app.updateStatus();
+    app.updateDiagnosticsOverlay();
     app.registerTestingHooks();
     return app;
   }
@@ -249,6 +245,10 @@ export class GameClientApp {
       this.cspEnabled = !this.cspEnabled;
       this.networkOrchestrator.onCspModeChanged();
     }
+    if (this.input.consumeDiagnosticsToggle()) {
+      this.diagnosticsVisible = !this.diagnosticsVisible;
+      this.diagnosticsPanel.setVisible(this.diagnosticsVisible);
+    }
 
     for (const bindingIntent of this.input.consumeBindingIntents()) {
       if (bindingIntent.target === "primary") {
@@ -270,7 +270,7 @@ export class GameClientApp {
     const renderSnapshot = this.renderSnapshotAssembler.build(seconds);
     this.renderer.apply(renderSnapshot);
     this.updateInteractPrompt();
-    this.updateStatus();
+    this.updateDiagnosticsOverlay();
   }
 
   private stepFixed(delta: number): void {
@@ -362,29 +362,42 @@ export class GameClientApp {
     this.abilityHud.setInventoryState(inventoryState);
   }
 
-  private updateStatus(): void {
+  private updateDiagnosticsOverlay(): void {
     this.updateConnectedPlayersIndicator();
-
-    if (!this.statusNode) {
+    if (!this.diagnosticsVisible) {
       return;
     }
+    this.diagnosticsPanel.update(this.buildNetworkDiagnosticsSnapshot());
+  }
 
-    const pose = this.getRenderPose();
-    const netState = this.network.getConnectionState();
-    const cspActive = this.isCspActive();
-    const cspLabel = cspActive ? "on" : "off";
-    const reconDiagnostics = this.networkOrchestrator.getDiagnostics();
-    const smoothingMagnitude = reconDiagnostics.worldOffsetMagnitude;
-    const yawErrorDegrees = (reconDiagnostics.lastYawError * 180) / Math.PI;
-    const interpDelayMs = this.network.getInterpolationDelayMs();
-    const ackJitterMs = this.network.getAckJitterMs();
-    const localHealth = this.network.getLocalPlayerPose()?.health ?? 100;
-    const projectileCount = this.network.getProjectiles().length;
-    const lmbAbilityName = this.resolveAbilityName(this.hotbarAbilityIds[this.primaryMouseSlot] ?? ABILITY_ID_NONE);
-    const rmbAbilityName = this.resolveAbilityName(this.hotbarAbilityIds[this.secondaryMouseSlot] ?? ABILITY_ID_NONE);
-    const localMovementModeLabel = movementModeToLabel(this.resolveLocalMovementMode());
-    this.statusNode.textContent =
-      `mode=${netState} | csp=${cspLabel} | move=${localMovementModeLabel} | menu=${this.abilityHud.isMainMenuOpen() ? "open" : "closed"} | cam=${this.freezeCamera ? "frozen" : "follow"} | hp=${localHealth} | lmb=${this.primaryMouseSlot + 1}:${lmbAbilityName} | rmb=${this.secondaryMouseSlot + 1}:${rmbAbilityName} | bolts=${projectileCount} | airTicks=${this.totalUngroundedFixedTicks} | airEntries=${this.totalUngroundedEntries} | fps=${this.fps.toFixed(0)} | low<30=${this.lowFpsFrameCount} | interp=${interpDelayMs.toFixed(0)}ms jit=${ackJitterMs.toFixed(1)}ms | corr=${reconDiagnostics.lastPositionError.toFixed(2)}m/${yawErrorDegrees.toFixed(1)}deg | smooth=${smoothingMagnitude.toFixed(2)} | replay=${reconDiagnostics.lastReplayCount} | hs=${reconDiagnostics.hardSnapCorrections}/${reconDiagnostics.totalCorrections} | x=${pose.x.toFixed(2)} y=${pose.y.toFixed(2)} z=${pose.z.toFixed(2)}`;
+  private buildNetworkDiagnosticsSnapshot(): NetworkDiagnosticsSnapshot {
+    const remotePlayers = this.network.getRemotePlayers();
+    const localCount = this.network.getLocalPlayerNid() === null ? 0 : 1;
+    const aoiPlayers = remotePlayers.length + localCount;
+    const mapConfig = GameClientApp.readRuntimeMapConfig();
+    const mapLabel =
+      mapConfig ? `${mapConfig.instanceId} (${mapConfig.mapId})` : "unknown";
+    const localPlayerNid = this.network.getLocalPlayerNid();
+    return {
+      connectionMode: this.network.getConnectionState(),
+      endpoint: this.network.getCurrentServerUrl() ?? this.serverUrl,
+      mapLabel,
+      localPlayerNid: localPlayerNid === null ? "--" : String(localPlayerNid),
+      cspLabel: this.isCspActive() ? "on" : "off",
+      movementModeLabel: movementModeToLabel(this.resolveLocalMovementMode()),
+      pingMs: `${this.network.getLatencyMs().toFixed(1)} ms`,
+      interpolationDelayMs: `${this.network.getInterpolationDelayMs().toFixed(1)} ms`,
+      ackJitterMs: `${this.network.getAckJitterMs().toFixed(1)} ms`,
+      serverClockOffsetMs: `${this.network.getServerClockOffsetMs().toFixed(1)} ms`,
+      serverPlayers:
+        this.network.getServerPlayerCount() === null ? "--" : String(this.network.getServerPlayerCount()),
+      aoiPlayers: String(aoiPlayers),
+      locationRoots: String(this.network.getLocationRoots().length),
+      worldEntities: String(this.network.getWorldEntities().length),
+      projectiles: String(this.network.getProjectiles().length),
+      fps: this.fps.toFixed(1),
+      lowFpsFrames: String(this.lowFpsFrameCount)
+    };
   }
 
   private updateConnectedPlayersIndicator(): void {
@@ -519,8 +532,10 @@ export class GameClientApp {
         }))
       },
       netTiming: {
+        latencyMs: this.network.getLatencyMs(),
         interpolationDelayMs: this.network.getInterpolationDelayMs(),
-        ackJitterMs: this.network.getAckJitterMs()
+        ackJitterMs: this.network.getAckJitterMs(),
+        serverClockOffsetMs: this.network.getServerClockOffsetMs()
       },
       reconciliation: {
         lastError: {
@@ -556,7 +571,7 @@ export class GameClientApp {
         const renderSnapshot = this.renderSnapshotAssembler.build(FIXED_STEP);
         this.renderer.apply(renderSnapshot);
         this.updateInteractPrompt();
-        this.updateStatus();
+        this.updateDiagnosticsOverlay();
       }
     };
 

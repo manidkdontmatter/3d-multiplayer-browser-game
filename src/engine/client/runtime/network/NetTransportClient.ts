@@ -8,6 +8,7 @@ export class NetTransportClient {
   private readonly client: Client;
   private readonly interpolator: Interpolator;
   private connected = false;
+  private currentServerUrl: string | null = null;
 
   public constructor(
     context: Context,
@@ -32,6 +33,7 @@ export class NetTransportClient {
     authKey: string | null,
     options?: { joinTicket?: string | null }
   ): Promise<void> {
+    this.currentServerUrl = serverUrl;
     try {
       this.disconnectActiveSocket("map-transfer-reconnect");
       const handshake: { authVersion: number; authKey?: string; joinTicket?: string } = { authVersion: 1 };
@@ -91,6 +93,10 @@ export class NetTransportClient {
 
   public getAverageTimeDifferenceMs(): number {
     return (this.client.network as { chronus?: { averageTimeDifference: number } }).chronus?.averageTimeDifference ?? 0;
+  }
+
+  public getCurrentServerUrl(): string | null {
+    return this.currentServerUrl;
   }
 
   private disconnectActiveSocket(reason: string): void {

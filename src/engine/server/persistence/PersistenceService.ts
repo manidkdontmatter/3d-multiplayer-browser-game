@@ -84,6 +84,12 @@ export interface CriticalEventRecord {
   eventAtMs: number;
 }
 
+export interface PlayerSnapshotBatchEntry {
+  snapshot: PlayerSnapshot;
+  saveCharacter: boolean;
+  saveAbilityState: boolean;
+}
+
 export type PersistedInventoryState = InventoryStateSnapshot;
 
 export interface PersistedAbilityDefinitionRecord {
@@ -835,6 +841,75 @@ export class PersistenceService {
   public savePlayerSnapshot(snapshot: PlayerSnapshot): void {
     this.saveCharacterSnapshot(snapshot);
     this.saveAbilityStateSnapshot(snapshot);
+  }
+
+  public savePlayerSnapshotBatch(entries: ReadonlyArray<PlayerSnapshotBatchEntry>): void {
+    if (this.disablePersistenceWrites || entries.length === 0) {
+      return;
+    }
+    const tx = this.db.transaction((batch: ReadonlyArray<PlayerSnapshotBatchEntry>) => {
+      const now = Date.now();
+      const upsertCharacter = this.db.prepare(
+        `INSERT INTO characters (
+            player_id, x, y, z, yaw, pitch, vx, vy, vz, health,
+            active_hotbar_slot, primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(player_id) DO UPDATE SET
+           x=excluded.x,
+           y=excluded.y,
+           z=excluded.z,
+           yaw=excluded.yaw,
+           pitch=excluded.pitch,
+           vx=excluded.vx,
+           vy=excluded.vy,
+           vz=excluded.vz,
+           health=excluded.health,
+           active_hotbar_slot=excluded.active_hotbar_slot,
+           primary_mouse_slot=excluded.primary_mouse_slot,
+           secondary_mouse_slot=excluded.secondary_mouse_slot,
+           updated_at=excluded.updated_at,
+           schema_version=excluded.schema_version`
+      );
+      const deleteLoadoutSlots = this.db.prepare("DELETE FROM player_loadout_slots WHERE player_id = ?");
+      const insertLoadoutSlot = this.db.prepare(
+        `INSERT INTO player_loadout_slots (player_id, slot_index, ability_id)
+         VALUES (?, ?, ?)`
+      );
+      for (const entry of batch) {
+        const snapshot = entry.snapshot;
+        if (entry.saveCharacter) {
+          upsertCharacter.run(
+            snapshot.accountId,
+            snapshot.x,
+            snapshot.y,
+            snapshot.z,
+            snapshot.yaw,
+            snapshot.pitch,
+            snapshot.vx,
+            snapshot.vy,
+            snapshot.vz,
+            this.clampInteger(snapshot.health, 0, PLAYER_MAX_HEALTH),
+            this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
+            this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
+            this.clampInteger(snapshot.secondaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
+            now,
+            CHARACTER_SCHEMA_VERSION
+          );
+        }
+        if (entry.saveAbilityState) {
+          deleteLoadoutSlots.run(snapshot.accountId);
+          for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+            const abilityId = snapshot.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE;
+            insertLoadoutSlot.run(
+              snapshot.accountId,
+              slot,
+              Math.max(ABILITY_ID_NONE, Math.floor(abilityId))
+            );
+          }
+        }
+      }
+    });
+    tx(entries);
   }
 
   public saveCharacterSnapshot(snapshot: PlayerSnapshot): void {

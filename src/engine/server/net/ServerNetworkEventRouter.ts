@@ -1,7 +1,8 @@
 // Routes network events into auth, command application, and simulation lifecycle hooks.
 import { GameSimulation } from "../GameSimulation";
+import type { InventoryStateSnapshot } from "../../shared/items";
 import { NType } from "../../shared/netcode";
-import type { TransferResponse } from "../../shared/orchestrator";
+import { MapProcessIpcChannel } from "../ipc/MapProcessIpcChannel";
 import { GUEST_ACCOUNT_ID_BASE, PersistenceService, type PlayerSnapshot } from "../persistence/PersistenceService";
 import { ServerNetworkHost } from "./ServerNetworkHost";
 import { ServerCommandRouter } from "./ServerCommandRouter";
@@ -15,11 +16,13 @@ export class ServerNetworkEventRouter {
   private readonly commandRouter = new ServerCommandRouter<ServerNetworkUser>();
   private nextGuestAccountId = GUEST_ACCOUNT_ID_BASE;
   private readonly transferDisconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly connectedUsersByAccountId = new Map<number, ServerNetworkUser>();
 
   public constructor(
     private readonly networkHost: ServerNetworkHost,
     private readonly simulation: GameSimulation,
-    private readonly persistence: PersistenceService
+    private readonly persistence: PersistenceService,
+    private readonly ipcChannel: MapProcessIpcChannel | null = null
   ) {}
 
   public drainQueue(): void {
@@ -28,10 +31,13 @@ export class ServerNetworkEventRouter {
       onCommandSet: (user, commands) => this.handleCommandSet(user, commands),
       onUserDisconnected: (user) => {
         this.clearTransferDisconnectTimer(user.id);
-        if (typeof user.pendingTransferId === "string" && user.pendingTransferId.length > 0) {
-          void this.reportTransferResult(user.pendingTransferId, "source_released");
-          user.pendingTransferId = null;
+        if (typeof user.accountId === "number" && Number.isFinite(user.accountId)) {
+          const existing = this.connectedUsersByAccountId.get(user.accountId);
+          if (existing?.id === user.id) {
+            this.connectedUsersByAccountId.delete(user.accountId);
+          }
         }
+        user.pendingTransferId = null;
         this.simulation.removeUser(user);
       }
     });
@@ -94,21 +100,32 @@ export class ServerNetworkEventRouter {
     const authKey = (payload as { authKey?: unknown } | undefined)?.authKey;
     const payloadAccountId = (payload as { accountId?: unknown } | undefined)?.accountId;
     const payloadSnapshot = (payload as { playerSnapshot?: unknown } | undefined)?.playerSnapshot;
+    const payloadInventory = (payload as { inventoryState?: unknown } | undefined)?.inventoryState;
+    const payloadTransferId = (payload as { transferId?: unknown } | undefined)?.transferId;
     if (typeof authKey === "string") {
       user.authKey = authKey;
     }
     if (typeof payloadAccountId === "number" && Number.isFinite(payloadAccountId)) {
       user.accountId = Math.max(1, Math.floor(payloadAccountId));
+      this.connectedUsersByAccountId.set(user.accountId, user);
       const snapshot = this.normalizePlayerSnapshot(payloadSnapshot, user.accountId);
       if (snapshot) {
         this.simulation.injectPendingLoginSnapshot(user.accountId, snapshot);
       }
+      const inventoryState = this.normalizeInventorySnapshot(payloadInventory);
+      if (inventoryState) {
+        this.simulation.injectPendingInventorySnapshot(user.accountId, inventoryState);
+      }
       this.simulation.addUser(user);
+      if (typeof payloadTransferId === "string" && payloadTransferId.length > 0) {
+        void this.reportTransferCompleted(payloadTransferId);
+      }
       return;
     }
     const allowGuestAuth = process.env.SERVER_ALLOW_GUEST_AUTH !== "0";
     if ((typeof authKey !== "string" || authKey.length === 0) && allowGuestAuth) {
       user.accountId = this.nextGuestAccountId++;
+      this.connectedUsersByAccountId.set(user.accountId, user);
       this.simulation.addUser(user);
       return;
     }
@@ -123,6 +140,7 @@ export class ServerNetworkEventRouter {
     }
 
     user.accountId = auth.accountId;
+    this.connectedUsersByAccountId.set(user.accountId, user);
     this.simulation.addUser(user);
   }
 
@@ -136,9 +154,7 @@ export class ServerNetworkEventRouter {
     if (targetMapInstanceId === fromMapInstanceId) {
       return;
     }
-    const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
-    const orchestratorSecret = process.env.ORCH_INTERNAL_RPC_SECRET;
-    if (!orchestratorUrl || !orchestratorSecret) {
+    if (!this.ipcChannel?.isAvailable()) {
       return;
     }
     const accountId = user.accountId;
@@ -146,24 +162,15 @@ export class ServerNetworkEventRouter {
       return;
     }
     const snapshot = this.simulation.getPlayerSnapshotByUserId(user.id);
-    const response = await fetch(`${orchestratorUrl}/orch/request-transfer`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-orch-secret": orchestratorSecret
-      },
-      body: JSON.stringify({
+    const inventoryState = this.simulation.getInventorySnapshotByAccountId(accountId);
+    const transfer = await this.ipcChannel.request("RequestTransfer", {
         authKey: user.authKey ?? null,
         accountId,
         fromMapInstanceId,
         toMapInstanceId: targetMapInstanceId,
-        playerSnapshot: snapshot
-      })
-    });
-    if (!response.ok) {
-      return;
-    }
-    const transfer = (await response.json()) as TransferResponse;
+        playerSnapshot: snapshot,
+        inventoryState
+      });
     if (!transfer.ok || !transfer.wsUrl || !transfer.joinTicket || !transfer.mapConfig) {
       return;
     }
@@ -217,6 +224,17 @@ export class ServerNetworkEventRouter {
     };
   }
 
+  private normalizeInventorySnapshot(raw: unknown): InventoryStateSnapshot | null {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const value = raw as InventoryStateSnapshot;
+    if (!Array.isArray(value.items)) {
+      return null;
+    }
+    return value;
+  }
+
   private disconnectUser(user: ServerNetworkUser, reason: unknown): void {
     try {
       user.networkAdapter?.disconnect?.(user, reason);
@@ -250,31 +268,33 @@ export class ServerNetworkEventRouter {
     this.transferDisconnectTimers.delete(userId);
   }
 
-  private async reportTransferResult(
-    transferId: string,
-    stage: "source_released" | "aborted" | "completed",
-    reason?: string
-  ): Promise<void> {
-    const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
-    const orchestratorSecret = process.env.ORCH_INTERNAL_RPC_SECRET;
-    if (!orchestratorUrl || !orchestratorSecret) {
+  private async reportTransferCompleted(transferId: string): Promise<void> {
+    if (!this.ipcChannel?.isAvailable()) {
       return;
     }
     try {
-      await fetch(`${orchestratorUrl}/orch/transfer-result`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-orch-secret": orchestratorSecret
-        },
-        body: JSON.stringify({
-          transferId,
-          stage,
-          ...(typeof reason === "string" ? { reason } : {})
-        })
+      this.ipcChannel.emit("TransferCompleted", {
+        transferId,
+        instanceId: process.env.MAP_INSTANCE_ID ?? "default-1"
       });
     } catch (error) {
-      console.warn("[server] transfer-result report failed", error);
+      console.warn("[server] transfer completion report failed", error);
     }
+  }
+
+  public releaseAuthorityForTransfer(accountId: number, transferId: string): boolean {
+    const user = this.connectedUsersByAccountId.get(Math.max(1, Math.floor(accountId)));
+    if (!user) {
+      return true;
+    }
+    this.clearTransferDisconnectTimer(user.id);
+    user.pendingTransferId = transferId;
+    this.connectedUsersByAccountId.delete(accountId);
+    this.simulation.removeUser(user);
+    this.disconnectUser(user, {
+      code: "map_transfer_release",
+      transferId
+    });
+    return true;
   }
 }

@@ -1,6 +1,8 @@
-// Game server entry point — imports game data and engine, wires them together.
-import "../shared/index"; // side-effect: initializes game data in engine catalogs
+// Game server entry point — initializes shared/server game data and boots the authoritative runtime.
+import { coerceRuntimeMapConfig } from "../../engine/shared/world";
 import { bootstrapServer } from "../../engine/server/main";
+import { initializeSharedGameData } from "../shared/index";
+import { initServerArchetypes } from "./serverArchetypes";
 
 interface MapRuntimeConfig {
   instanceId: string;
@@ -11,12 +13,21 @@ interface MapRuntimeConfig {
 
 const config = await resolveRuntimeConfig();
 
-(globalThis as Record<string, unknown> & { __runtimeMapConfig?: Record<string, unknown> }).__runtimeMapConfig = config.mapConfig;
 process.env.SERVER_PORT = String(config.wsPort);
 process.env.MAP_INSTANCE_ID = config.instanceId;
 process.env.MAP_ID = config.mapId;
 
-void bootstrapServer().catch((error) => {
+initializeSharedGameData();
+initServerArchetypes();
+
+void bootstrapServer({
+  port: config.wsPort,
+  runtimeMapConfig: coerceRuntimeMapConfig({
+    ...config.mapConfig,
+    instanceId: config.instanceId,
+    mapId: config.mapId
+  })
+}).catch((error) => {
   console.error("[game-server] failed to start", error);
   process.exit(1);
 });

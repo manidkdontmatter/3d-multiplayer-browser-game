@@ -16,10 +16,8 @@ import {
 import { injectAbilityCatalog, type AbilityArchetypeCatalogRaw } from "../../engine/shared/abilities";
 import { injectItemCatalog, type ItemCatalogRaw } from "../../engine/shared/items";
 import { injectPlatformCatalog, type PlatformArchetypeCatalog } from "../../engine/shared/platforms";
-import { injectServerArchetypeRaw } from "../../engine/server/content/ArchetypeCatalog";
 
 import archetypesRaw from "./archetypes.json";
-import serverArchetypesRaw from "./archetypes/server-archetypes.json";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STAT DEFINITIONS
@@ -169,7 +167,6 @@ export function registerGameContent(): void {
   injectAbilityCatalog(buildAbilityCatalog());
   injectItemCatalog(buildItemCatalog());
   injectPlatformCatalog(buildPlatformCatalog());
-  injectServerArchetypeRaw(serverArchetypesRaw);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

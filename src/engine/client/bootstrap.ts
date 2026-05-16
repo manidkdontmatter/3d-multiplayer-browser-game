@@ -1,3 +1,4 @@
+// Boots the client runtime, asset preload sequence, and startup overlay before entering the world.
 import { preloadCoreAssets } from "./assets/assetLoader";
 import { GameClientApp } from "./runtime/GameClientApp";
 import type { ClientCreatePhase } from "./runtime/GameClientApp";
@@ -16,7 +17,6 @@ export async function bootstrapClient(): Promise<void> {
   }
 
   const overlay = BootOverlay.fromDocument(document);
-  const status = document.getElementById("status");
   TooltipSystem.install(document);
 
   overlay.setStage("Preparing startup");
@@ -36,7 +36,7 @@ export async function bootstrapClient(): Promise<void> {
       }
     });
 
-    const app = await GameClientApp.create(canvas, status, (phase) => {
+    const app = await GameClientApp.create(canvas, (phase) => {
       const phaseProgress = resolveCreatePhaseProgress(phase);
       const phaseLabel = resolveCreatePhaseLabel(phase);
       overlay.setStage(phaseLabel);

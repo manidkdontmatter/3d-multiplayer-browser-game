@@ -1,8 +1,10 @@
 // Runs the authoritative fixed-tick server loop, persistence flush cadence, and runtime health telemetry.
 import { performance } from "node:perf_hooks";
 import type { Context } from "nengi";
+import type { InventoryStateSnapshot } from "../shared/items";
 import { SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
 import { GameSimulation } from "./GameSimulation";
+import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
 import { PersistenceService } from "./persistence/PersistenceService";
 import { OrchestratorPersistenceBridge } from "./persistence/OrchestratorPersistenceBridge";
 import { ServerNetworkHost } from "./net/ServerNetworkHost";
@@ -43,7 +45,7 @@ export class GameServer {
   private tickIntervalTotalSamples = 0;
   private lastLiveMetricsSampleCount = 0;
 
-  public constructor(context: Context) {
+  public constructor(context: Context, private readonly ipcChannel: MapProcessIpcChannel | null = null) {
     this.networkHost = new ServerNetworkHost(context);
     this.persistFlushIntervalMs = this.resolvePersistFlushIntervalMs();
     this.healthLogIntervalMs = this.resolveHealthLogIntervalMs();
@@ -54,12 +56,14 @@ export class GameServer {
       this.networkHost.getNearChannel() as any,
       this.networkHost.getFarChannel() as any,
       this.persistence,
-      (position) => this.networkHost.createUserView(position)
+      (position) => this.networkHost.createUserView(position),
+      this.ipcChannel
     );
     this.networkEventRouter = new ServerNetworkEventRouter(
       this.networkHost,
       this.simulation,
-      this.persistence
+      this.persistence,
+      this.ipcChannel
     );
   }
 
@@ -80,7 +84,11 @@ export class GameServer {
           throw new Error("authKey required.");
         }
         return {
-          authKey
+          authKey,
+          ...(typeof resolved.accountId === "number" ? { accountId: resolved.accountId } : {}),
+          ...(resolved.playerSnapshot ? { playerSnapshot: resolved.playerSnapshot } : {}),
+          ...(resolved.inventoryState ? { inventoryState: resolved.inventoryState } : {}),
+          ...(typeof resolved.transferId === "string" ? { transferId: resolved.transferId } : {})
         };
       }
     });
@@ -98,16 +106,16 @@ export class GameServer {
     authKey?: string;
     accountId?: number;
     playerSnapshot?: unknown;
+    inventoryState?: InventoryStateSnapshot | null;
+    transferId?: string | null;
   }> {
     if (!handshake || typeof handshake !== "object") {
       throw new Error("Handshake payload required.");
     }
     const baseAuthKey = (handshake as { authKey?: unknown }).authKey;
     const directAuthKey = typeof baseAuthKey === "string" ? baseAuthKey : undefined;
-    const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
     const mapInstanceId = process.env.MAP_INSTANCE_ID;
-    const orchestratorSecret = process.env.ORCH_INTERNAL_RPC_SECRET;
-    if (!orchestratorUrl || !mapInstanceId || !orchestratorSecret) {
+    if (!this.ipcChannel?.isAvailable() || !mapInstanceId) {
       return directAuthKey ? { authKey: directAuthKey } : {};
     }
 
@@ -116,27 +124,10 @@ export class GameServer {
       throw new Error("joinTicket required.");
     }
 
-    const response = await fetch(`${orchestratorUrl}/orch/validate-join-ticket`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-orch-secret": orchestratorSecret
-      },
-      body: JSON.stringify({
+    const json = await this.ipcChannel.request("ConsumeJoinTicket", {
         joinTicket: joinTicketRaw,
         mapInstanceId
-      })
-    });
-    if (!response.ok) {
-      throw new Error(`joinTicket denied (${response.status})`);
-    }
-    const json = (await response.json()) as {
-      ok?: boolean;
-      authKey?: unknown;
-      accountId?: unknown;
-      playerSnapshot?: unknown;
-      error?: unknown;
-    };
+      });
     if (!json.ok) {
       const reason = typeof json.error === "string" ? json.error : "unknown";
       throw new Error(`joinTicket denied: ${reason}`);
@@ -147,10 +138,16 @@ export class GameServer {
       : undefined;
     const playerSnapshot =
       json.playerSnapshot && typeof json.playerSnapshot === "object" ? json.playerSnapshot : undefined;
+    const inventoryState =
+      json.inventoryState && typeof json.inventoryState === "object"
+        ? (json.inventoryState as InventoryStateSnapshot)
+        : null;
     return {
       ...(validatedAuthKey ? { authKey: validatedAuthKey } : {}),
       ...(typeof accountId === "number" ? { accountId } : {}),
-      ...(playerSnapshot ? { playerSnapshot } : {})
+      ...(playerSnapshot ? { playerSnapshot } : {}),
+      ...(inventoryState ? { inventoryState } : {}),
+      transferId: typeof json.transferId === "string" ? json.transferId : null
     };
   }
 
@@ -321,12 +318,10 @@ export class GameServer {
   }
 
   private createOrchestratorPersistenceBridge(): OrchestratorPersistenceBridge | null {
-    const orchestratorUrl = process.env.ORCHESTRATOR_INTERNAL_URL;
-    const orchestratorSecret = process.env.ORCH_INTERNAL_RPC_SECRET;
-    if (!orchestratorUrl || !orchestratorSecret) {
+    if (!this.ipcChannel?.isAvailable()) {
       return null;
     }
-    return new OrchestratorPersistenceBridge(orchestratorUrl, orchestratorSecret);
+    return new OrchestratorPersistenceBridge(this.ipcChannel);
   }
 
   private resolvePersistFlushIntervalMs(): number {
@@ -442,6 +437,14 @@ export class GameServer {
       max_ms: max,
       p95_ms: p95,
       p95_abs_error_ms: Math.abs(p95 - targetMs)
-    };
+     };
+   }
+
+  public reserveIncomingTransfer(): void {
+    // Reservation is a bounded readiness check in Phase 1; source release still gates authority transfer.
+  }
+
+  public finalizeSourceRelease(accountId: number, transferId: string): boolean {
+    return this.networkEventRouter.releaseAuthorityForTransfer(accountId, transferId);
   }
 }

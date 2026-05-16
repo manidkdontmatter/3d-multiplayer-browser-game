@@ -1,6 +1,6 @@
 // Architecture guard checks that enforce critical layering and determinism contracts.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, normalize } from "node:path";
 
 const ROOT = process.cwd();
 
@@ -21,11 +21,114 @@ function assertNoForbiddenImports(path: string, forbidden: readonly string[]): v
   }
 }
 
+function listFiles(dir: string): string[] {
+  const output: string[] = [];
+  for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+    const relativePath = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      output.push(...listFiles(relativePath));
+      continue;
+    }
+    output.push(relativePath);
+  }
+  return output;
+}
+
+function normalizeSlashes(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function classifyLayer(path: string): "shared" | "client" | "server" | null {
+  const normalizedPath = normalizeSlashes(path);
+  if (normalizedPath.includes("/shared/")) {
+    return "shared";
+  }
+  if (normalizedPath.includes("/client/")) {
+    return "client";
+  }
+  if (normalizedPath.includes("/server/")) {
+    return "server";
+  }
+  return null;
+}
+
+function classifyDomain(path: string): "engine" | "game" | null {
+  const normalizedPath = normalizeSlashes(path);
+  if (normalizedPath.startsWith("src/engine/")) {
+    return "engine";
+  }
+  if (normalizedPath.startsWith("src/game/")) {
+    return "game";
+  }
+  return null;
+}
+
+function resolveRelativeImportPath(sourceFile: string, specifier: string): string {
+  return normalizeSlashes(normalize(join(dirname(sourceFile), specifier)));
+}
+
+function assertNoLayerBoundaryViolations(): void {
+  const importRegex = /(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["']([^"']+)["']/g;
+  const sourceFiles = listFiles("src").filter((file) => file.endsWith(".ts") || file.endsWith(".d.ts"));
+
+  for (const file of sourceFiles) {
+    const sourceLayer = classifyLayer(file);
+    if (!sourceLayer) {
+      continue;
+    }
+    const content = read(file);
+    for (const match of content.matchAll(importRegex)) {
+      const specifier = match[1];
+      if (!specifier || !specifier.startsWith(".")) {
+        continue;
+      }
+      const targetLayer = classifyLayer(resolveRelativeImportPath(file, specifier));
+      if (!targetLayer) {
+        continue;
+      }
+      if (sourceLayer === "shared") {
+        assert(targetLayer === "shared", `${file} must not import ${targetLayer} module '${specifier}'`);
+        continue;
+      }
+      if (sourceLayer === "client") {
+        assert(targetLayer !== "server", `${file} must not import server module '${specifier}'`);
+        continue;
+      }
+      if (sourceLayer === "server") {
+        assert(targetLayer !== "client", `${file} must not import client module '${specifier}'`);
+      }
+    }
+  }
+}
+
+function assertNoEngineImportsGame(): void {
+  const importRegex = /(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["']([^"']+)["']/g;
+  const sourceFiles = listFiles("src").filter((file) => file.endsWith(".ts") || file.endsWith(".d.ts"));
+
+  for (const file of sourceFiles) {
+    const sourceDomain = classifyDomain(file);
+    if (sourceDomain !== "engine") {
+      continue;
+    }
+    const content = read(file);
+    for (const match of content.matchAll(importRegex)) {
+      const specifier = match[1];
+      if (!specifier || !specifier.startsWith(".")) {
+        continue;
+      }
+      const targetDomain = classifyDomain(resolveRelativeImportPath(file, specifier));
+      assert(targetDomain !== "game", `${file} must not import game module '${specifier}'`);
+    }
+  }
+}
+
 function main(): void {
+  assertNoLayerBoundaryViolations();
+  assertNoEngineImportsGame();
+
   const ecsCoreFiles = [
     "src/engine/server/ecs/SimulationEcsStore.ts",
-    "src/engine/server/ecs/SimulationEcsIndexRegistry.ts",
-    "src/engine/server/ecs/SimulationEcsProjectors.ts"
+    "src/engine/server/ecs/SimulationEcsIndexRegistry.ts"
   ] as const;
 
   const forbiddenCrossLayerTokens = [
@@ -194,7 +297,7 @@ function main(): void {
     "Server archetype catalog must use shared PLATFORM_DEFINITIONS for platform content"
   );
 
-  const serverArchetypes = JSON.parse(read("src/game/shared/archetypes/server-archetypes.json")) as Record<string, unknown>;
+  const serverArchetypes = JSON.parse(read("src/game/server/archetypes/server-archetypes.json")) as Record<string, unknown>;
   assert(
     !Object.prototype.hasOwnProperty.call(serverArchetypes, "platforms"),
     "server-archetypes.json must not duplicate platform definitions; use platform-archetypes.json"

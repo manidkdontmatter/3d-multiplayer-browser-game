@@ -15,7 +15,7 @@ import {
   type RuntimeAssetManifest,
   type RuntimeManifestBootstrap
 } from "../src/engine/client/assets/assetManifest";
-import { ASSET_CATALOG_DEFINITIONS } from "../src/game/shared/assetCatalog";
+import { ASSET_CATALOG_DEFINITIONS } from "../src/game/client/assetCatalog";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

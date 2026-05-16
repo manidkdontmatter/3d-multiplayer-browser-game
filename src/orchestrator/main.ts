@@ -2,12 +2,12 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
-  type BootstrapRequest,
-  type BootstrapResponse,
   type GenericOrchestratorResponse,
   type MapHeartbeatRequest,
   type MapRegistrationRequest,
   type PersistCriticalEventRequest,
+  type PersistInventoryMutationRequest,
+  type PersistSnapshotBatchRequest,
   type PersistSnapshotRequest,
   type PersistedPlayerSnapshot,
   type TransferRequest,
@@ -15,7 +15,16 @@ import {
   type TransferResponse,
   type ValidateJoinTicketRequest,
   type ValidateJoinTicketResponse
-} from "../engine/shared/orchestrator";
+} from "../engine/server/orchestrator/OrchestratorProtocol";
+import type { BootstrapRequest, BootstrapResponse } from "../engine/shared/bootstrapProtocol";
+import type { InventoryStateSnapshot } from "../engine/shared/items";
+import {
+  type FinalizeSourceReleaseRequest,
+  type OrchestratorIpcEnvelope,
+  type OrchestratorIpcRequestMap,
+  type ReserveIncomingTransferRequest,
+  isOrchestratorIpcEnvelope
+} from "../engine/server/orchestrator/OrchestratorIpcProtocol";
 import { coerceRuntimeMapConfig, type RuntimeMapConfig } from "../engine/shared/world";
 import { MapProcessSupervisor, type MapProcessSpec } from "./MapProcessSupervisor";
 import {
@@ -29,6 +38,7 @@ interface JoinTicketRecord {
   authKey: string | null;
   accountId: number;
   playerSnapshot: PlayerSnapshot | null;
+  inventoryState: InventoryStateSnapshot | null;
   targetInstanceId: string;
   issuedAtMs: number;
   expiresAtMs: number;
@@ -44,12 +54,21 @@ interface TransferRecord {
   toMapInstanceId: string;
   issuedAtMs: number;
   expiresAtMs: number;
+  destinationReservedAtMs: number | null;
   sourceReleasedAtMs: number | null;
   destinationAcceptedAtMs: number | null;
+  destinationActivatedAtMs: number | null;
   completedAtMs: number | null;
   abortedAtMs: number | null;
   lastReason: string | null;
 }
+
+type PendingIpcRequest = {
+  instanceId: string;
+  resolve: (value: unknown) => void;
+  reject: (reason?: unknown) => void;
+  timeout: NodeJS.Timeout;
+};
 
 const ORCH_PORT = Number(process.env.ORCH_PORT ?? 9000);
 const ORCH_PUBLIC_WS_URL_TEMPLATE = process.env.ORCH_PUBLIC_WS_URL_TEMPLATE?.trim() ?? "";
@@ -102,14 +121,18 @@ const joinTickets = new Map<string, JoinTicketRecord>();
 const mapReady = new Map<string, { wsUrl: string; mapConfig: RuntimeMapConfig; pid: number; atMs: number }>();
 const mapHeartbeats = new Map<string, { atMs: number; pid: number; onlinePlayers: number; uptimeSeconds: number }>();
 const transferRecords = new Map<string, TransferRecord>();
-const orchestratorBaseUrl = `http://localhost:${ORCH_PORT}`;
-const supervisor = new MapProcessSupervisor(orchestratorBaseUrl, INTERNAL_RPC_SECRET, {
+const pendingMapRequests = new Map<string, PendingIpcRequest>();
+const supervisor = new MapProcessSupervisor({
   restartWindowMs: ORCH_MAP_RESTART_WINDOW_MS,
   restartMaxInWindow: ORCH_MAP_RESTART_MAX_IN_WINDOW,
   quarantineMs: ORCH_MAP_QUARANTINE_MS,
+  onMapProcessMessage: (instanceId, message) => {
+    void handleMapProcessIpcMessage(instanceId, message);
+  },
   onMapProcessExit: (instanceId) => {
     mapReady.delete(instanceId);
     mapHeartbeats.delete(instanceId);
+    rejectPendingRequestsForInstance(instanceId, new Error(`map process exited: ${instanceId}`));
   }
 });
 const persistenceQueue = new Map<number, PersistSnapshotRequest>();
@@ -120,7 +143,9 @@ const persistenceMetrics = {
   flushBatches: 0,
   maxQueueSize: 0,
   lastFlushAtMs: 0,
-  lastFlushDurationMs: 0
+  lastFlushDurationMs: 0,
+  lastFlushEntryCount: 0,
+  maxFlushEntryCount: 0
 };
 let nextDynamicWsPort = MAP_DYNAMIC_PORT_BASE;
 
@@ -154,6 +179,204 @@ function bootstrap(): void {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+}
+
+async function handleMapProcessIpcMessage(instanceId: string, message: unknown): Promise<void> {
+  if (!isOrchestratorIpcEnvelope(message)) {
+    return;
+  }
+  const envelope = message as OrchestratorIpcEnvelope;
+  if (envelope.target !== "orchestrator") {
+    return;
+  }
+  if (envelope.messageKind === "response" && envelope.correlationId) {
+    resolvePendingMapRequest(envelope);
+    return;
+  }
+  if (envelope.messageKind === "event") {
+    handleMapProcessEvent(instanceId, envelope);
+    return;
+  }
+  if (envelope.messageKind !== "request" || !envelope.correlationId) {
+    return;
+  }
+  try {
+    const payload = await dispatchMapProcessRequest(instanceId, envelope.messageType, envelope.payload);
+    sendMapProcessEnvelope(instanceId, {
+      messageKind: "response",
+      messageType: envelope.messageType,
+      correlationId: envelope.correlationId,
+      source: "orchestrator",
+      target: envelope.source,
+      sentAtMs: Date.now(),
+      payload,
+      ok: true
+    });
+  } catch (error) {
+    sendMapProcessEnvelope(instanceId, {
+      messageKind: "response",
+      messageType: envelope.messageType,
+      correlationId: envelope.correlationId,
+      source: "orchestrator",
+      target: envelope.source,
+      sentAtMs: Date.now(),
+      payload: {},
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+function handleMapProcessEvent(instanceId: string, envelope: OrchestratorIpcEnvelope): void {
+  if (envelope.messageType === "MapProcessBooted") {
+    const payload = envelope.payload as MapRegistrationRequest;
+    mapReady.set(instanceId, {
+      wsUrl: payload.wsUrl,
+      mapConfig: payload.mapConfig,
+      pid: payload.pid,
+      atMs: Date.now()
+    });
+    mapHeartbeats.set(instanceId, {
+      atMs: Date.now(),
+      pid: payload.pid,
+      onlinePlayers: 0,
+      uptimeSeconds: 0
+    });
+    return;
+  }
+  if (envelope.messageType === "MapHeartbeat") {
+    const payload = envelope.payload as MapHeartbeatRequest;
+    mapHeartbeats.set(instanceId, {
+      atMs: Date.now(),
+      pid: Math.max(0, Math.floor(payload.pid)),
+      onlinePlayers: Math.max(0, Math.floor(payload.onlinePlayers)),
+      uptimeSeconds: Math.max(0, Math.floor(payload.uptimeSeconds))
+    });
+    return;
+  }
+  if (envelope.messageType === "TransferCompleted") {
+    const payload = envelope.payload as { transferId?: unknown; instanceId?: unknown };
+    const transferId = typeof payload.transferId === "string" ? payload.transferId.trim() : "";
+    const record = transferId.length > 0 ? transferRecords.get(transferId) : null;
+    if (!record || record.completedAtMs !== null) {
+      return;
+    }
+    const now = Date.now();
+    record.destinationActivatedAtMs = record.destinationActivatedAtMs ?? now;
+    record.completedAtMs = now;
+    persistCriticalEvent({
+      eventId: `transfer_completed:${record.transferId}`,
+      instanceId: record.toMapInstanceId,
+      accountId: record.accountId,
+      eventType: "map_transfer_completed",
+      eventPayload: {
+        transferId: record.transferId,
+        instanceId: typeof payload.instanceId === "string" ? payload.instanceId : record.toMapInstanceId
+      },
+      eventAtMs: now
+    });
+  }
+}
+
+async function dispatchMapProcessRequest(
+  instanceId: string,
+  messageType: string,
+  payload: unknown
+): Promise<unknown> {
+  if (messageType === "ConsumeJoinTicket") {
+    const typed = payload as ValidateJoinTicketRequest;
+    return validateJoinTicket(typed.joinTicket, typed.mapInstanceId);
+  }
+  if (messageType === "RequestTransfer") {
+    return handleTransferRequest(payload as TransferRequest);
+  }
+  if (messageType === "PersistSnapshotBatch") {
+    const batch = payload as PersistSnapshotBatchRequest;
+    for (const snapshot of Array.isArray(batch.snapshots) ? batch.snapshots : []) {
+      enqueuePersistSnapshot(snapshot);
+    }
+    if (persistenceQueue.size >= 512) {
+      await flushPersistenceQueue();
+    }
+    return { ok: true } satisfies GenericOrchestratorResponse;
+  }
+  if (messageType === "PersistCriticalEvent") {
+    persistCriticalEvent(payload as PersistCriticalEventRequest);
+    return { ok: true } satisfies GenericOrchestratorResponse;
+  }
+  if (messageType === "PersistInventoryMutation") {
+    persistInventoryMutation(payload as PersistInventoryMutationRequest);
+    return { ok: true } satisfies GenericOrchestratorResponse;
+  }
+  throw new Error(`Unhandled map IPC request ${messageType} from ${instanceId}`);
+}
+
+function sendMapProcessEnvelope(instanceId: string, envelope: OrchestratorIpcEnvelope): void {
+  const managed = supervisor.getManaged(instanceId);
+  if (!managed) {
+    throw new Error(`map process not found: ${instanceId}`);
+  }
+  managed.process.send?.(envelope);
+}
+
+function sendMapProcessRequest<K extends keyof OrchestratorIpcRequestMap>(
+  instanceId: string,
+  messageType: K,
+  payload: OrchestratorIpcRequestMap[K]["request"],
+  timeoutMs = 5000
+): Promise<OrchestratorIpcRequestMap[K]["response"]> {
+  const correlationId = `${instanceId}:${Date.now()}:${Math.random().toString(16).slice(2, 10)}`;
+  const envelope: OrchestratorIpcEnvelope<OrchestratorIpcRequestMap[K]["request"]> = {
+    messageKind: "request",
+    messageType,
+    correlationId,
+    source: "orchestrator",
+    target: instanceId,
+    sentAtMs: Date.now(),
+    payload
+  };
+  return new Promise<OrchestratorIpcRequestMap[K]["response"]>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingMapRequests.delete(correlationId);
+      reject(new Error(`map IPC request timed out: ${String(messageType)} -> ${instanceId}`));
+    }, timeoutMs);
+    pendingMapRequests.set(correlationId, {
+      instanceId,
+      resolve: resolve as (value: unknown) => void,
+      reject,
+      timeout
+    });
+    sendMapProcessEnvelope(instanceId, envelope);
+  });
+}
+
+function resolvePendingMapRequest(envelope: OrchestratorIpcEnvelope): void {
+  const correlationId = envelope.correlationId;
+  if (!correlationId) {
+    return;
+  }
+  const pending = pendingMapRequests.get(correlationId);
+  if (!pending) {
+    return;
+  }
+  clearTimeout(pending.timeout);
+  pendingMapRequests.delete(correlationId);
+  if (envelope.ok === false) {
+    pending.reject(new Error(envelope.error ?? `map IPC request failed: ${envelope.messageType}`));
+    return;
+  }
+  pending.resolve(envelope.payload);
+}
+
+function rejectPendingRequestsForInstance(instanceId: string, error: Error): void {
+  for (const [correlationId, pending] of pendingMapRequests.entries()) {
+    if (pending.instanceId !== instanceId) {
+      continue;
+    }
+    clearTimeout(pending.timeout);
+    pendingMapRequests.delete(correlationId);
+    pending.reject(error);
+  }
 }
 
 async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -197,7 +420,8 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     }
     const identity = resolveIdentity(payload.authKey ?? null, req.socket.remoteAddress ?? "unknown");
     const playerSnapshot = loadSnapshot(identity.accountId);
-    const ticket = issueJoinTicket(identity.authKey, identity.accountId, playerSnapshot, selected.instanceId, {
+    const inventoryState = loadInventorySnapshot(identity.accountId);
+    const ticket = issueJoinTicket(identity.authKey, identity.accountId, playerSnapshot, inventoryState, selected.instanceId, {
       kind: "bootstrap",
       transferId: null
     });
@@ -259,7 +483,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       return;
     }
     const payload = (await readJsonBody(req)) as ValidateJoinTicketRequest;
-    const validation = validateJoinTicket(payload.joinTicket, payload.mapInstanceId);
+    const validation = await validateJoinTicket(payload.joinTicket, payload.mapInstanceId);
     sendJson(res, validation.ok ? 200 : 401, validation);
     return;
   }
@@ -269,61 +493,8 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       sendJson(res, 401, { ok: false, error: "unauthorized" } satisfies TransferResponse);
       return;
     }
-    const payload = (await readJsonBody(req)) as TransferRequest;
-    const target = await ensureMapInstanceReady(payload.toMapInstanceId);
-    if (!target) {
-      sendJson(res, 404, { ok: false, error: "target_map_not_ready" } satisfies TransferResponse);
-      return;
-    }
-    const normalizedAccountId = Math.max(1, Math.floor(payload.accountId));
-    if (payload.playerSnapshot && normalizedAccountId < GUEST_ACCOUNT_ID_BASE) {
-      persistence.savePlayerSnapshot(toPlayerSnapshot(payload.playerSnapshot));
-    }
-    const transferId = randomBytes(16).toString("hex");
-    const issuedAtMs = Date.now();
-    const expiresAtMs = issuedAtMs + Math.max(500, TRANSFER_TOKEN_TTL_MS);
-    transferRecords.set(transferId, {
-      transferId,
-      accountId: normalizedAccountId,
-      fromMapInstanceId: payload.fromMapInstanceId,
-      toMapInstanceId: payload.toMapInstanceId,
-      issuedAtMs,
-      expiresAtMs,
-      sourceReleasedAtMs: null,
-      destinationAcceptedAtMs: null,
-      completedAtMs: null,
-      abortedAtMs: null,
-      lastReason: null
-    });
-    persistCriticalEvent({
-      eventId: `transfer_requested:${transferId}`,
-      instanceId: payload.fromMapInstanceId,
-      accountId: normalizedAccountId,
-      eventType: "map_transfer_requested",
-      eventPayload: {
-        transferId,
-        fromMapInstanceId: payload.fromMapInstanceId,
-        toMapInstanceId: payload.toMapInstanceId
-      },
-      eventAtMs: issuedAtMs
-    });
-    const ticket = issueJoinTicket(
-      typeof payload.authKey === "string" && payload.authKey.length > 0 ? payload.authKey : null,
-      normalizedAccountId,
-      payload.playerSnapshot ? toPlayerSnapshot(payload.playerSnapshot) : null,
-      payload.toMapInstanceId,
-      {
-        kind: "transfer",
-        transferId
-      }
-    );
-    sendJson(res, 200, {
-      ok: true,
-      transferId,
-      wsUrl: resolveClientWsUrl(payload.toMapInstanceId, target.wsUrl),
-      joinTicket: ticket,
-      mapConfig: target.mapConfig
-    } satisfies TransferResponse);
+    const response = await handleTransferRequest((await readJsonBody(req)) as TransferRequest);
+    sendJson(res, response.ok ? 200 : 404, response);
     return;
   }
 
@@ -334,6 +505,23 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     }
     const payload = (await readJsonBody(req)) as PersistSnapshotRequest;
     enqueuePersistSnapshot(payload);
+    if (persistenceQueue.size >= 512) {
+      await flushPersistenceQueue();
+    }
+    sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/orch/persist-snapshot-batch") {
+    if (!isAuthorizedInternalRequest(req)) {
+      sendJson(res, 401, { ok: false, error: "unauthorized" } satisfies GenericOrchestratorResponse);
+      return;
+    }
+    const payload = (await readJsonBody(req)) as PersistSnapshotBatchRequest;
+    const snapshots = Array.isArray(payload.snapshots) ? payload.snapshots : [];
+    for (const snapshot of snapshots) {
+      enqueuePersistSnapshot(snapshot);
+    }
     if (persistenceQueue.size >= 512) {
       await flushPersistenceQueue();
     }
@@ -382,7 +570,6 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
           eventAtMs: now
         });
       }
-      maybeCompleteTransferRecord(record, now);
       sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
       return;
     }
@@ -548,6 +735,88 @@ async function ensureMapInstanceReady(instanceIdRaw: string): Promise<{ wsUrl: s
   };
 }
 
+async function handleTransferRequest(payload: TransferRequest): Promise<TransferResponse> {
+  const target = await ensureMapInstanceReady(payload.toMapInstanceId);
+  if (!target) {
+    return { ok: false, error: "target_map_not_ready" };
+  }
+  const normalizedAccountId = Math.max(1, Math.floor(payload.accountId));
+  const transferId = randomBytes(16).toString("hex");
+  const issuedAtMs = Date.now();
+  const expiresAtMs = issuedAtMs + Math.max(500, TRANSFER_TOKEN_TTL_MS);
+  const reservePayload: ReserveIncomingTransferRequest = {
+    transferId,
+    accountId: normalizedAccountId,
+    fromMapInstanceId: payload.fromMapInstanceId,
+    toMapInstanceId: payload.toMapInstanceId,
+    expiresAtMs
+  };
+  try {
+    const reserveResponse = await sendMapProcessRequest(
+      payload.toMapInstanceId,
+      "ReserveIncomingTransfer",
+      reservePayload,
+      5000
+    );
+    if (!reserveResponse.ok) {
+      return { ok: false, error: reserveResponse.error ?? "target_map_not_ready" };
+    }
+  } catch {
+    return { ok: false, error: "target_map_not_ready" };
+  }
+  if (payload.playerSnapshot && normalizedAccountId < GUEST_ACCOUNT_ID_BASE) {
+    persistence.savePlayerSnapshot(toPlayerSnapshot(payload.playerSnapshot));
+  }
+  if (payload.inventoryState && normalizedAccountId < GUEST_ACCOUNT_ID_BASE) {
+    persistence.saveInventoryState(normalizedAccountId, payload.inventoryState);
+  }
+  transferRecords.set(transferId, {
+    transferId,
+    accountId: normalizedAccountId,
+    fromMapInstanceId: payload.fromMapInstanceId,
+    toMapInstanceId: payload.toMapInstanceId,
+    issuedAtMs,
+    expiresAtMs,
+    destinationReservedAtMs: issuedAtMs,
+    sourceReleasedAtMs: null,
+    destinationAcceptedAtMs: null,
+    destinationActivatedAtMs: null,
+    completedAtMs: null,
+    abortedAtMs: null,
+    lastReason: null
+  });
+  persistCriticalEvent({
+    eventId: `transfer_requested:${transferId}`,
+    instanceId: payload.fromMapInstanceId,
+    accountId: normalizedAccountId,
+    eventType: "map_transfer_requested",
+    eventPayload: {
+      transferId,
+      fromMapInstanceId: payload.fromMapInstanceId,
+      toMapInstanceId: payload.toMapInstanceId
+    },
+    eventAtMs: issuedAtMs
+  });
+  const ticket = issueJoinTicket(
+    typeof payload.authKey === "string" && payload.authKey.length > 0 ? payload.authKey : null,
+    normalizedAccountId,
+    payload.playerSnapshot ? toPlayerSnapshot(payload.playerSnapshot) : null,
+    payload.inventoryState ?? null,
+    payload.toMapInstanceId,
+    {
+      kind: "transfer",
+      transferId
+    }
+  );
+  return {
+    ok: true,
+    transferId,
+    wsUrl: resolveClientWsUrl(payload.toMapInstanceId, target.wsUrl),
+    joinTicket: ticket,
+    mapConfig: target.mapConfig
+  };
+}
+
 async function waitForMapReady(instanceId: string, timeoutMs: number): Promise<{
   wsUrl: string;
   mapConfig: RuntimeMapConfig;
@@ -603,10 +872,18 @@ function loadSnapshot(accountId: number): PlayerSnapshot | null {
   return persistence.loadPlayerState(accountId);
 }
 
+function loadInventorySnapshot(accountId: number): InventoryStateSnapshot | null {
+  if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+    return null;
+  }
+  return persistence.loadInventoryState(accountId);
+}
+
 function issueJoinTicket(
   authKey: string | null,
   accountId: number,
   playerSnapshot: PlayerSnapshot | null,
+  inventoryState: InventoryStateSnapshot | null,
   targetInstanceId: string,
   meta: { kind: "bootstrap" | "transfer"; transferId: string | null }
 ): string {
@@ -621,6 +898,7 @@ function issueJoinTicket(
     authKey,
     accountId,
     playerSnapshot,
+    inventoryState,
     targetInstanceId,
     issuedAtMs,
     expiresAtMs,
@@ -631,7 +909,7 @@ function issueJoinTicket(
   return token;
 }
 
-function validateJoinTicket(joinTicket: string, mapInstanceId: string): ValidateJoinTicketResponse {
+async function validateJoinTicket(joinTicket: string, mapInstanceId: string): Promise<ValidateJoinTicketResponse> {
   const parsed = parseAndVerifyTicket(joinTicket);
   if (!parsed.ok) {
     return { ok: false, authKey: null, error: parsed.error };
@@ -665,29 +943,74 @@ function validateJoinTicket(joinTicket: string, mapInstanceId: string): Validate
   if (ticket.targetInstanceId !== mapInstanceId) {
     return { ok: false, authKey: null, error: "ticket_target_mismatch" };
   }
-  ticket.consumedAtMs = now;
   if (ticket.kind === "transfer" && typeof ticket.transferId === "string" && ticket.transferId.length > 0) {
     const record = transferRecords.get(ticket.transferId);
-    if (record) {
-      if (record.destinationAcceptedAtMs === null) {
-        record.destinationAcceptedAtMs = now;
-        persistCriticalEvent({
-          eventId: `transfer_destination_accepted:${record.transferId}`,
-          instanceId: mapInstanceId,
-          accountId: record.accountId,
-          eventType: "map_transfer_destination_accepted",
-          eventPayload: { transferId: record.transferId, mapInstanceId },
-          eventAtMs: now
-        });
+    if (!record) {
+      return { ok: false, authKey: null, error: "transfer_not_found" };
+    }
+    if (record.abortedAtMs !== null || record.completedAtMs !== null) {
+      return { ok: false, authKey: null, error: "transfer_not_active" };
+    }
+    try {
+      const releasePayload: FinalizeSourceReleaseRequest = {
+        transferId: record.transferId,
+        accountId: record.accountId,
+        fromMapInstanceId: record.fromMapInstanceId,
+        toMapInstanceId: record.toMapInstanceId
+      };
+      const releaseResponse = await sendMapProcessRequest(
+        record.fromMapInstanceId,
+        "FinalizeSourceRelease",
+        releasePayload,
+        5000
+      );
+      if (!releaseResponse.ok) {
+        throw new Error(releaseResponse.error ?? "source_release_failed");
       }
-      maybeCompleteTransferRecord(record, now);
+    } catch (error) {
+      record.abortedAtMs = Date.now();
+      record.lastReason = "source_release_failed";
+      persistCriticalEvent({
+        eventId: `transfer_aborted:${record.transferId}`,
+        instanceId: record.fromMapInstanceId,
+        accountId: record.accountId,
+        eventType: "map_transfer_aborted",
+        eventPayload: { transferId: record.transferId, reason: "source_release_failed" },
+        eventAtMs: record.abortedAtMs
+      });
+      return { ok: false, authKey: null, error: "source_release_failed" };
+    }
+    if (record.sourceReleasedAtMs === null) {
+      record.sourceReleasedAtMs = now;
+      persistCriticalEvent({
+        eventId: `transfer_source_released:${record.transferId}`,
+        instanceId: record.fromMapInstanceId,
+        accountId: record.accountId,
+        eventType: "map_transfer_source_released",
+        eventPayload: { transferId: record.transferId },
+        eventAtMs: now
+      });
+    }
+    if (record.destinationAcceptedAtMs === null) {
+      record.destinationAcceptedAtMs = now;
+      persistCriticalEvent({
+        eventId: `transfer_destination_accepted:${record.transferId}`,
+        instanceId: mapInstanceId,
+        accountId: record.accountId,
+        eventType: "map_transfer_destination_accepted",
+        eventPayload: { transferId: record.transferId, mapInstanceId },
+        eventAtMs: now
+      });
     }
   }
+  ticket.consumedAtMs = now;
   return {
     ok: true,
     authKey: ticket.authKey,
     accountId: ticket.accountId,
-    playerSnapshot: ticket.playerSnapshot
+    playerSnapshot: ticket.playerSnapshot,
+    inventoryState: ticket.inventoryState,
+    transferId: ticket.transferId
   };
 }
 
@@ -776,17 +1099,16 @@ async function flushPersistenceQueue(): Promise<void> {
   persistenceQueue.clear();
   persistenceMetrics.flushBatches += 1;
   try {
-    for (const payload of entries) {
-      const snapshot = toPlayerSnapshot(payload.snapshot);
-      if (payload.saveCharacter && payload.saveAbilityState) {
-        persistence.savePlayerSnapshot(snapshot);
-      } else if (payload.saveCharacter) {
-        persistence.saveCharacterSnapshot(snapshot);
-      } else if (payload.saveAbilityState) {
-        persistence.saveAbilityStateSnapshot(snapshot);
-      }
-    }
+    persistence.savePlayerSnapshotBatch(entries.map((payload) => ({
+      snapshot: toPlayerSnapshot(payload.snapshot),
+      saveCharacter: payload.saveCharacter,
+      saveAbilityState: payload.saveAbilityState
+    })));
     persistenceMetrics.flushed += entries.length;
+    persistenceMetrics.lastFlushEntryCount = entries.length;
+    if (entries.length > persistenceMetrics.maxFlushEntryCount) {
+      persistenceMetrics.maxFlushEntryCount = entries.length;
+    }
   } catch (error) {
     persistenceMetrics.flushErrors += 1;
     for (const payload of entries) {
@@ -797,28 +1119,6 @@ async function flushPersistenceQueue(): Promise<void> {
     persistenceMetrics.lastFlushAtMs = Date.now();
     persistenceMetrics.lastFlushDurationMs = Date.now() - start;
   }
-}
-
-function maybeCompleteTransferRecord(record: TransferRecord, atMs: number): void {
-  if (record.completedAtMs !== null || record.abortedAtMs !== null) {
-    return;
-  }
-  if (record.sourceReleasedAtMs === null || record.destinationAcceptedAtMs === null) {
-    return;
-  }
-  record.completedAtMs = atMs;
-  persistCriticalEvent({
-    eventId: `transfer_completed:${record.transferId}`,
-    instanceId: record.toMapInstanceId,
-    accountId: record.accountId,
-    eventType: "map_transfer_completed",
-    eventPayload: {
-      transferId: record.transferId,
-      sourceReleasedAtMs: record.sourceReleasedAtMs,
-      destinationAcceptedAtMs: record.destinationAcceptedAtMs
-    },
-    eventAtMs: atMs
-  });
 }
 
 function sweepExpiredTransfers(): void {
@@ -877,6 +1177,26 @@ function persistCriticalEvent(payload: PersistCriticalEventRequest): void {
     eventType,
     eventPayloadJson,
     eventAtMs: Math.max(0, Math.floor(payload.eventAtMs))
+  });
+}
+
+function persistInventoryMutation(payload: PersistInventoryMutationRequest): void {
+  const accountId = Math.max(1, Math.floor(payload.accountId));
+  if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+    return;
+  }
+  persistence.saveInventoryState(accountId, payload.snapshot);
+  persistCriticalEvent({
+    eventId: payload.eventId,
+    instanceId: payload.instanceId,
+    accountId,
+    eventType: "inventory_mutation",
+    eventPayload: {
+      action: payload.action,
+      itemCount: payload.snapshot.items.length,
+      equipmentSlots: Object.keys(payload.snapshot.equipment)
+    },
+    eventAtMs: payload.eventAtMs
   });
 }
 

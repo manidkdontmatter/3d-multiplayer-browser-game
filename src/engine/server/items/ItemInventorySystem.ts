@@ -20,7 +20,7 @@ import {
   type StarterWorldItemDefinition
 } from "../../shared/index";
 import type { ItemCommand as ItemWireCommand } from "../../shared/netcode";
-import type { PersistenceService } from "../persistence/PersistenceService";
+import { GUEST_ACCOUNT_ID_BASE, type PersistenceService } from "../persistence/PersistenceService";
 
 const INTERACTION_MAX_DISTANCE = 3.35;
 const INTERACTION_MAX_DISTANCE_SQ = INTERACTION_MAX_DISTANCE * INTERACTION_MAX_DISTANCE;
@@ -64,6 +64,13 @@ export interface ItemInventorySystemOptions<TUser> {
   readonly syncWorldItem: (item: WorldItemObject) => void;
   readonly removeWorldItem: (item: WorldItemObject) => void;
   readonly queueInventoryState: (user: TUser, snapshot: InventoryStateSnapshot) => void;
+  readonly persistInventoryMutation: (
+    accountId: number,
+    snapshot: InventoryStateSnapshot,
+    action: number,
+    eventId: string,
+    eventAtMs: number
+  ) => void;
 }
 
 interface MutableInventoryState {
@@ -75,6 +82,7 @@ interface MutableInventoryState {
 export class ItemInventorySystem<TUser> {
   private readonly inventoriesByAccountId = new Map<number, MutableInventoryState>();
   private readonly worldItemsByNid = new Map<number, WorldItemObject>();
+  private readonly pendingInventoryByAccountId = new Map<number, InventoryStateSnapshot>();
   private nextInventoryItemInstanceId: number;
   private criticalEventSequence = 1;
 
@@ -114,6 +122,14 @@ export class ItemInventorySystem<TUser> {
       return;
     }
     this.options.queueInventoryState(user, this.ensureInventoryLoaded(player.accountId));
+  }
+
+  public queuePendingInventorySnapshot(accountId: number, snapshot: InventoryStateSnapshot): void {
+    if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
+    }
+    this.pendingInventoryByAccountId.set(accountId, snapshot);
+    this.rebaseNextInventoryItemInstanceId(snapshot);
   }
 
   public applyCommand(userId: number, command: Partial<ItemWireCommand>): void {
@@ -430,8 +446,13 @@ export class ItemInventorySystem<TUser> {
   private ensureMutableInventory(accountId: number): MutableInventoryState {
     let inventory = this.inventoriesByAccountId.get(accountId);
     if (!inventory) {
-      inventory = this.normalizeInventory(this.options.persistence.loadInventoryState(accountId));
+      const pending = this.pendingInventoryByAccountId.get(accountId);
+      if (pending) {
+        this.pendingInventoryByAccountId.delete(accountId);
+      }
+      inventory = this.normalizeInventory(pending ?? this.options.persistence.loadInventoryState(accountId));
       this.inventoriesByAccountId.set(accountId, inventory);
+      this.rebaseNextInventoryItemInstanceId(this.toSnapshot(inventory));
     }
     return inventory;
   }
@@ -470,25 +491,30 @@ export class ItemInventorySystem<TUser> {
 
   private persistInventory(accountId: number, inventory: MutableInventoryState, action: number): void {
     const snapshot = this.toSnapshot(inventory);
-    this.options.persistence.saveInventoryState(accountId, snapshot);
-    this.options.persistence.saveCriticalEvent({
-      eventId: `inventory-${accountId}-${Date.now()}-${this.criticalEventSequence++}`,
-      instanceId: process.env.MAP_INSTANCE_ID ?? "default-1",
+    const eventAtMs = Date.now();
+    this.options.persistInventoryMutation(
       accountId,
-      eventType: "inventory_mutation",
-      eventPayloadJson: JSON.stringify({
-        action,
-        itemCount: snapshot.items.length,
-        equipmentSlots: Object.keys(snapshot.equipment)
-      }),
-      eventAtMs: Date.now()
-    });
+      snapshot,
+      action,
+      `inventory-${accountId}-${eventAtMs}-${this.criticalEventSequence++}`,
+      eventAtMs
+    );
   }
 
   private allocateInventoryItemInstanceId(): number {
     const id = this.nextInventoryItemInstanceId;
     this.nextInventoryItemInstanceId = Math.min(0x7fffffff, this.nextInventoryItemInstanceId + 1);
     return id;
+  }
+
+  private rebaseNextInventoryItemInstanceId(snapshot: InventoryStateSnapshot): void {
+    let maxItemInstanceId = this.nextInventoryItemInstanceId - 1;
+    for (const item of snapshot.items) {
+      if (item.itemInstanceId > maxItemInstanceId) {
+        maxItemInstanceId = item.itemInstanceId;
+      }
+    }
+    this.nextInventoryItemInstanceId = Math.max(this.nextInventoryItemInstanceId, maxItemInstanceId + 1);
   }
 
   private normalizeAction(rawAction: unknown): number {

@@ -68,4 +68,4 @@ export function injectAssetCatalog(catalog: AssetCatalogDefinition[]): void {
 }
 
 // ASSET_CATALOG is now provided by the game layer via injectAssetCatalog().
-// See src/game/shared/assetCatalog.ts for the game-specific definitions.
+// See src/game/client/assetCatalog.ts for the game-specific definitions.

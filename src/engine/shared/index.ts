@@ -11,7 +11,6 @@ export * from "./movement";
 export * from "./movementMode";
 export * from "./movingReferenceFrames";
 export * from "./netcode";
-export * from "./orchestrator";
 export * from "./physicsCollisionGroups";
 export * from "./platforms";
 export * from "./rotation";

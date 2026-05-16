@@ -45,7 +45,6 @@ import {
   getEnvironmentVolumeWeight,
   generateDeterministicVisualBushes,
   generateDeterministicVisualGrass,
-  getRuntimeMapLayout,
   VOID_ENVIRONMENT_VOLUME_DEFINITIONS,
   type EnvironmentVolumeDefinition,
   type VisualGrassInstance

@@ -366,6 +366,18 @@ export class NetworkClient {
     return this.interpolation.getAckJitterMs();
   }
 
+  public getLatencyMs(): number {
+    return this.transport.getLatencyMs();
+  }
+
+  public getServerClockOffsetMs(): number {
+    return this.transport.getAverageTimeDifferenceMs();
+  }
+
+  public getCurrentServerUrl(): string | null {
+    return this.transport.getCurrentServerUrl();
+  }
+
   public getEstimatedServerTimeSeconds(nowMs: number = performance.now()): number | null {
     const diff = this.transport.getAverageTimeDifferenceMs();
     if (!Number.isFinite(diff)) {

@@ -22,6 +22,7 @@ interface MapProcessSupervisorOptions {
   readonly restartMaxInWindow?: number;
   readonly quarantineMs?: number;
   readonly onMapProcessExit?: (instanceId: string) => void;
+  readonly onMapProcessMessage?: (instanceId: string, message: unknown) => void;
 }
 
 export class MapProcessSupervisor {
@@ -32,17 +33,17 @@ export class MapProcessSupervisor {
   private readonly restartMaxInWindow: number;
   private readonly quarantineMs: number;
   private readonly onMapProcessExit?: (instanceId: string) => void;
+  private readonly onMapProcessMessage?: (instanceId: string, message: unknown) => void;
   private stopping = false;
 
   public constructor(
-    private readonly orchestratorBaseUrl: string,
-    private readonly internalRpcSecret: string,
     options?: MapProcessSupervisorOptions
   ) {
     this.restartWindowMs = Math.max(1_000, Math.floor(options?.restartWindowMs ?? 60_000));
     this.restartMaxInWindow = Math.max(1, Math.floor(options?.restartMaxInWindow ?? 3));
     this.quarantineMs = Math.max(1_000, Math.floor(options?.quarantineMs ?? 60_000));
     this.onMapProcessExit = options?.onMapProcessExit;
+    this.onMapProcessMessage = options?.onMapProcessMessage;
   }
 
   public start(specs: readonly MapProcessSpec[]): void {
@@ -108,8 +109,6 @@ export class MapProcessSupervisor {
         cwd: repoRoot,
         env: {
           ...process.env,
-          ORCHESTRATOR_INTERNAL_URL: this.orchestratorBaseUrl,
-          ORCH_INTERNAL_RPC_SECRET: this.internalRpcSecret,
           SERVER_DISABLE_PERSISTENCE_WRITES: "1"
         },
         stdio: ["ignore", "inherit", "inherit", "ipc"]
@@ -133,6 +132,9 @@ export class MapProcessSupervisor {
       process: child
     };
     this.managed.set(spec.instanceId, managed);
+    child.on("message", (message) => {
+      this.onMapProcessMessage?.(spec.instanceId, message);
+    });
     child.on("exit", (code, signal) => {
       this.managed.delete(spec.instanceId);
       this.onMapProcessExit?.(spec.instanceId);

@@ -15,6 +15,7 @@ export class InputController {
   private toggleFlyQueued = false;
   private cameraFreezeToggleQueued = false;
   private cspToggleQueued = false;
+  private diagnosticsToggleQueued = false;
   private mainMenuToggleQueued = false;
   private interactQueued = false;
   private primaryActionHeld = false;
@@ -148,6 +149,12 @@ export class InputController {
     return queued;
   }
 
+  public consumeDiagnosticsToggle(): boolean {
+    const queued = this.diagnosticsToggleQueued;
+    this.diagnosticsToggleQueued = false;
+    return queued;
+  }
+
   public consumeMainMenuToggle(): boolean {
     const queued = this.mainMenuToggleQueued;
     this.mainMenuToggleQueued = false;
@@ -191,6 +198,10 @@ export class InputController {
     }
     if (event.code === "KeyC" && !event.repeat) {
       this.cspToggleQueued = true;
+      return;
+    }
+    if (event.code === "KeyP" && !event.repeat) {
+      this.diagnosticsToggleQueued = true;
       return;
     }
     if (event.code === "KeyF" && !event.repeat) {
@@ -282,6 +293,7 @@ export class InputController {
     this.secondaryActionHeld = false;
     this.secondaryActionQueued = false;
     this.queuedCastSlot = null;
+    this.diagnosticsToggleQueued = false;
     this.interactQueued = false;
     this.toggleFlyQueued = false;
     this.heldKeys.clear();

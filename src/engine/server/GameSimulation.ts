@@ -8,7 +8,7 @@ import {
   PLAYER_CHARACTER_CONTROLLER_OFFSET, PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS,
   encodeInventoryStateSnapshot, getAbilityDefinitionById,
-  quaternionFromYawPitchRoll, resolveRuntimeMapConfig,
+  quaternionFromYawPitchRoll,
   type InventoryStateSnapshot, type MovementMode, SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition, CreatorSessionSnapshot } from "../shared/index";
@@ -20,6 +20,7 @@ import {
   type InputCommand as InputWireCommand
 } from "../shared/netcode";
 import { PersistenceService, type PlayerSnapshot } from "./persistence/PersistenceService";
+import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
 import { PersistenceSyncSystem } from "./persistence/PersistenceSyncSystem";
 import { DamageSystem } from "./combat/damage/DamageSystem";
 import { AbilityExecutionSystem, type AbilityUseContext } from "./combat/abilities/AbilityExecutionSystem";
@@ -94,7 +95,6 @@ export class GameSimulation {
   private readonly npcAiSystem: NpcAiSystem;
   private readonly playerLifecycleSystem: PlayerLifecycleSystem<UserLike>;
   private readonly archetypes: ServerArchetypeCatalog;
-  private readonly runtimeMapConfig = resolveRuntimeMapConfig();
   private readonly loadTestSpawnMode: "default" | "grid";
   private readonly loadTestGridSpacing: number; private readonly loadTestGridColumns: number; private readonly loadTestGridRows: number;
   private readonly populationBroadcastRebroadcastTicks = 300;
@@ -112,7 +112,8 @@ export class GameSimulation {
     private readonly nearChannel: SpatialChannelLike,
     private readonly farChannel: FarSpatialChannelLike,
     private readonly persistence: PersistenceService,
-    private readonly createUserView: CreateUserView
+    private readonly createUserView: CreateUserView,
+    private readonly ipcChannel: MapProcessIpcChannel | null = null
   ) {
     const c = this.simulationEcs.world.components;
     const indexes = this.simulationEcs as unknown as { getPlayerBody(eid: number): RAPIER.RigidBody | undefined; getPlayerCollider(eid: number): RAPIER.Collider | undefined; getCharacterBody(eid: number): RAPIER.RigidBody | undefined; getCharacterCollider(eid: number): RAPIER.Collider | undefined; getUnlockedAbilities(eid: number): Set<number> };
@@ -148,7 +149,43 @@ export class GameSimulation {
       addWorldItem: (item) => this.addWorldItem(item),
       syncWorldItem: (item) => this.syncWorldItem(item),
       removeWorldItem: (item) => this.removeWorldItem(item),
-      queueInventoryState: (user, snapshot) => this.queueInventoryStateMessage(user, snapshot)
+      queueInventoryState: (user, snapshot) => this.queueInventoryStateMessage(user, snapshot),
+      persistInventoryMutation: (accountId, snapshot, action, eventId, eventAtMs) => {
+        if (!this.ipcChannel?.isAvailable()) {
+          this.persistence.saveInventoryState(accountId, snapshot);
+          this.persistence.saveCriticalEvent({
+            eventId,
+            instanceId: process.env.MAP_INSTANCE_ID ?? "default-1",
+            accountId,
+            eventType: "inventory_mutation",
+            eventPayloadJson: JSON.stringify({
+              action,
+              itemCount: snapshot.items.length,
+              equipmentSlots: Object.keys(snapshot.equipment)
+            }),
+            eventAtMs
+          });
+          return;
+        }
+        void this.ipcChannel
+          .request("PersistInventoryMutation", {
+            accountId,
+            instanceId: process.env.MAP_INSTANCE_ID ?? "default-1",
+            action,
+            snapshot,
+            eventId,
+            eventAtMs
+          })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(response.error ?? "PersistInventoryMutation rejected.");
+            }
+          })
+          .catch((error) => {
+            console.error("[server] critical inventory persistence failed", error);
+            throw error;
+          });
+      }
     });
 
     // ── Damage ────────────────────────────────────────────────────────────
@@ -665,10 +702,16 @@ export class GameSimulation {
   }
 
   public injectPendingLoginSnapshot(accountId: number, snapshot: PlayerSnapshot): void { this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot); }
+  public injectPendingInventorySnapshot(accountId: number, snapshot: InventoryStateSnapshot): void {
+    this.itemInventorySystem.queuePendingInventorySnapshot(accountId, snapshot);
+  }
   public getPlayerSnapshotByUserId(userId: number): PlayerSnapshot | null {
     const aid = this.simulationEcs.getPlayerAccountIdByUserId(userId);
     if (aid === null) return null;
     return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(aid) as any;
+  }
+  public getInventorySnapshotByAccountId(accountId: number): InventoryStateSnapshot {
+    return this.itemInventorySystem.ensureInventoryLoaded(accountId);
   }
 
   public getRuntimeStats(): { onlinePlayers: number; activeProjectiles: number; pendingOfflineSnapshots: number; ecsEntities: number; activeNpcs: number; inactiveNpcs: number; hibernatingNpcs: number } {
