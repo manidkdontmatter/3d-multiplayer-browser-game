@@ -6,7 +6,7 @@ import { resolveProjectileProfile } from "../../../shared/index";
 export interface AbilityExecutionSystemOptions {
   readonly getElapsedSeconds: () => number;
   readonly resolveAbilityById: (unlockedAbilityIds: Set<number>, abilityId: number) => AbilityDefinition | null;
-  readonly broadcastAbilityUse: (playerNid: number, ability: AbilityDefinition) => void;
+  readonly broadcastAbilityUse: (playerNid: number, ability: AbilityDefinition, x: number, y: number, z: number) => void;
   readonly spawnProjectile: (request: {
     ownerNid: number; kind: number;
     x: number; y: number; z: number;
@@ -56,7 +56,7 @@ export class AbilityExecutionSystem {
     if (elapsed - ctx.lastPrimaryFireAtSeconds < cooldown) return;
 
     ctx.lastPrimaryFireAtSeconds = elapsed;
-    this.options.broadcastAbilityUse(ctx.nid, ability);
+    this.options.broadcastAbilityUse(ctx.nid, ability, ctx.x, ctx.y, ctx.z);
 
     if (pp) {
       this.spawnProjectileFromContext(ctx, pp);

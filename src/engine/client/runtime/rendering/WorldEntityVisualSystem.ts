@@ -16,17 +16,12 @@ import {
 import {
   buildLocationTerrainConfig,
   buildTerrainMeshData,
-  getLocationDefinitionByArchetypeId,
-  getItemDefinitionById,
-  type WorldItemState
+  getLocationDefinitionByArchetypeId
 } from "../../../shared/index";
 import type { CarrierVolumeDefinition } from "../../../shared/index";
-import type { LocationRootState, NpcState, PlatformState, TrainingDummyState } from "../types";
+import type { LocationRootState, WorldEntityState } from "../types";
 import {
-  getPlatformVisual,
-  getNpcVisual,
-  getItemVisual,
-  getDummyVisual,
+  getEntityVisual,
   getLocationVisual,
   type LocationVisualDef
 } from "./VisualRegistry";
@@ -40,10 +35,7 @@ interface LocationVisual {
 }
 
 export class WorldEntityVisualSystem {
-  private readonly platforms = new Map<number, Mesh>();
-  private readonly trainingDummies = new Map<number, Mesh>();
-  private readonly npcs = new Map<number, Mesh>();
-  private readonly worldItems = new Map<number, Mesh>();
+  private readonly worldEntities = new Map<number, Mesh>();
   private readonly locations = new Map<number, LocationVisual>();
   private readonly quatScratch = new Quaternion();
 
@@ -82,158 +74,47 @@ export class WorldEntityVisualSystem {
     }
   }
 
-  public syncPlatforms(platformStates: PlatformState[]): void {
+  public syncWorldEntities(entities: WorldEntityState[]): void {
     const activeNids = new Set<number>();
-    for (const platform of platformStates) {
-      const platformVisual = getPlatformVisual(platform.modelId);
-      if (!platformVisual) {
+    for (const entity of entities) {
+      const visual = getEntityVisual(entity.modelId);
+      if (!visual) {
         continue;
       }
-      activeNids.add(platform.nid);
-      let mesh = this.platforms.get(platform.nid);
+      activeNids.add(entity.nid);
+      let mesh = this.worldEntities.get(entity.nid);
       if (!mesh) {
         mesh = new Mesh(
-          new BoxGeometry(
-            platformVisual.halfX * 2,
-            platformVisual.halfY * 2,
-            platformVisual.halfZ * 2
-          ),
-          new MeshStandardMaterial({
-            color: platformVisual.color,
-            roughness: platformVisual.roughness ?? 0.88,
-            metalness: platformVisual.metalness ?? 0.06
-          })
-        );
-        this.platforms.set(platform.nid, mesh);
-        this.scene.add(mesh);
-      }
-
-      mesh.position.set(platform.x, platform.y, platform.z);
-      this.quatScratch.set(
-        platform.rotation.x,
-        platform.rotation.y,
-        platform.rotation.z,
-        platform.rotation.w
-      );
-      mesh.setRotationFromQuaternion(this.quatScratch);
-    }
-
-    for (const [nid, mesh] of this.platforms) {
-      if (!activeNids.has(nid)) {
-        this.scene.remove(mesh);
-        this.platforms.delete(nid);
-      }
-    }
-  }
-
-  public syncTrainingDummies(dummies: TrainingDummyState[]): void {
-    const activeNids = new Set<number>();
-    for (const dummy of dummies) {
-      activeNids.add(dummy.nid);
-      let mesh = this.trainingDummies.get(dummy.nid);
-      if (!mesh) {
-        const visual = getDummyVisual();
-        mesh = new Mesh(
-          new CylinderGeometry(visual.radius, visual.radius, visual.height, visual.segments, 1),
+          this.buildGeometry(visual.geometry, visual.geometryParams),
           new MeshStandardMaterial({
             color: visual.color,
             roughness: visual.roughness,
-            metalness: visual.metalness
+            metalness: visual.metalness,
+            emissive: visual.emissive ?? 0x000000,
+            emissiveIntensity: visual.emissiveIntensity ?? 0
           })
         );
-        this.trainingDummies.set(dummy.nid, mesh);
+        this.worldEntities.set(entity.nid, mesh);
         this.scene.add(mesh);
       }
-      const healthRatio =
-        dummy.maxHealth > 0 ? Math.max(0, Math.min(1, dummy.health / dummy.maxHealth)) : 1;
-      const material = mesh.material as MeshStandardMaterial;
-      material.color.setHSL(0.06 + healthRatio * 0.38, 0.42, 0.52);
-      mesh.position.set(dummy.x, dummy.y, dummy.z);
-      this.quatScratch.set(
-        dummy.rotation.x,
-        dummy.rotation.y,
-        dummy.rotation.z,
-        dummy.rotation.w
-      );
+      if (entity.health > 0 && entity.maxHealth > 0) {
+        const healthRatio = Math.max(0, Math.min(1, entity.health / entity.maxHealth));
+        const material = mesh.material as MeshStandardMaterial;
+        material.color.set(visual.color).multiplyScalar(0.45 + healthRatio * 0.55);
+      }
+      mesh.position.set(entity.x, entity.y, entity.z);
+      this.quatScratch.set(entity.rotationX, entity.rotationY, entity.rotationZ, entity.rotationW);
       mesh.setRotationFromQuaternion(this.quatScratch);
     }
 
-    for (const [nid, mesh] of this.trainingDummies) {
-      if (!activeNids.has(nid)) {
-        this.scene.remove(mesh);
-        this.trainingDummies.delete(nid);
-      }
-    }
-  }
-
-  public syncNpcs(npcs: NpcState[]): void {
-    const activeNids = new Set<number>();
-    for (const npc of npcs) {
-      activeNids.add(npc.nid);
-      let mesh = this.npcs.get(npc.nid);
-      if (!mesh) {
-        const npcVisual = getNpcVisual(npc.modelId);
-        const radius = npcVisual?.capsuleRadius ?? 0.35;
-        const height = npcVisual?.capsuleHeight ?? 1.9;
-        mesh = new Mesh(
-          new CylinderGeometry(radius, radius, height, 14, 1),
-          new MeshStandardMaterial({
-            color: npcVisual?.color ?? 0x888888,
-            roughness: npcVisual?.roughness ?? 0.82,
-            metalness: npcVisual?.metalness ?? 0.08
-          })
-        );
-        this.npcs.set(npc.nid, mesh);
-        this.scene.add(mesh);
-      }
-      const healthRatio =
-        npc.maxHealth > 0 ? Math.max(0, Math.min(1, npc.health / npc.maxHealth)) : 1;
-      const material = mesh.material as MeshStandardMaterial;
-      const npcColor = getNpcVisual(npc.modelId)?.color ?? 0x888888;
-      material.color.set(npcColor).multiplyScalar(0.45 + healthRatio * 0.55);
-      mesh.position.set(npc.x, npc.y, npc.z);
-      this.quatScratch.set(npc.rotation.x, npc.rotation.y, npc.rotation.z, npc.rotation.w);
-      mesh.setRotationFromQuaternion(this.quatScratch);
-    }
-
-    for (const [nid, mesh] of this.npcs) {
+    for (const [nid, mesh] of this.worldEntities) {
       if (activeNids.has(nid)) {
         continue;
       }
       this.scene.remove(mesh);
       mesh.geometry.dispose();
       (mesh.material as MeshStandardMaterial).dispose();
-      this.npcs.delete(nid);
-    }
-  }
-
-  public syncWorldItems(items: WorldItemState[]): void {
-    const activeNids = new Set<number>();
-    for (const item of items) {
-      const definition = getItemDefinitionById(item.itemArchetypeId);
-      if (!definition) {
-        continue;
-      }
-      activeNids.add(item.nid);
-      let mesh = this.worldItems.get(item.nid);
-      if (!mesh) {
-        mesh = this.createWorldItemMesh(definition.modelId);
-        this.worldItems.set(item.nid, mesh);
-        this.scene.add(mesh);
-      }
-      mesh.position.set(item.x, item.y, item.z);
-      this.quatScratch.set(item.rotation.x, item.rotation.y, item.rotation.z, item.rotation.w);
-      mesh.setRotationFromQuaternion(this.quatScratch);
-    }
-
-    for (const [nid, mesh] of this.worldItems) {
-      if (activeNids.has(nid)) {
-        continue;
-      }
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as MeshStandardMaterial).dispose();
-      this.worldItems.delete(nid);
+      this.worldEntities.delete(nid);
     }
   }
 
@@ -244,51 +125,12 @@ export class WorldEntityVisualSystem {
     }
     this.locations.clear();
 
-    for (const mesh of this.platforms.values()) {
+    for (const mesh of this.worldEntities.values()) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
       (mesh.material as MeshStandardMaterial).dispose();
     }
-    this.platforms.clear();
-
-    for (const mesh of this.trainingDummies.values()) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as MeshStandardMaterial).dispose();
-    }
-    this.trainingDummies.clear();
-
-    for (const mesh of this.npcs.values()) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as MeshStandardMaterial).dispose();
-    }
-    this.npcs.clear();
-
-    for (const mesh of this.worldItems.values()) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as MeshStandardMaterial).dispose();
-    }
-    this.worldItems.clear();
-  }
-
-  private createWorldItemMesh(modelId: number): Mesh {
-    const visual = getItemVisual(modelId);
-    if (!visual) {
-      return new Mesh(new BoxGeometry(0.22, 0.22, 0.22), new MeshStandardMaterial({ color: 0x888888 }));
-    }
-    const geometry = this.buildGeometry(visual.geometry, visual.geometryParams);
-    return new Mesh(
-      geometry,
-      new MeshStandardMaterial({
-        color: visual.color,
-        roughness: visual.roughness,
-        metalness: visual.metalness,
-        emissive: visual.emissive ?? 0x000000,
-        emissiveIntensity: visual.emissiveIntensity ?? 0
-      })
-    );
+    this.worldEntities.clear();
   }
 
   private buildGeometry(type: string, params: number[]): BufferGeometry {

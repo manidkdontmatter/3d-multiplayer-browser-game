@@ -156,7 +156,7 @@ export const abilityUseMessageSchema = defineSchema({
 });
 
 export const abilityOwnershipMessageSchema = defineSchema({
-  unlockedAbilityIdsCsv: Binary.String
+  unlockedAbilityIds: Binary.UInt16Array
 });
 
 export const serverPopulationMessageSchema = defineSchema({
@@ -354,7 +354,7 @@ export interface AbilityUseMessage {
 
 export interface AbilityOwnershipMessage {
   ntype: NType.AbilityOwnershipMessage;
-  unlockedAbilityIdsCsv: string;
+  unlockedAbilityIds: number[];
 }
 
 export interface ServerPopulationMessage {

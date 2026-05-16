@@ -82,8 +82,8 @@ export class ServerReplicationCoordinator<TUser extends ReplicationUser> {
     this.replicationMessaging.queueCreatorStateMessage(user, snapshot);
   }
 
-  public broadcastAbilityUseMessage(playerNid: number, ability: AbilityDefinition): void {
-    this.replicationMessaging.broadcastAbilityUseMessage(playerNid, ability);
+  public broadcastAbilityUseMessage(playerNid: number, ability: AbilityDefinition, x: number, y: number, z: number): void {
+    this.replicationMessaging.broadcastAbilityUseMessage(playerNid, ability, x, y, z);
   }
 
   public queueIdentityMessage(user: TUser, playerNid: number): void {

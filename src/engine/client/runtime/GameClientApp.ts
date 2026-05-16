@@ -451,14 +451,6 @@ export class GameClientApp {
 
     return {
       ...basePayload,
-      platforms: this.getRenderPlatformStates().map((p) => ({
-        nid: p.nid,
-        modelId: p.modelId,
-        x: p.x,
-        y: p.y,
-        z: p.z,
-        rotation: p.rotation
-      })),
       locationRoots: this.network.getLocationRoots().map((location) => ({
         nid: location.nid,
         modelId: location.modelId,
@@ -480,34 +472,18 @@ export class GameClientApp {
         y: projectile.y,
         z: projectile.z
       })),
-      trainingDummies: this.network.getTrainingDummies().map((dummy) => ({
-        nid: dummy.nid,
-        modelId: dummy.modelId,
-        x: dummy.x,
-        y: dummy.y,
-        z: dummy.z,
-        rotation: dummy.rotation,
-        health: dummy.health,
-        maxHealth: dummy.maxHealth
-      })),
-      npcs: this.network.getNpcs().map((npc) => ({
-        nid: npc.nid,
-        modelId: npc.modelId,
-        x: npc.x,
-        y: npc.y,
-        z: npc.z,
-        rotation: npc.rotation,
-        health: npc.health,
-        maxHealth: npc.maxHealth
-      })),
-      worldItems: this.network.getWorldItems().map((item) => ({
-        nid: item.nid,
-        archetypeId: item.itemArchetypeId,
-        name: getItemDefinitionById(item.itemArchetypeId)?.name ?? "Unknown",
-        quantity: item.itemQuantity,
-        x: item.x,
-        y: item.y,
-        z: item.z
+      worldEntities: [
+        ...this.getRenderPlatformStates(),
+        ...this.network.getWorldEntities()
+      ].map((e) => ({
+        nid: e.nid,
+        modelId: e.modelId,
+        x: e.x, y: e.y, z: e.z,
+        rotationX: e.rotationX, rotationY: e.rotationY, rotationZ: e.rotationZ, rotationW: e.rotationW,
+        health: e.health,
+        maxHealth: e.maxHealth,
+        itemArchetypeId: e.itemArchetypeId,
+        itemQuantity: e.itemQuantity
       })),
       inventory: {
         items: this.inventoryState.items.map((item) => ({
@@ -682,6 +658,10 @@ export class GameClientApp {
 
   private createRenderSnapshot(frameDeltaSeconds: number): RenderFrameSnapshot {
     const renderServerTimeSeconds = this.networkOrchestrator.getRenderServerTimeSeconds(this.isCspActive());
+    const worldEntities = [
+      ...this.getRenderPlatformStates(),
+      ...this.network.getWorldEntities()
+    ];
     return {
       frameDeltaSeconds,
       renderServerTimeSeconds,
@@ -692,10 +672,7 @@ export class GameClientApp {
       remotePlayers: this.network.getRemotePlayers(),
       abilityUseEvents: this.network.consumeAbilityUseEvents(),
       locationRoots: this.network.getLocationRoots(),
-      platforms: this.getRenderPlatformStates(),
-      npcs: this.network.getNpcs(),
-      trainingDummies: this.network.getTrainingDummies(),
-      worldItems: this.network.getWorldItems(),
+      worldEntities,
       projectiles: this.network.getProjectiles()
     };
   }
@@ -778,10 +755,10 @@ export class GameClientApp {
     const direction = this.computeViewDirection(pose.yaw, pose.pitch);
     let bestNid: number | null = null;
     let bestScore = Number.NEGATIVE_INFINITY;
-    for (const item of this.network.getWorldItems()) {
-      const dx = item.x - pose.x;
-      const dy = item.y + 0.85 - pose.y;
-      const dz = item.z - pose.z;
+    for (const entity of this.network.getWorldEntities().filter(e => e.itemArchetypeId > 0)) {
+      const dx = entity.x - pose.x;
+      const dy = entity.y + 0.85 - pose.y;
+      const dz = entity.z - pose.z;
       const distance = Math.hypot(dx, dy, dz);
       if (distance > 3.35 || distance <= 0.001) {
         continue;
@@ -793,7 +770,7 @@ export class GameClientApp {
       const score = dot * 2 - distance * 0.22;
       if (score > bestScore) {
         bestScore = score;
-        bestNid = item.nid;
+        bestNid = entity.nid;
       }
     }
     return bestNid;
@@ -806,7 +783,7 @@ export class GameClientApp {
       this.interactPromptNode.textContent = "";
       return;
     }
-    const item = this.network.getWorldItems().find((entry) => entry.nid === targetNid);
+    const item = this.network.getWorldEntities().find((entry) => entry.nid === targetNid && entry.itemArchetypeId > 0);
     const definition = item ? getItemDefinitionById(item.itemArchetypeId) : null;
     if (!item || !definition) {
       this.interactPromptNode.className = "interact-prompt-hidden";

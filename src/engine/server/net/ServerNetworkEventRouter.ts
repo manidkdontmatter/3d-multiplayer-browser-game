@@ -8,6 +8,8 @@ import { ServerCommandRouter } from "./ServerCommandRouter";
 import type { ServerNetworkUser } from "./ServerNetworkTypes";
 
 const MAP_TRANSFER_DISCONNECT_DELAY_MS = 800;
+const MAX_CREATOR_COMMAND_JSON_BYTES = 16384;
+const MAX_MAP_TRANSFER_TARGET_ID_CHARS = 256;
 
 export class ServerNetworkEventRouter {
   private readonly commandRouter = new ServerCommandRouter<ServerNetworkUser>();
@@ -44,6 +46,10 @@ export class ServerNetworkEventRouter {
       onMapTransferCommand: (commandUser, command) =>
         void this.handleMapTransferCommand(commandUser, command.targetMapInstanceId),
       onCreatorCommand: (commandUser, command) => {
+        if (typeof command.commandJson !== "string" || command.commandJson.length > MAX_CREATOR_COMMAND_JSON_BYTES) {
+          console.warn("[server] creator command too large, dropped");
+          return;
+        }
         try {
           const payload = JSON.parse(command.commandJson) as {
             sessionId: number;
@@ -123,7 +129,7 @@ export class ServerNetworkEventRouter {
   private async handleMapTransferCommand(user: ServerNetworkUser, targetMapRaw: unknown): Promise<void> {
     const targetMapInstanceId =
       typeof targetMapRaw === "string" ? targetMapRaw.trim() : "";
-    if (targetMapInstanceId.length === 0) {
+    if (targetMapInstanceId.length === 0 || targetMapInstanceId.length > MAX_MAP_TRANSFER_TARGET_ID_CHARS) {
       return;
     }
     const fromMapInstanceId = process.env.MAP_INSTANCE_ID ?? "default-1";

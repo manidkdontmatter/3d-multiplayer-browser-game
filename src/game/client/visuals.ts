@@ -2,9 +2,7 @@
 import { Color } from "three";
 import {
   injectVisualPalette,
-  type PlatformVisualDef,
-  type NpcVisualDef,
-  type ItemVisualDef,
+  type EntityVisualDef,
   type LocationVisualDef
 } from "../../engine/client/runtime/rendering/VisualRegistry";
 import {
@@ -24,7 +22,8 @@ import {
   MODEL_ID_ITEM_VITALITY_SHARD,
   MODEL_ID_ITEM_FOCUS_BLADE,
   MODEL_ID_ITEM_ETHER_CRYSTAL,
-  MODEL_ID_PROJECTILE_PRIMARY
+  MODEL_ID_PROJECTILE_PRIMARY,
+  MODEL_ID_TRAINING_DUMMY
 } from "../../engine/shared/config";
 import {
   ENVIRONMENT_PRESET_VOID_NEUTRAL,
@@ -34,18 +33,17 @@ import {
   ENVIRONMENT_PRESET_VOID_DEEP
 } from "../../engine/shared/worldLocations";
 
-const platforms = new Map<number, PlatformVisualDef>([
-  [MODEL_ID_PLATFORM_LINEAR, { halfX: 2.25, halfY: 0.35, halfZ: 2.25, color: 0xd8b691 }],
-  [MODEL_ID_PLATFORM_ROTATING, { halfX: 2.8, halfY: 0.35, halfZ: 2.8, color: 0x9ea7d8 }]
-]);
-
-const npcs = new Map<number, NpcVisualDef>([
-  [MODEL_ID_NPC_HOSTILE_GUARD, { color: 0xd9463e }],
-  [MODEL_ID_NPC_DOCILE_FLEE, { color: 0xf2d34f }],
-  [MODEL_ID_NPC_WANDERER, { color: 0x52c96b }]
-]);
-
-const items = new Map<number, ItemVisualDef>([
+const entities = new Map<number, EntityVisualDef>([
+  // Platforms
+  [MODEL_ID_PLATFORM_LINEAR, { geometry: "box", geometryParams: [4.5, 0.7, 4.5], color: 0xd8b691, roughness: 0.88, metalness: 0.06 }],
+  [MODEL_ID_PLATFORM_ROTATING, { geometry: "box", geometryParams: [5.6, 0.7, 5.6], color: 0x9ea7d8, roughness: 0.88, metalness: 0.06 }],
+  // NPCs
+  [MODEL_ID_NPC_HOSTILE_GUARD, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0xd9463e, roughness: 0.82, metalness: 0.08 }],
+  [MODEL_ID_NPC_DOCILE_FLEE, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0xf2d34f, roughness: 0.82, metalness: 0.08 }],
+  [MODEL_ID_NPC_WANDERER, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0x52c96b, roughness: 0.82, metalness: 0.08 }],
+  // Training dummy
+  [MODEL_ID_TRAINING_DUMMY, { geometry: "cylinder", geometryParams: [0.42, 0.42, 1.9, 12, 1], color: 0xa6c9d8, roughness: 0.88, metalness: 0.08 }],
+  // World items
   [MODEL_ID_ITEM_VITALITY_SHARD, { geometry: "dodecahedron", geometryParams: [0.22, 0], color: 0x74f2b2, roughness: 0.42, metalness: 0.06, emissive: 0x74f2b2, emissiveIntensity: 0.28 }],
   [MODEL_ID_ITEM_FOCUS_BLADE, { geometry: "box", geometryParams: [0.18, 0.9, 0.18], color: 0xbfc7d5, roughness: 0.42, metalness: 0.06 }],
   [MODEL_ID_ITEM_ETHER_CRYSTAL, { geometry: "dodecahedron", geometryParams: [0.28, 0], color: 0x8fb7ff, roughness: 0.42, metalness: 0.2, emissive: 0x8fb7ff, emissiveIntensity: 0.28 }]
@@ -99,7 +97,7 @@ const environmentPresets = new Map<number, EnvironmentPreset>([
 ]);
 
 export function initVisuals(): void {
-  injectVisualPalette({ platforms, npcs, items, locations });
+  injectVisualPalette({ entities, locations });
   injectEnvironmentPresets(environmentPresets);
   injectProjectilePalettes(projectilePalettes);
 }

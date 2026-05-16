@@ -68,7 +68,7 @@ export class AbilityStateStore {
     }
 
     if (typed?.ntype === NType.AbilityOwnershipMessage) {
-      const ids = this.parseOwnershipCsv(typed.unlockedAbilityIdsCsv);
+      const ids = this.normalizeIdArray(typed.unlockedAbilityIds);
       this.ownedAbilityIds = new Set<number>(ids);
       this.pendingOwnedAbilityIds = ids;
       return true;
@@ -235,21 +235,17 @@ export class AbilityStateStore {
     return Math.max(0, Math.min(max, integer));
   }
 
-  private parseOwnershipCsv(csv: unknown): number[] {
-    if (typeof csv !== "string" || csv.length === 0) {
+  private normalizeIdArray(raw: unknown): number[] {
+    if (!Array.isArray(raw) || raw.length === 0) {
       return [];
     }
     const ids: number[] = [];
     const seen = new Set<number>();
-    for (const part of csv.split(",")) {
-      if (!part) {
+    for (const entry of raw) {
+      if (typeof entry !== "number" || !Number.isFinite(entry)) {
         continue;
       }
-      const parsed = Number.parseInt(part, 10);
-      if (!Number.isFinite(parsed)) {
-        continue;
-      }
-      const normalized = this.clampUnsignedInt(parsed, 0xffff);
+      const normalized = this.clampUnsignedInt(entry, 0xffff);
       if (normalized <= 0 || seen.has(normalized)) {
         continue;
       }

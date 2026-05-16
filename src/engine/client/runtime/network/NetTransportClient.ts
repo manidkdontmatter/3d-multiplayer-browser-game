@@ -89,6 +89,10 @@ export class NetTransportClient {
     return typeof rawLatency === "number" && Number.isFinite(rawLatency) ? rawLatency : 0;
   }
 
+  public getAverageTimeDifferenceMs(): number {
+    return (this.client.network as { chronus?: { averageTimeDifference: number } }).chronus?.averageTimeDifference ?? 0;
+  }
+
   private disconnectActiveSocket(reason: string): void {
     const adapter = this.client.adapter as { socket?: WebSocket | null } | undefined;
     const socket = adapter?.socket;

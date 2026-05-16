@@ -32,15 +32,6 @@ export interface RemotePlayerState {
   maxHealth: number;
 }
 
-export interface PlatformState {
-  nid: number;
-  modelId: number;
-  x: number;
-  y: number;
-  z: number;
-  rotation: { x: number; y: number; z: number; w: number };
-}
-
 export interface LocationRootState {
   nid: number;
   modelId: number;
@@ -64,26 +55,20 @@ export interface ProjectileState {
   z: number;
 }
 
-export interface TrainingDummyState {
+export interface WorldEntityState {
   nid: number;
   modelId: number;
   x: number;
   y: number;
   z: number;
-  rotation: { x: number; y: number; z: number; w: number };
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  rotationW: number;
   health: number;
   maxHealth: number;
-}
-
-export interface NpcState {
-  nid: number;
-  modelId: number;
-  x: number;
-  y: number;
-  z: number;
-  rotation: { x: number; y: number; z: number; w: number };
-  health: number;
-  maxHealth: number;
+  itemArchetypeId: number;
+  itemQuantity: number;
 }
 
 export interface AbilityUseEvent {
@@ -103,9 +88,6 @@ export interface RenderFrameSnapshot {
   remotePlayers: RemotePlayerState[];
   abilityUseEvents: AbilityUseEvent[];
   locationRoots: LocationRootState[];
-  platforms: PlatformState[];
+  worldEntities: WorldEntityState[];
   projectiles: ProjectileState[];
-  worldItems: WorldItemState[];
-  npcs: NpcState[];
-  trainingDummies: TrainingDummyState[];
 }

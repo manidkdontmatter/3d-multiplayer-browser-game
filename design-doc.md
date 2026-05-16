@@ -16,12 +16,12 @@
 - Character customization and starter stat allocation happen in-game after spawn, not as a blocking front-loaded character creator.
 
 # Setting
-- The main game world is a paranormal void dimension informally understood as an otherspace/praeterspace rather than outer space. It is void-centric: players fly between sparse floating places instead of traveling across a mainland.
+- The main game world is a paranormal void dimension informally understood as an otherspace/praeterspace rather than outer space. It is void-centric: players fly between sparse floating places instead of traveling across a mainland. It is almost as if the entire game takes place in the astral realm.
 - The void contains regions with radically different atmospheres, from hellish and hostile to heavenly and peaceful. These regions are defined by complete environment presets rather than skyboxes alone: sky, fog, lighting, nebula layers, particle fields, post-processing, and later ambience audio.
 - Environment appearance is resolved by priority layers. The neutral void is the fallback, large authored void-region volumes define the broad area aesthetic, and smaller location/interior volumes override the broader region while blending smoothly at their boundaries.
 - Environment volume blending is distance-based. Broad void-region and location atmosphere changes should fade over large distances so flying between areas feels gradual rather than snapping after a short threshold.
 - The primary void sky should be a space/paranormal sky system with region-specific starfields and nebula colors, not a normal Earth-atmosphere sky. Blue-sky island bubbles can exist, but even those are environment presets that blend through the same client-only sky/fog/VFX resolver.
-- The game should not be built around a normal planet, Earth, or a large mainland. Terrain exists only as rare floating islands or realm fragments.
+- The game should not be built around a normal planet, Earth, or a large mainland. Terrain exists only as rare floating islands.
 - A strong working premise is that player characters are soul-forms or post-mortal beings given mutable bodies in this dimension. This supports respawning, transformations, flying, and self-authored powers without requiring a normal earthly origin.
 
 # Aesthetic
@@ -29,29 +29,6 @@
 - Light/optimistic overall tone (not dark, yet not cartoony).
 - Practical asset-delivery awareness (lighter texture/asset footprint where possible).
 - UI style direction keywords: astral, spiritual, etherical.
-
-# Technical / Architectural
-- The codebase is separated into engine (`src/engine/`) and game (`src/game/`). The engine provides capabilities (ECS, physics, networking, rendering, systems). The game provides archetype definitions, asset manifests, and game-specific behavior. The engine never imports from game. This allows the engine to be reused for future games.
-- There are no separate "character creator", "item creator", or "ability creator" engine systems. A single archetype system spawns any entity from a JSON component template, because in an ECS all entities are just component sets. The player-facing ability creator UI is a game-layer feature that produces archetype definitions.
-- Players will host their own servers on a VPS they own, because this game is open source so they have access to the server/client files. There is no sharding or clustering or horizontal scaling, an entire game server is just one VPS, including all persisted state. All assets are served from that VPS as well, not a separate CDN.
-- Player servers will register themselves into a separate server list app which has nothing to do with this app, the server list app is a website which displays all servers to potential players who can then click a specific server to join it, which sends them to the IP/URL of the VPS the player host has put the server on, because clicking to join a server literally leaves to another IP/Domain, this allows each server to potentially be running a highly modded version of the game with different code and assets without any problems, it is literally like leaving the server list website and going to the specific website/IP of that specific game server.
-- No state is shared between separate game servers, they're their own island, players have their own characters that only exist on that specific server etc, if they join a different server it's like starting from scratch.
-- Strict client/server separation and authoritative server simulation are mandatory.
-- Design changes must stay compatible with high-player-count authoritative netcode.
-- Only synchronize data that materially needs network sync in a professional multiplayer game; avoid syncing local-only/cosmetic state.
-- Use game design patterns where appropriate: pooling, flyweight, ecs, state pattern, command pattern, observer pattern, factory pattern, component pattern, singletons, strategy pattern, goap, fluent builder pattern, blackboard, service locator, spatial partitioning
-- a big aspect of this project's architecture is top down design, multiple top level systems that govern their systems but other systems can communicate with other systems but if possible should not directly control things that are part of another system's system, aka avoid tight coupling
-- keep systems decoupled and self contained, in their own modules
-- prefer generalized features/systems/etc rather than overly specific
-- strongly prefer data oriented design everywhere
-
-# Composition / Flexibility / Sandbox Elements
-- Because this is a sandbox game that prefers high composition (and composition over inheritance) so that it has high flexibility of gameplay, gameobjects must be highly composable from a generalized base, for example any object can potentially take damage as long as that functionality is composed onto it.
-- use ECS via BitECS, ECS is a foundational architecture for this game
-- use data driven design for composition of actors, abilities, items, etc, like Caves of Qud does. Data Driven Definitions via json.
-- we are modeling most of our "anything can be anything" architecture after the game Caves of Qud which has one of the most composable game systems ever made, it does not use classes or strict hierarchies but greatly favors extreme composition and flexibility so that "anything can be anything" almost. for example, a fire does not know what "wood" is, it just knows if something is flammable. that's why we try to keep things generic and flexible.
-- The replication layer and the simulation layer are two decoupled and self contained layers. One example of this is the ecs entities (which are objects that exist in our 3d world usually) are not the same as nengi entities (which are used for state replication), but an object in our world (ecs entity) does know about its nengi entity, but they are not the same object. the ecs entity uses its nengi entity to replicate its state.
-- An example is, everything can potentially be damageable, and have a health value
 
 # General Details
 - The game has proximity voice chat so players can communicate with nearby players
@@ -74,26 +51,13 @@
 - The primary world is one huge void map composed of authored floating locations. A location can be a terrain island, castle, shrine, ruin, arena, mothership, airship, mobile base, platform cluster, or other large object.
 - There is no canonical mainland and no ocean-surrounded default terrain. Old mainland/ocean assumptions are deprecated unless a specific modded map intentionally uses them.
 - The void map is authored as a sparse set of major location roots, likely tens rather than thousands of major places. These roots are replicated and interest-managed so clients discover and stream nearby locations.
-- Interest management uses separate near and far spatial channels. Near spatial replication is for players, NPCs, projectiles, pickups, and normal interactables; far spatial replication is for large distant roots such as locations, landmarks, major ships, and other objects that should be visible from much farther away.
 - A location root is a lightweight authoritative object. Its children can be local/generated/rendered content such as model pieces, procedural terrain, crystal bowls, collision proxies, visual effects, and environment volumes.
-- Authored environment volumes are not inherently location-specific. Large void-region volumes are map-authored areas in empty space; location-specific volumes are smaller high-priority child volumes attached to islands, castles, ships, interiors, or other places. Locations may define multiple child volumes, such as a long box for a ship hull, smaller boxes for towers/rooms, and spheres for loose outdoor atmosphere.
-- Terrain islands are optional location children. For prototyping they can use square/rectangular procedural terrain. Final terrain islands will often be circular and may use crystal/glass bowl undersides so flying underneath looks intentional.
-- Large model-based locations such as castles and motherships should usually be authored assets or primitive prototype kitbashes, not terrain.
-- Static locations can be fixed in void space. Moving locations are freely movable world objects and are not limited to rail/platform motion.
-- The current small moving platform concept remains useful for elevators, slabs, arena pieces, and traversal tests, but it is not the foundation for moving castles, ships, or motherships.
-- Large moving locations use moving reference frames: one root transform, local child geometry, influence volumes, and occupants/entities that inherit the root motion while attached.
-- Large moving-location carry is determined by authored carrier/reference-frame volumes, not by the location's physical collision mesh. Collision geometry, carry detection, visual debug overlays, and child transform parenting are separate systems.
-- A moving location may have multiple local-space carrier volumes covering different parts of the structure. Independent occupants inside those volumes inherit the root transform delta, including rotation around the moving root.
-- Objects that are authored or parented as part of a moving location are already in that root's transform hierarchy and must not receive extra occupant carry.
-- Moving-reference-frame support must account for different actor motion models: kinematic character-controller actors such as players/NPCs require explicit deterministic carry in their movement step, while future dynamic physics bodies can use physics overlap/filtering paths.
-- The void can still support multiple map processes for special maps, modded servers, arenas, admin maps, or future content, but the main fantasy is one enormous sparse void map.
-- Biomes remain useful for procedural terrain islands, but biome selection must be controllable per island rather than only globally derived from one terrain seed.
 
 # UI
 - A typical inventory system of an RPG where you have a menu of items/etc you possess.
 - A typical menu to view your character stats and put points into them and add/remove attributes from your character and other important information about your character
 - A typical hotbar to drag your abilities and items onto
-- Typical status bars to see your character's health, stamina, battle power
+- Typical status bars to see your character's health, stamina, etc
 - A menu similar to an inventory menu but for your abilities you possess instead, you can drag them from there onto your hotbar
 - A menu allowing you to create new abilities, which means putting points into it and adding attributes to it, and after creating it it appears in your abilities menu
 
@@ -114,10 +78,9 @@
 # Abilities
 - All abilities are created by players for their own use. They create an ability for themselves to use. They choose an ability type (melee, projectile, area of effect, energy beam, or buff), then they can put points into that ability's stats, then add attributes to the ability. Each ability type has varying stats and attributes only applicable to that type, although there are some that exist for all types. Players can teach their abilities to other players by walking up to that player and doing some sort of interaction that teaches them the ability that is yet to be figured out.
 - Some attributes on abilities include status effects like stun, and bleed (damage over time)
-- A few abilities aren't part of the ability creator because making the ability creator flexible enough to support that type of ability would be too much effort, for example you can double W, A, S, or D, and you will dash in that direction about 3 meters very quickly, or flying, which is an ability where you can freely fly around and you can toggle it on or off with the F key.
 
 # Items
-- Items can lay on the ground, ready to be picked up by players via some interactions yet to be determined.
+- Items can lay on the ground, ready to be picked up by players via some interaction
 - Players can also drop their items from their inventory on the ground
 - There are equippables, which includes weapons, clothes, etc.
 - There are consumables.
@@ -130,7 +93,7 @@
 - There is a system that tracks when you are fighting by whether you have dealt damage to another player/npc AND ALSO have been dealt damage to yourself by another player/npc, meaning you are both actively fighting each other (within the past 5 seconds btw). it determines this means you are in combat and if you are in combat you gain 10 xp per second and at 100 xp you level up which gives you 1 stat point, required xp to the next level then increases by 10.
 - Your character has a "battle power (BP)" rating which represents the overall power of your character, BP is derived from how many total stat points you have put into your stats, BP equals the amount of points you put into your stats to the power of 3. BP doesn't do anything itself, it is just for bragging rights and so other players can see how powerful you are in one convenient number.
 
-# Factions
+# Factions / Guilds
 - There are player made factions, they're the same concept as guilds, any player can make their own faction and invite other players. You can view a faction menu to see what factions you are in and click a faction for details such as who all is in the faction.
 
 # Weather and Day Night Cycle etc

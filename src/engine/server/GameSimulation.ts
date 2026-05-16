@@ -97,7 +97,8 @@ export class GameSimulation {
   private readonly runtimeMapConfig = resolveRuntimeMapConfig();
   private readonly loadTestSpawnMode: "default" | "grid";
   private readonly loadTestGridSpacing: number; private readonly loadTestGridColumns: number; private readonly loadTestGridRows: number;
-  private readonly populationBroadcastIntervalTicks = 10;
+  private readonly populationBroadcastRebroadcastTicks = 300;
+  private lastBroadcastPlayerCount: number | null = null;
   private readonly npcPlayerAlertIntervalSeconds: number; private readonly npcPlayerAlertMemorySeconds: number;
   private readonly npcPlayerAlertShape: RAPIER.Ball;
   private readonly aiPerceptionTargetByColliderHandle = new Map<number, {
@@ -229,12 +230,12 @@ export class GameSimulation {
     this.abilityExecutionSystem = new AbilityExecutionSystem({
       getElapsedSeconds: () => this.elapsedSeconds,
       resolveAbilityById: (unlockedAbilityIds, abilityId) => this.getAbilityDefinitionForUnlockedSet(unlockedAbilityIds, abilityId),
-      broadcastAbilityUse: (playerNid, ability) => {
-        this.replication.broadcastAbilityUseMessage(playerNid, ability);
+      broadcastAbilityUse: (playerNid, ability, x, y, z) => {
+        this.replication.broadcastAbilityUseMessage(playerNid, ability, x, y, z);
         this.events.emit<AbilityUsedPayload>(GameEvent.ABILITY_USED, {
           ownerNid: playerNid, abilityId: ability.id,
           category: ability.category, serverTick: this.tickNumber,
-          x: 0, y: 0, z: 0
+          x, y, z
         });
       },
       spawnProjectile: (req) => this.projectileSystem.spawn(req),
@@ -882,9 +883,15 @@ export class GameSimulation {
     const rk = Math.max(0, Math.floor(kind)); return this.archetypes.projectiles.get(rk)?.modelId ?? this.archetypes.projectiles.get(1)?.modelId ?? 0;
   }
   private maybeBroadcastServerPopulation(): void {
-    if (this.tickNumber % this.populationBroadcastIntervalTicks !== 0) return;
-    const op = this.simulationEcs.getOnlinePlayerCount();
-    for (const user of this.usersById.values()) user.queueMessage({ ntype: NType.ServerPopulationMessage, onlinePlayers: Math.max(0, Math.min(0xffff, Math.floor(op))) });
+    const playerCount = this.simulationEcs.getOnlinePlayerCount();
+    const changed = this.lastBroadcastPlayerCount !== playerCount;
+    const stale = this.tickNumber % this.populationBroadcastRebroadcastTicks === 0;
+    if (!changed && !stale) return;
+    this.lastBroadcastPlayerCount = playerCount;
+    const wireCount = Math.max(0, Math.min(0xffff, Math.floor(playerCount)));
+    for (const user of this.usersById.values()) {
+      user.queueMessage({ ntype: NType.ServerPopulationMessage, onlinePlayers: wireCount });
+    }
   }
 
   // ── Player lifecycle ──────────────────────────────────────────────────────

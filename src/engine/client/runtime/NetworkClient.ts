@@ -23,11 +23,9 @@ import { SERVER_TICK_RATE } from "../../shared/config";
 import type {
   LocationRootState,
   MovementInput,
-  PlatformState,
   ProjectileState,
   RemotePlayerState,
-  NpcState,
-  TrainingDummyState,
+  WorldEntityState,
   AbilityUseEvent
 } from "./types";
 import { AbilityStateStore } from "./network/AbilityStateStore";
@@ -39,7 +37,6 @@ import { AckReconciliationBuffer } from "./network/AckReconciliationBuffer";
 import { InterpolationController } from "./network/InterpolationController";
 import { InboundMessageRouter } from "./network/InboundMessageRouter";
 import { NetTransportClient } from "./network/NetTransportClient";
-import { ServerTimeSync } from "./network/ServerTimeSync";
 import { SnapshotStore } from "./network/SnapshotStore";
 import type {
   AbilityEventBatch,
@@ -61,7 +58,6 @@ export class NetworkClient {
   private readonly creatorBridge = new CreatorNetworkBridge();
   private readonly inventory = new InventoryStateStore();
   private readonly interpolation = new InterpolationController();
-  private readonly serverTimeSync = new ServerTimeSync();
   private readonly ackBuffer: AckReconciliationBuffer;
   private readonly inboundMessageRouter = new InboundMessageRouter();
   private readonly netSimulation = this.resolveNetSimulationConfig();
@@ -71,9 +67,8 @@ export class NetworkClient {
   private pendingMapTransferInstruction: MapTransferInstruction | null = null;
 
   public constructor() {
-    this.ackBuffer = new AckReconciliationBuffer((acceptedAtMs, serverTick) => {
+    this.ackBuffer = new AckReconciliationBuffer((acceptedAtMs, _serverTick) => {
       this.interpolation.observeAckArrival(acceptedAtMs);
-      this.serverTimeSync.observeAck(serverTick, acceptedAtMs);
     });
 
     this.transport = new NetTransportClient(
@@ -85,7 +80,6 @@ export class NetworkClient {
         this.creatorBridge.reset();
         this.inventory.reset();
         this.interpolation.reset();
-        this.serverTimeSync.reset();
         this.ackBuffer.reset();
         this.queuedAbilityCommand = null;
         this.serverPlayerCount = null;
@@ -322,10 +316,6 @@ export class NetworkClient {
     return this.snapshots.getLocalPlayerPose(this.localPlayerNid);
   }
 
-  public getPlatforms(): PlatformState[] {
-    return this.snapshots.getPlatforms();
-  }
-
   public getLocationRoots(): LocationRootState[] {
     return this.snapshots.getLocationRoots();
   }
@@ -334,16 +324,8 @@ export class NetworkClient {
     return this.snapshots.getProjectiles();
   }
 
-  public getTrainingDummies(): TrainingDummyState[] {
-    return this.snapshots.getTrainingDummies();
-  }
-
-  public getNpcs(): NpcState[] {
-    return this.snapshots.getNpcs();
-  }
-
-  public getWorldItems() {
-    return this.snapshots.getWorldItems();
+  public getWorldEntities(): WorldEntityState[] {
+    return this.snapshots.getWorldEntities();
   }
 
   public getConnectionState(): "connected" | "local-only" {
@@ -385,7 +367,11 @@ export class NetworkClient {
   }
 
   public getEstimatedServerTimeSeconds(nowMs: number = performance.now()): number | null {
-    return this.serverTimeSync.getEstimatedServerTimeSeconds(nowMs);
+    const diff = this.transport.getAverageTimeDifferenceMs();
+    if (!Number.isFinite(diff)) {
+      return null;
+    }
+    return Math.max(0, (nowMs - diff) / 1000);
   }
 
   public syncSentYaw(yaw: number): void {

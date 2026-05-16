@@ -120,7 +120,7 @@ export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
     });
   }
 
-  public broadcastAbilityUseMessage(playerNid: number, ability: AbilityDefinition): void {
+  public broadcastAbilityUseMessage(playerNid: number, ability: AbilityDefinition, x: number, y: number, z: number): void {
     const abilityId = Math.max(0, Math.min(0xffff, Math.floor(ability.id)));
     const category = abilityCategoryToWireValue(ability.category);
     this.options.queueSpatialMessage({
@@ -129,9 +129,9 @@ export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
       abilityId,
       category,
       serverTick: this.options.getTickNumber(),
-      x: 0,
-      y: 0,
-      z: 0
+      x,
+      y,
+      z
     });
   }
 
@@ -182,7 +182,7 @@ export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
     ).sort((a, b) => a - b);
     user.queueMessage({
       ntype: NType.AbilityOwnershipMessage,
-      unlockedAbilityIdsCsv: normalized.join(",")
+      unlockedAbilityIds: normalized
     });
   }
 

@@ -4,24 +4,14 @@ import {
   MOVEMENT_MODE_GROUNDED,
   sanitizeMovementMode,
   LOCATION_KIND_NONE,
-  MODEL_ID_PLATFORM_LINEAR,
-  MODEL_ID_PLATFORM_ROTATING,
   MODEL_ID_PLAYER,
-  MODEL_ID_NPC_HOSTILE_GUARD,
-  MODEL_ID_NPC_DOCILE_FLEE,
-  MODEL_ID_NPC_WANDERER,
   MODEL_ID_PROJECTILE_PRIMARY,
-  MODEL_ID_TRAINING_DUMMY,
-  getItemDefinitionById,
-  type WorldItemState
 } from "../../../shared/index";
 import type {
   LocationRootState,
-  PlatformState,
   ProjectileState,
   RemotePlayerState,
-  NpcState,
-  TrainingDummyState
+  WorldEntityState
 } from "../types";
 
 export class SnapshotStore {
@@ -108,21 +98,6 @@ export class SnapshotStore {
     return this.toPlayerState(rawEntity);
   }
 
-  public getPlatforms(): PlatformState[] {
-    const output: PlatformState[] = [];
-    for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.BaseEntity) {
-        continue;
-      }
-      const platform = this.toPlatformState(rawEntity);
-      if (!platform) {
-        continue;
-      }
-      output.push(platform);
-    }
-    return output;
-  }
-
   public getLocationRoots(): LocationRootState[] {
     const output: LocationRootState[] = [];
     for (const rawEntity of this.entities.values()) {
@@ -153,47 +128,21 @@ export class SnapshotStore {
     return output;
   }
 
-  public getTrainingDummies(): TrainingDummyState[] {
-    const output: TrainingDummyState[] = [];
+  public getWorldEntities(): WorldEntityState[] {
+    const output: WorldEntityState[] = [];
     for (const rawEntity of this.entities.values()) {
       if (rawEntity.ntype !== NType.BaseEntity) {
         continue;
       }
-      const dummy = this.toTrainingDummyState(rawEntity);
-      if (!dummy) {
+      const modelId = rawEntity.modelId;
+      if (modelId === MODEL_ID_PLAYER || modelId === MODEL_ID_PROJECTILE_PRIMARY) {
         continue;
       }
-      output.push(dummy);
-    }
-    return output;
-  }
-
-  public getNpcs(): NpcState[] {
-    const output: NpcState[] = [];
-    for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.BaseEntity) {
+      const entity = this.toWorldEntity(rawEntity);
+      if (!entity) {
         continue;
       }
-      const npc = this.toNpcState(rawEntity);
-      if (!npc) {
-        continue;
-      }
-      output.push(npc);
-    }
-    return output;
-  }
-
-  public getWorldItems(): WorldItemState[] {
-    const output: WorldItemState[] = [];
-    for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.BaseEntity) {
-        continue;
-      }
-      const item = this.toWorldItemState(rawEntity);
-      if (!item) {
-        continue;
-      }
-      output.push(item);
+      output.push(entity);
     }
     return output;
   }
@@ -230,34 +179,6 @@ export class SnapshotStore {
       movementMode: sanitizeMovementMode(raw.movementMode, MOVEMENT_MODE_GROUNDED),
       health: typeof health === "number" ? health : 100,
       maxHealth: typeof maxHealth === "number" ? maxHealth : 100
-    };
-  }
-
-  private toPlatformState(raw: Record<string, unknown>): PlatformState | null {
-    const modelId = raw.modelId;
-    if (modelId !== MODEL_ID_PLATFORM_LINEAR && modelId !== MODEL_ID_PLATFORM_ROTATING) {
-      return null;
-    }
-    const nid = raw.nid;
-    const position = this.readPosition(raw.position);
-    const rotation = this.readRotation(raw.rotation);
-
-    if (
-      typeof nid !== "number" ||
-      typeof modelId !== "number" ||
-      position === null ||
-      rotation === null
-    ) {
-      return null;
-    }
-
-    return {
-      nid,
-      modelId,
-      x: position.x,
-      y: position.y,
-      z: position.z,
-      rotation
     };
   }
 
@@ -330,86 +251,7 @@ export class SnapshotStore {
     };
   }
 
-  private toTrainingDummyState(raw: Record<string, unknown>): TrainingDummyState | null {
-    const modelId = raw.modelId;
-    if (modelId !== MODEL_ID_TRAINING_DUMMY) {
-      return null;
-    }
-    const nid = raw.nid;
-    const position = this.readPosition(raw.position);
-    const rotation = this.readRotation(raw.rotation);
-    const health = raw.health;
-    const maxHealth = raw.maxHealth;
-    if (
-      typeof nid !== "number" ||
-      typeof modelId !== "number" ||
-      position === null ||
-      rotation === null ||
-      typeof health !== "number" ||
-      typeof maxHealth !== "number"
-    ) {
-      return null;
-    }
-    return {
-      nid,
-      modelId,
-      x: position.x,
-      y: position.y,
-      z: position.z,
-      rotation,
-      health,
-      maxHealth
-    };
-  }
-
-  private toNpcState(raw: Record<string, unknown>): NpcState | null {
-    const modelId = raw.modelId;
-    if (
-      modelId !== MODEL_ID_NPC_HOSTILE_GUARD &&
-      modelId !== MODEL_ID_NPC_DOCILE_FLEE &&
-      modelId !== MODEL_ID_NPC_WANDERER
-    ) {
-      return null;
-    }
-    const nid = raw.nid;
-    const position = this.readPosition(raw.position);
-    const rotation = this.readRotation(raw.rotation);
-    const health = raw.health;
-    const maxHealth = raw.maxHealth;
-    if (
-      typeof nid !== "number" ||
-      typeof modelId !== "number" ||
-      position === null ||
-      rotation === null ||
-      typeof health !== "number" ||
-      typeof maxHealth !== "number"
-    ) {
-      return null;
-    }
-    return {
-      nid,
-      modelId,
-      x: position.x,
-      y: position.y,
-      z: position.z,
-      rotation,
-      health,
-      maxHealth
-    };
-  }
-
-  private toWorldItemState(raw: Record<string, unknown>): WorldItemState | null {
-    const itemArchetypeId = raw.itemArchetypeId;
-    const itemQuantity = raw.itemQuantity;
-    if (
-      typeof itemArchetypeId !== "number" ||
-      itemArchetypeId <= 0 ||
-      typeof itemQuantity !== "number" ||
-      itemQuantity <= 0 ||
-      !getItemDefinitionById(itemArchetypeId)
-    ) {
-      return null;
-    }
+  private toWorldEntity(raw: Record<string, unknown>): WorldEntityState | null {
     const modelId = raw.modelId;
     const nid = raw.nid;
     const position = this.readPosition(raw.position);
@@ -422,15 +264,24 @@ export class SnapshotStore {
     ) {
       return null;
     }
+    const health = typeof raw.health === "number" ? raw.health : 0;
+    const maxHealth = typeof raw.maxHealth === "number" ? raw.maxHealth : 0;
+    const itemArchetypeId = typeof raw.itemArchetypeId === "number" ? raw.itemArchetypeId : 0;
+    const itemQuantity = typeof raw.itemQuantity === "number" ? raw.itemQuantity : 0;
     return {
       nid,
       modelId,
-      itemArchetypeId,
-      itemQuantity,
       x: position.x,
       y: position.y,
       z: position.z,
-      rotation
+      rotationX: rotation.x,
+      rotationY: rotation.y,
+      rotationZ: rotation.z,
+      rotationW: rotation.w,
+      health,
+      maxHealth,
+      itemArchetypeId,
+      itemQuantity
     };
   }
 

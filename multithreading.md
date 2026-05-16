@@ -77,14 +77,23 @@ Why:
 
 ### Control-plane transport decision
 
-Phase-1 default for orchestrator <-> map-process control traffic is localhost HTTP JSON RPC (loopback only).
+Phase-1 default for orchestrator <-> map-process control traffic is supervised Node process IPC over the parent/child channel, using typed message envelopes with request/response correlation ids.
 
-Why this is preferred over Node child-process IPC:
+Why this is preferred over localhost HTTP JSON RPC:
 
-- Better observability with standard HTTP tooling (status codes, latency metrics, request logs, tracing hooks).
-- Easier debugging and operations (`curl`/health probes) without custom IPC inspectors.
-- Looser runtime coupling between processes while still keeping traffic local and cheap.
-- Performance impact is negligible for low-frequency control-plane messages.
+- Lower same-host overhead for frequent control, transfer, and persistence-related messages.
+- Better fit for one orchestrator supervising many child simulation processes.
+- No internal port binding/allocation surface for routine control traffic.
+- Clearer command/event semantics than pretending internal process messaging is a public service boundary.
+- Observability can still be handled through structured logs, metrics, and traced IPC envelopes.
+
+Operational rules:
+
+- IPC messages must use explicit schema-validated contracts.
+- Every request message must include a correlation id.
+- Commands, responses, and events should use distinct message kinds.
+- Map processes never communicate directly with each other in Phase 1.
+- Cross-map coordination always routes through orchestrator IPC.
 
 ## Player Lifecycle
 
@@ -309,7 +318,8 @@ Minimum `MapConfig` fields:
 - Seed/config generation on client is a rendering/prediction convenience for static world only.
 - Orchestrator validates transfer tokens and map join tickets.
 - Avoid exposing raw `authKey` in logs/telemetry; use redacted/hash form.
-- Internal control RPC endpoints must bind to loopback only (`127.0.0.1`/`::1`) and require an internal shared secret header.
+- Internal orchestrator <-> map-process control traffic must use supervised process IPC only.
+- IPC payloads must be schema-validated and accepted only from the direct supervised parent/child relationship.
 
 ## Failure Handling
 
@@ -331,7 +341,7 @@ Minimum `MapConfig` fields:
 - Multi-map runtime uses separate map processes, not worker threads.
 - Orchestrator is single persistence writer for SQLite.
 - Map transfer is reconnect-based with one-time transfer tokens.
-- Control RPC transport default: localhost HTTP JSON RPC on the same host.
+- Control transport default: supervised Node process IPC with typed command/response/event messages.
 - No chunked map streaming in Phase 1.
 - Static world generated deterministically from `MapConfig` + seed on both server and client.
 - Dynamic mutable gameplay entities are server-only generation and replicated.
@@ -340,63 +350,74 @@ Minimum `MapConfig` fields:
 
 - `src/orchestrator/main.ts`
 - `src/orchestrator/process/MapProcessSupervisor.ts`
+- `src/orchestrator/process/MapProcessRegistry.ts`
 - `src/orchestrator/transfer/TransferTokenService.ts`
 - `src/orchestrator/persistence/OrchestratorPersistenceWriter.ts`
-- `src/orchestrator/ipc/contracts.ts`
+- `src/orchestrator/ipc/IpcMessageEnvelope.ts`
+- `src/orchestrator/ipc/OrchestratorIpcServer.ts`
 - `src/server-map/main.ts`
 - `src/server-map/runtime/MapRuntime.ts`
+- `src/server-map/ipc/MapProcessIpcClient.ts`
 - `src/shared/maps/MapConfig.ts`
 - `src/shared/maps/DeterministicMapGenerator.ts`
 
 (Names can vary, but responsibilities should match.)
 
-## Minimum Control RPC Contract Surface
+## Minimum IPC Contract Surface
 
-Orchestrator -> map process:
+### Process model decision
 
-- `StartMapInstance(MapConfig)`
-- `StopMapInstance(instanceId)`
-- `ValidateJoinTicket(token)`
-- `PrepareIncomingTransfer(transferToken)`
-- `AckTransferComplete(transferId)`
+- One map process hosts exactly one authoritative map instance.
+- A map process is spawned with immutable boot configuration (`instanceId`, `mapId`, `MapConfig`, endpoint config, secrets/config references).
+- Orchestrator supervises process lifecycle externally; it does not tell an already-running map process to start or stop some other instance.
 
-Map process -> orchestrator:
+### IPC envelope shape
 
-- `MapReady(instanceId, endpoint, healthMeta)`
-- `MapHeartbeat(instanceId, runtimeStats)`
-- `RequestTransfer(characterId, fromMapId, toMapId)`
-- `PersistSnapshot(instanceId, revision, snapshotPayload)`
-- `PersistCriticalEvent(instanceId, eventId, eventPayload)`
-- `TransferResult(transferId, success, reason?)`
+All IPC messages should use a typed envelope with at least:
+
+- `messageKind` (`command`, `response`, `event`)
+- `messageType`
+- `correlationId` (required for request/response flows)
+- `source`
+- `target`
+- `sentAtMs`
+- `payload`
+
+### Orchestrator -> map process commands
+
+- `BootMapProcess`
+  - boot confirmation only; process must reject if already booted
+- `ValidateJoinTicket`
+- `PrepareIncomingTransfer`
+- `FinalizeSourceRelease`
+- `ShutdownMapProcess`
+
+### Map process -> orchestrator events/requests
+
+- `MapProcessBooted`
+- `MapHeartbeat`
+- `RequestTransfer`
+- `PersistSnapshot`
+- `PersistCriticalEvent`
+- `TransferCompleted`
+- `TransferAborted`
+- `MapProcessFaulted`
+
+### Contract rules
+
+- `BootMapProcess` exists only as a boot handshake for the already-spawned single-instance process, not as a generic "start arbitrary instance" command.
+- `ShutdownMapProcess` targets the receiving process itself, not an arbitrary `instanceId` hosted inside it.
+- `ValidateJoinTicket` and `PrepareIncomingTransfer` are synchronous request/response IPC flows with bounded timeouts.
+- `PersistSnapshot` and `PersistCriticalEvent` are delivery-confirmed IPC messages; critical events require explicit durability ack before the map process continues the protected flow.
 
 Cross-map communication rule:
 
-- Map processes should not directly RPC each other in Phase 1.
+- Map processes should not directly message each other in Phase 1.
 - Cross-map coordination goes through orchestrator to keep topology simple and auditable.
-
-### Suggested localhost HTTP route shape (Phase 1)
-
-Map process exposes (loopback + internal secret required):
-
-- `POST /control/start-instance`
-- `POST /control/stop-instance`
-- `POST /control/validate-join-ticket`
-- `POST /control/prepare-incoming-transfer`
-- `POST /control/ack-transfer-complete`
-- `GET /health`
-
-Orchestrator exposes (loopback + internal secret required):
-
-- `POST /orch/map-ready`
-- `POST /orch/map-heartbeat`
-- `POST /orch/request-transfer`
-- `POST /orch/persist-snapshot`
-- `POST /orch/persist-critical-event`
-- `POST /orch/transfer-result`
 
 ## Open Decisions (Still Legitimately Open)
 
-- Whether to add a localhost WS/SSE event stream for richer map-runtime telemetry beyond HTTP request/response control RPC.
+- Whether to add an internal event stream or tracing sink for richer map-runtime telemetry beyond the base IPC request/response and event flow.
 - Exact player UX on transfer loading screen/retry policy.
 - Final critical-event classification list.
 - Final restart/backoff parameter values after load testing (defaults are defined above).
