@@ -1,7 +1,7 @@
 // ECS storage layer — owns the bitecs world with all component arrays.
 // Entity creation is delegated to EntityFactory; the store provides
 // low-level component accessors and hotbar/abilities helpers.
-import { addComponent, addEntity, createWorld, query, removeEntity } from "bitecs";
+import { addEntity, createWorld, query, removeEntity } from "bitecs";
 import {
   HOTBAR_SLOT_COUNT,
   clampHotbarSlotIndex
@@ -9,7 +9,6 @@ import {
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 import { ComponentRegistry } from "./ComponentRegistry";
 import { EntityFactory } from "./EntityFactory";
-import type { ArchetypeDefinition } from "../../shared/archetype";
 import type { EntityFactoryOverrides } from "./EntityFactory";
 
 export class SimulationEcsStore {
@@ -95,8 +94,8 @@ export class SimulationEcsStore {
     removeEntity(this.world, eid);
   }
 
-  public createEntity(archetype: ArchetypeDefinition, overrides?: EntityFactoryOverrides): number {
-    return this.factory.createEntity(archetype, overrides);
+  public createEntityByKind(kind: string, overrides?: EntityFactoryOverrides): number {
+    return this.factory.createEntityByKind(kind, overrides);
   }
 
   // ── Component value helpers ───────────────────────────────────────────────

@@ -1,21 +1,20 @@
-// SQLite persistence service for auth, player runtime snapshots, and ability bar state.
+// SQLite persistence service for auth, character snapshots, blueprint access,
+// and other authoritative server-side durable state.
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
 import {
-  ABILITY_CREATOR_MAX_ABILITIES,
-  ABILITY_CREATOR_MAX_TIER,
-  ABILITY_CREATOR_MIN_TIER,
-  ABILITY_DYNAMIC_ID_START,
   ABILITY_ID_NONE,
   DEFAULT_HOTBAR_ABILITY_IDS,
   HOTBAR_SLOT_COUNT,
-  PLAYER_MAX_HEALTH,
   INVENTORY_MAX_SLOTS,
+  PLAYER_MAX_HEALTH,
+  coerceBlueprintDefinition,
+  type BlueprintAccessTag,
+  type BlueprintDefinition,
   type EquipmentSlot,
-  type InventoryStateSnapshot,
-  type AbilityCreatorType
+  type InventoryStateSnapshot
 } from "../../shared/index";
 
 const ACCESS_KEY_PATTERN = /^[A-Za-z0-9]{12}$/;
@@ -92,56 +91,11 @@ export interface PlayerSnapshotBatchEntry {
 
 export type PersistedInventoryState = InventoryStateSnapshot;
 
-export interface PersistedAbilityDefinitionRecord {
-  abilityId: number;
-  name: string;
-  type: AbilityCreatorType;
-  tier: number;
-  coreExampleStat: number;
-  exampleUpsideEnabled: boolean;
-  exampleDownsideEnabled: boolean;
-  createdByPlayerId: number;
-  createdAt: number;
+export interface SaveBlueprintAndGrantAccessRequest {
+  blueprint: BlueprintDefinition;
+  createdByAccountId: number;
+  grantAccessTags: readonly BlueprintAccessTag[];
 }
-
-export interface CreateOwnedAbilityRequest {
-  accountId: number;
-  name: string;
-  type: AbilityCreatorType;
-  tier: number;
-  coreExampleStat: number;
-  exampleUpsideEnabled: boolean;
-  exampleDownsideEnabled: boolean;
-  templateAbilityId: number | null;
-  maxAbilities: number;
-}
-
-export interface ForgetOwnedAbilityRequest {
-  accountId: number;
-  abilityId: number;
-}
-
-export type CreateOwnedAbilityResult =
-  | {
-      ok: true;
-      ability: PersistedAbilityDefinitionRecord;
-      replacedAbilityId: number | null;
-      ownedAbilityIds: number[];
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
-export type ForgetOwnedAbilityResult =
-  | {
-      ok: true;
-      ownedAbilityIds: number[];
-    }
-  | {
-      ok: false;
-      error: string;
-    };
 
 type TokenBucketState = {
   tokens: number;
@@ -364,363 +318,147 @@ export class PersistenceService {
     };
   }
 
-  public loadOwnedAbilityIds(accountId: number, defaultAbilityIds: ReadonlyArray<number>): number[] {
-    if (this.disablePersistenceWrites) {
+  public loadAccessibleBlueprintIds(
+    accountId: number,
+    accessTag: BlueprintAccessTag,
+    defaultBlueprintIds: ReadonlyArray<number>
+  ): number[] {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
       return Array.from(
         new Set(
-          defaultAbilityIds
-            .map((abilityId) => this.clampInteger(abilityId, 0, 0xffff))
-            .filter((abilityId) => abilityId > ABILITY_ID_NONE)
+          defaultBlueprintIds
+            .map((blueprintId) => this.clampInteger(blueprintId, 0, 0xffff))
+            .filter((blueprintId) => blueprintId > ABILITY_ID_NONE)
         )
       ).sort((a, b) => a - b);
     }
 
-    const tx = this.db.transaction((playerId: number, defaults: ReadonlyArray<number>) => {
+    const tx = this.db.transaction((characterId: number, tag: BlueprintAccessTag, defaults: ReadonlyArray<number>) => {
       const rows = this.db
         .prepare(
-          `SELECT ability_id AS abilityId
-           FROM player_ability_ownership
-           WHERE player_id = ?
-           ORDER BY ability_id ASC`
+          `SELECT blueprint_id AS blueprintId
+           FROM character_blueprint_access
+           WHERE character_id = ? AND access_tag = ?
+           ORDER BY blueprint_id ASC`
         )
-        .all(playerId) as Array<{ abilityId: number }>;
+        .all(characterId, tag) as Array<{ blueprintId: number }>;
       if (rows.length > 0) {
         return rows
-          .map((row) => this.clampInteger(row.abilityId, 0, 0xffff))
-          .filter((abilityId) => abilityId > ABILITY_ID_NONE);
+          .map((row) => this.clampInteger(row.blueprintId, 0, 0xffff))
+          .filter((blueprintId) => blueprintId > ABILITY_ID_NONE);
       }
 
       const defaultsNormalized = Array.from(
         new Set(
           defaults
-            .map((abilityId) => this.clampInteger(abilityId, 0, 0xffff))
-            .filter((abilityId) => abilityId > ABILITY_ID_NONE)
+            .map((blueprintId) => this.clampInteger(blueprintId, 0, 0xffff))
+            .filter((blueprintId) => blueprintId > ABILITY_ID_NONE)
         )
       ).sort((a, b) => a - b);
-      const insertOwnership = this.db.prepare(
-        `INSERT INTO player_ability_ownership (player_id, ability_id, unlocked_at)
-         VALUES (?, ?, ?)`
+      const insertAccess = this.db.prepare(
+        `INSERT INTO character_blueprint_access (
+           character_id, blueprint_id, access_tag, granted_at, granted_by_character_id
+         ) VALUES (?, ?, ?, ?, NULL)`
       );
       const now = Date.now();
-      for (const abilityId of defaultsNormalized) {
-        insertOwnership.run(playerId, abilityId, now);
+      for (const blueprintId of defaultsNormalized) {
+        insertAccess.run(characterId, blueprintId, tag, now);
       }
       return defaultsNormalized;
     });
 
-    return tx(accountId, defaultAbilityIds);
+    return tx(accountId, accessTag, defaultBlueprintIds);
   }
 
-  public loadOwnedDynamicAbilityDefinitions(accountId: number): PersistedAbilityDefinitionRecord[] {
-    if (this.disablePersistenceWrites) {
+  public loadPersistedBlueprintDefinitions(
+    blueprintIds: ReadonlyArray<number>
+  ): BlueprintDefinition[] {
+    if (this.disablePersistenceWrites || blueprintIds.length === 0) {
       return [];
     }
+    const normalizedIds = Array.from(
+      new Set(
+        blueprintIds
+          .map((blueprintId) => this.clampInteger(blueprintId, 1, 0xffff))
+          .filter((blueprintId) => blueprintId > 0)
+      )
+    ).sort((a, b) => a - b);
+    if (normalizedIds.length === 0) {
+      return [];
+    }
+    const placeholders = normalizedIds.map(() => "?").join(", ");
     const rows = this.db
       .prepare(
-        `SELECT d.ability_id AS abilityId,
-                d.name AS name,
-                d.ability_type AS abilityType,
-                d.tier AS tier,
-                d.core_example_stat AS coreExampleStat,
-                d.example_upside_enabled AS exampleUpsideEnabled,
-                d.example_downside_enabled AS exampleDownsideEnabled,
-                d.created_by_player_id AS createdByPlayerId,
-                d.created_at AS createdAt
-         FROM player_ability_ownership AS o
-         INNER JOIN ability_definitions AS d
-           ON d.ability_id = o.ability_id
-         WHERE o.player_id = ?
-         ORDER BY o.ability_id ASC`
+        `SELECT blueprint_id AS blueprintId, blueprint_json AS blueprintJson
+         FROM blueprints
+         WHERE archived = 0 AND blueprint_id IN (${placeholders})
+         ORDER BY blueprint_id ASC`
       )
-      .all(accountId) as Array<{
-      abilityId: number;
-      name: string;
-      abilityType: string;
-      tier: number;
-      coreExampleStat: number;
-      exampleUpsideEnabled: number;
-      exampleDownsideEnabled: number;
-      createdByPlayerId: number;
-      createdAt: number;
-    }>;
-
-    const records: PersistedAbilityDefinitionRecord[] = [];
+      .all(...normalizedIds) as Array<{ blueprintId: number; blueprintJson: string }>;
+    const blueprints: BlueprintDefinition[] = [];
     for (const row of rows) {
-      const type = this.parseAbilityCreatorType(row.abilityType);
-      if (!type) {
-        continue;
+      try {
+        const parsed = JSON.parse(row.blueprintJson) as unknown;
+        blueprints.push(coerceBlueprintDefinition(parsed, `persistedBlueprint(${row.blueprintId})`));
+      } catch (error) {
+        console.warn("[persist] failed to parse blueprint", row.blueprintId, error);
       }
-      records.push({
-        abilityId: this.clampInteger(row.abilityId, 0, 0xffff),
-        name: this.sanitizeAbilityName(row.name),
-        type,
-        tier: this.clampInteger(row.tier, ABILITY_CREATOR_MIN_TIER, ABILITY_CREATOR_MAX_TIER),
-        coreExampleStat: Math.max(0, this.clampInteger(row.coreExampleStat, 0, 0xff)),
-        exampleUpsideEnabled: row.exampleUpsideEnabled !== 0,
-        exampleDownsideEnabled: row.exampleDownsideEnabled !== 0,
-        createdByPlayerId: Math.max(1, this.clampInteger(row.createdByPlayerId, 1, 0x7fffffff)),
-        createdAt: Math.max(0, this.clampInteger(row.createdAt, 0, Number.MAX_SAFE_INTEGER))
-      });
     }
-    return records;
+    return blueprints;
   }
 
-  public createOwnedAbility(request: CreateOwnedAbilityRequest): CreateOwnedAbilityResult {
-    if (this.disablePersistenceWrites) {
-      return {
-        ok: false,
-        error: "Ability creation requires persistence writes to be enabled."
-      };
+  public saveBlueprintAndGrantAccess(request: SaveBlueprintAndGrantAccessRequest): void {
+    if (this.disablePersistenceWrites || request.createdByAccountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
     }
-    const playerId = Math.max(1, this.clampInteger(request.accountId, 1, 0x7fffffff));
-    const normalizedName = this.sanitizeAbilityName(request.name);
-    const normalizedType = this.parseAbilityCreatorType(request.type);
-    if (!normalizedType) {
-      return {
-        ok: false,
-        error: "Invalid ability type."
-      };
-    }
-    const normalizedTier = this.clampInteger(request.tier, ABILITY_CREATOR_MIN_TIER, ABILITY_CREATOR_MAX_TIER);
-    const normalizedCoreExampleStat = Math.max(0, this.clampInteger(request.coreExampleStat, 0, 0xff));
-    const normalizedExampleUpsideEnabled = Boolean(request.exampleUpsideEnabled);
-    const normalizedExampleDownsideEnabled = Boolean(request.exampleDownsideEnabled);
-    const normalizedTemplateAbilityId =
-      request.templateAbilityId === null
-        ? null
-        : this.clampInteger(request.templateAbilityId, 0, 0xffff);
-    const maxAbilities = this.clampInteger(
-      request.maxAbilities,
-      1,
-      ABILITY_CREATOR_MAX_ABILITIES
+    const characterId = Math.max(1, this.clampInteger(request.createdByAccountId, 1, 0x7fffffff));
+    const blueprintId = this.clampInteger(request.blueprint.id, 1, 0xffff);
+    const blueprintJson = JSON.stringify(request.blueprint);
+    const authoredViaProfile = typeof request.blueprint.metadata?.authoredViaProfile === "string"
+      ? request.blueprint.metadata.authoredViaProfile
+      : null;
+    const accessTags = Array.from(new Set(request.grantAccessTags)).filter(
+      (tag): tag is BlueprintAccessTag => typeof tag === "string" && tag.length > 0
     );
-    if (normalizedName.length < 3) {
-      return {
-        ok: false,
-        error: "Ability name must be at least 3 characters."
-      };
-    }
-
-    try {
-      const tx = this.db.transaction((params: {
-        playerId: number;
-        name: string;
-        type: AbilityCreatorType;
-        tier: number;
-        coreExampleStat: number;
-        exampleUpsideEnabled: boolean;
-        exampleDownsideEnabled: boolean;
-        templateAbilityId: number | null;
-        maxAbilities: number;
-      }): CreateOwnedAbilityResult => {
-        const ownedRows = this.db
-          .prepare(
-            `SELECT ability_id AS abilityId
-             FROM player_ability_ownership
-             WHERE player_id = ?`
-          )
-          .all(params.playerId) as Array<{ abilityId: number }>;
-        const ownedSet = new Set<number>(
-          ownedRows
-            .map((row) => this.clampInteger(row.abilityId, 0, 0xffff))
-            .filter((abilityId) => abilityId > ABILITY_ID_NONE)
-        );
-
-        if (params.templateAbilityId !== null && !ownedSet.has(params.templateAbilityId)) {
-          return {
-            ok: false,
-            error: "Template ability is not owned by this player."
-          };
-        }
-        if (params.templateAbilityId === null && ownedSet.size >= params.maxAbilities) {
-          return {
-            ok: false,
-            error: `Ability limit reached (${params.maxAbilities}/${params.maxAbilities}).`
-          };
-        }
-
-        const maxRow = this.db
-          .prepare("SELECT MAX(ability_id) AS maxAbilityId FROM ability_definitions")
-          .get() as { maxAbilityId: number | null };
-        const maxAbilityId = maxRow?.maxAbilityId ?? ABILITY_DYNAMIC_ID_START - 1;
-        if (maxAbilityId >= 0xffff) {
-          return {
-            ok: false,
-            error: "No more ability ids are available."
-          };
-        }
-        const nextAbilityId = Math.max(
-          ABILITY_DYNAMIC_ID_START,
-          this.clampInteger(maxAbilityId + 1, 0, 0xffff)
-        );
-
-        const now = Date.now();
-        this.db
-          .prepare(
-            `INSERT INTO ability_definitions (
-               ability_id, name, ability_type, tier, core_example_stat,
-               example_upside_enabled, example_downside_enabled, created_by_player_id, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .run(
-            nextAbilityId,
-            params.name,
-            params.type,
-            params.tier,
-            params.coreExampleStat,
-            params.exampleUpsideEnabled ? 1 : 0,
-            params.exampleDownsideEnabled ? 1 : 0,
-            params.playerId,
-            now
-          );
-
-        this.db
-          .prepare(
-            `INSERT OR REPLACE INTO player_ability_ownership (
-               player_id, ability_id, unlocked_at
-             ) VALUES (?, ?, ?)`
-          )
-          .run(params.playerId, nextAbilityId, now);
-
-        if (params.templateAbilityId !== null) {
-          this.db
-            .prepare(
-              `DELETE FROM player_ability_ownership
-               WHERE player_id = ? AND ability_id = ?`
-            )
-            .run(params.playerId, params.templateAbilityId);
-        }
-
-        const ownedAfterRows = this.db
-          .prepare(
-            `SELECT ability_id AS abilityId
-             FROM player_ability_ownership
-             WHERE player_id = ?
-             ORDER BY ability_id ASC`
-          )
-          .all(params.playerId) as Array<{ abilityId: number }>;
-        const ownedAbilityIds = ownedAfterRows
-          .map((row) => this.clampInteger(row.abilityId, 0, 0xffff))
-          .filter((abilityId) => abilityId > ABILITY_ID_NONE);
-
-        return {
-          ok: true,
-          ability: {
-            abilityId: nextAbilityId,
-            name: params.name,
-            type: params.type,
-            tier: params.tier,
-            coreExampleStat: params.coreExampleStat,
-            exampleUpsideEnabled: params.exampleUpsideEnabled,
-            exampleDownsideEnabled: params.exampleDownsideEnabled,
-            createdByPlayerId: params.playerId,
-            createdAt: now
-          },
-          replacedAbilityId: params.templateAbilityId,
-          ownedAbilityIds
-        };
-      });
-
-      return tx({
-        playerId,
-        name: normalizedName,
-        type: normalizedType,
-        tier: normalizedTier,
-        coreExampleStat: normalizedCoreExampleStat,
-        exampleUpsideEnabled: normalizedExampleUpsideEnabled,
-        exampleDownsideEnabled: normalizedExampleDownsideEnabled,
-        templateAbilityId: normalizedTemplateAbilityId && normalizedTemplateAbilityId > 0 ? normalizedTemplateAbilityId : null,
-        maxAbilities
-      });
-    } catch (error) {
-      console.error("[persist] createOwnedAbility failed", error);
-      return {
-        ok: false,
-        error: "Failed to create ability."
-      };
-    }
+    const tx = this.db.transaction(() => {
+      const now = Date.now();
+      this.db
+        .prepare(
+          `INSERT INTO blueprints (
+             blueprint_id, blueprint_json, authored_via_profile, created_by_player_id, created_at, updated_at, archived
+           ) VALUES (?, ?, ?, ?, ?, ?, 0)`
+        )
+        .run(blueprintId, blueprintJson, authoredViaProfile, characterId, now, now);
+      const insertAccess = this.db.prepare(
+        `INSERT OR REPLACE INTO character_blueprint_access (
+           character_id, blueprint_id, access_tag, granted_at, granted_by_character_id
+         ) VALUES (?, ?, ?, ?, ?)`
+      );
+      for (const accessTag of accessTags) {
+        insertAccess.run(characterId, blueprintId, accessTag, now, characterId);
+      }
+    });
+    tx();
   }
 
-  public forgetOwnedAbility(request: ForgetOwnedAbilityRequest): ForgetOwnedAbilityResult {
-    if (this.disablePersistenceWrites) {
-      return {
-        ok: false,
-        error: "Ability forgetting requires persistence writes to be enabled."
-      };
+  public revokeBlueprintAccess(
+    accountId: number,
+    blueprintId: number,
+    accessTag: BlueprintAccessTag
+  ): void {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
     }
-
-    const playerId = Math.max(1, this.clampInteger(request.accountId, 1, 0x7fffffff));
-    const abilityId = this.clampInteger(request.abilityId, 0, 0xffff);
-    if (abilityId <= ABILITY_ID_NONE) {
-      return {
-        ok: false,
-        error: "Invalid ability id."
-      };
-    }
-
-    try {
-      const tx = this.db.transaction((params: {
-        playerId: number;
-        abilityId: number;
-      }): ForgetOwnedAbilityResult => {
-        const ownedRow = this.db
-          .prepare(
-            `SELECT 1 AS found
-             FROM player_ability_ownership
-             WHERE player_id = ? AND ability_id = ?
-             LIMIT 1`
-          )
-          .get(params.playerId, params.abilityId) as { found: number } | undefined;
-        if (!ownedRow) {
-          return {
-            ok: false,
-            error: "Ability is not owned by this player."
-          };
-        }
-
-        this.db
-          .prepare(
-            `DELETE FROM player_ability_ownership
-             WHERE player_id = ? AND ability_id = ?`
-          )
-          .run(params.playerId, params.abilityId);
-
-        this.db
-          .prepare(
-            `DELETE FROM player_loadout_slots
-             WHERE player_id = ? AND ability_id = ?`
-          )
-          .run(params.playerId, params.abilityId);
-
-        const ownedAfterRows = this.db
-          .prepare(
-            `SELECT ability_id AS abilityId
-             FROM player_ability_ownership
-             WHERE player_id = ?
-             ORDER BY ability_id ASC`
-          )
-          .all(params.playerId) as Array<{ abilityId: number }>;
-        const ownedAbilityIds = ownedAfterRows
-          .map((row) => this.clampInteger(row.abilityId, 0, 0xffff))
-          .filter((ownedAbilityId) => ownedAbilityId > ABILITY_ID_NONE);
-
-        return {
-          ok: true,
-          ownedAbilityIds
-        };
-      });
-
-      return tx({
-        playerId,
-        abilityId
-      });
-    } catch (error) {
-      console.error("[persist] forgetOwnedAbility failed", error);
-      return {
-        ok: false,
-        error: "Failed to forget ability."
-      };
-    }
+    this.db
+      .prepare(
+        `DELETE FROM character_blueprint_access
+         WHERE character_id = ? AND blueprint_id = ? AND access_tag = ?`
+      )
+      .run(
+        Math.max(1, this.clampInteger(accountId, 1, 0x7fffffff)),
+        this.clampInteger(blueprintId, 1, 0xffff),
+        accessTag
+      );
   }
 
   public loadInventoryState(accountId: number): PersistedInventoryState {
@@ -1037,24 +775,26 @@ export class PersistenceService {
         FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS ability_definitions (
-        ability_id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        ability_type TEXT NOT NULL,
-        tier INTEGER NOT NULL,
-        core_example_stat INTEGER NOT NULL,
-        example_upside_enabled INTEGER NOT NULL DEFAULT 0,
-        example_downside_enabled INTEGER NOT NULL DEFAULT 0,
-        created_by_player_id INTEGER NOT NULL,
-        created_at INTEGER NOT NULL
+      CREATE TABLE IF NOT EXISTS blueprints (
+        blueprint_id INTEGER PRIMARY KEY,
+        blueprint_json TEXT NOT NULL,
+        authored_via_profile TEXT,
+        created_by_player_id INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        archived INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY(created_by_player_id) REFERENCES players(account_id) ON DELETE SET NULL
       );
 
-      CREATE TABLE IF NOT EXISTS player_ability_ownership (
-        player_id INTEGER NOT NULL,
-        ability_id INTEGER NOT NULL,
-        unlocked_at INTEGER NOT NULL,
-        PRIMARY KEY (player_id, ability_id),
-        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
+      CREATE TABLE IF NOT EXISTS character_blueprint_access (
+        character_id INTEGER NOT NULL,
+        blueprint_id INTEGER NOT NULL,
+        access_tag TEXT NOT NULL,
+        granted_at INTEGER NOT NULL,
+        granted_by_character_id INTEGER,
+        PRIMARY KEY (character_id, blueprint_id, access_tag),
+        FOREIGN KEY(character_id) REFERENCES players(account_id) ON DELETE CASCADE,
+        FOREIGN KEY(granted_by_character_id) REFERENCES players(account_id) ON DELETE SET NULL
       );
 
       CREATE TABLE IF NOT EXISTS player_inventory_items (
@@ -1096,7 +836,10 @@ export class PersistenceService {
       );
     `);
     this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_player_ability_ownership_player_id ON player_ability_ownership(player_id)"
+      "CREATE INDEX IF NOT EXISTS idx_character_blueprint_access_character_tag ON character_blueprint_access(character_id, access_tag)"
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_blueprints_archived ON blueprints(archived, blueprint_id)"
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_player_inventory_items_player_id ON player_inventory_items(player_id)"
@@ -1104,9 +847,7 @@ export class PersistenceService {
     this.ensureCharacterColumn("active_hotbar_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("primary_mouse_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("secondary_mouse_slot", "INTEGER NOT NULL DEFAULT 1");
-    this.ensureAbilityDefinitionColumn("example_upside_enabled", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureAbilityDefinitionColumn("example_downside_enabled", "INTEGER NOT NULL DEFAULT 0");
-    this.migrateLegacyExampleAttributeColumn();
+    this.migrateLegacyAbilityAccessToBlueprintAccess();
   }
 
   private ensureCharacterColumn(columnName: string, columnTypeSql: string): void {
@@ -1119,32 +860,36 @@ export class PersistenceService {
     this.db.exec(`ALTER TABLE characters ADD COLUMN ${columnName} ${columnTypeSql}`);
   }
 
-  private ensureAbilityDefinitionColumn(columnName: string, columnTypeSql: string): void {
-    const existing = this.db
-      .prepare("SELECT 1 FROM pragma_table_info('ability_definitions') WHERE name = ? LIMIT 1")
-      .get(columnName) as { 1: number } | undefined;
-    if (existing) {
-      return;
-    }
-    this.db.exec(`ALTER TABLE ability_definitions ADD COLUMN ${columnName} ${columnTypeSql}`);
-  }
-
-  private hasAbilityDefinitionColumn(columnName: string): boolean {
-    const existing = this.db
-      .prepare("SELECT 1 FROM pragma_table_info('ability_definitions') WHERE name = ? LIMIT 1")
-      .get(columnName) as { 1: number } | undefined;
-    return Boolean(existing);
-  }
-
-  private migrateLegacyExampleAttributeColumn(): void {
-    if (!this.hasAbilityDefinitionColumn("example_attribute_enabled")) {
+  private migrateLegacyAbilityAccessToBlueprintAccess(): void {
+    if (!this.hasTable("player_ability_ownership")) {
       return;
     }
     this.db.exec(`
-      UPDATE ability_definitions
-      SET example_upside_enabled = example_attribute_enabled
-      WHERE example_upside_enabled = 0 AND example_attribute_enabled != 0
+      INSERT OR IGNORE INTO character_blueprint_access (
+        character_id, blueprint_id, access_tag, granted_at, granted_by_character_id
+      )
+      SELECT player_id, ability_id, 'ability.use', unlocked_at, NULL
+      FROM player_ability_ownership
     `);
+    this.db.exec(`
+      INSERT OR IGNORE INTO character_blueprint_access (
+        character_id, blueprint_id, access_tag, granted_at, granted_by_character_id
+      )
+      SELECT player_id, ability_id, 'blueprint.template', unlocked_at, NULL
+      FROM player_ability_ownership
+    `);
+  }
+
+  private hasTable(tableName: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS found
+         FROM sqlite_master
+         WHERE type = 'table' AND name = ?
+         LIMIT 1`
+      )
+      .get(tableName) as { found: number } | undefined;
+    return Boolean(row?.found);
   }
 
   private createPlayer(keyFingerprint: string, keySalt: Buffer, keyHash: Buffer, now: number): number {
@@ -1324,20 +1069,6 @@ export class PersistenceService {
     return value.length > 0 ? value : "unknown";
   }
 
-  private parseAbilityCreatorType(rawType: unknown): AbilityCreatorType | null {
-    if (
-      rawType === "melee" ||
-      rawType === "projectile" ||
-      rawType === "beam" ||
-      rawType === "aoe" ||
-      rawType === "buff" ||
-      rawType === "movement"
-    ) {
-      return rawType;
-    }
-    return null;
-  }
-
   private parseEquipmentSlot(rawSlot: unknown): EquipmentSlot | null {
     if (
       rawSlot === "weapon" ||
@@ -1349,11 +1080,6 @@ export class PersistenceService {
       return rawSlot;
     }
     return null;
-  }
-
-  private sanitizeAbilityName(rawName: string): string {
-    const source = typeof rawName === "string" ? rawName : "";
-    return source.replace(/\s+/g, " ").trim().slice(0, 24);
   }
 
   private clampInteger(value: number, min: number, max: number): number {

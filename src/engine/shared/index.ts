@@ -1,6 +1,6 @@
 // Shared module barrel for simulation, protocol, and content helpers used by client and server.
 export * from "./abilities";
-export * from "./archetype";
+export * from "./blueprint";
 export * from "./config";
 export * from "./creator";
 export * from "./controller/characterControllerConfig";

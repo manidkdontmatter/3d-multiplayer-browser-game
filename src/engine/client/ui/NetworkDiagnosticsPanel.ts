@@ -23,7 +23,7 @@ export class NetworkDiagnosticsPanel {
   private readonly root: HTMLDivElement;
   private readonly rows = new Map<keyof NetworkDiagnosticsSnapshot, HTMLSpanElement>();
 
-  private constructor(documentRef: Document) {
+  private constructor(parent: HTMLElement, documentRef: Document) {
     this.root = documentRef.createElement("div");
     this.root.id = "network-diagnostics-panel";
     this.root.className = "network-diagnostics-hidden";
@@ -55,11 +55,11 @@ export class NetworkDiagnosticsPanel {
     this.appendRow(documentRef, grid, "fps", "FPS");
     this.appendRow(documentRef, grid, "lowFpsFrames", "Low FPS frames");
 
-    documentRef.body.append(this.root);
+    parent.append(this.root);
   }
 
-  public static mount(documentRef: Document): NetworkDiagnosticsPanel {
-    return new NetworkDiagnosticsPanel(documentRef);
+  public static mount(parent: HTMLElement, documentRef: Document): NetworkDiagnosticsPanel {
+    return new NetworkDiagnosticsPanel(parent, documentRef);
   }
 
   public setVisible(visible: boolean): void {

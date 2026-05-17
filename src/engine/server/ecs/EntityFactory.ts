@@ -1,11 +1,10 @@
-// Data-driven entity creation from archetype kinds or ArchetypeDefinitions.
+// Data-oriented ECS entity construction from fixed runtime component sets.
 import { addComponent, addEntity } from "bitecs";
 import {
   HOTBAR_SLOT_COUNT,
   MOVEMENT_MODE_GROUNDED,
   clampHotbarSlotIndex
 } from "../../shared/index";
-import type { ArchetypeDefinition } from "../../shared/archetype";
 import { ComponentRegistry, KIND_TO_COMPONENT_SET, KIND_COMPONENT_SETS } from "./ComponentRegistry";
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 
@@ -77,16 +76,6 @@ export class EntityFactory {
     this.addComponents(eid, setKeys);
     this.applyOverrides(eid, overrides);
     return eid;
-  }
-
-  public createEntity(
-    archetype: ArchetypeDefinition,
-    overrides?: EntityFactoryOverrides
-  ): number {
-    return this.createEntityByKind(archetype.kind, {
-      modelId: archetype.modelId,
-      ...overrides
-    });
   }
 
   private addComponents(eid: number, setKeys: readonly string[]): void {

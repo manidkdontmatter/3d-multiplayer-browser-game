@@ -1,0 +1,342 @@
+{
+  "version": 1,
+  "blueprints": [
+    {
+      "id": 1,
+      "key": "arc-bolt",
+      "name": "Arc Bolt",
+      "description": "Fast energy projectile used as a baseline combat ability.",
+      "metadata": { "authoredViaProfile": "ability_creator" },
+      "components": {
+        "AbilityStats": { "power": 6, "velocity": 6, "efficiency": 4, "control": 4 },
+        "ProjectileEmitter": {
+          "kind": 1,
+          "speed": 24,
+          "damage": 25,
+          "radius": 0.2,
+          "cooldownSeconds": 0.2,
+          "lifetimeSeconds": 2.2,
+          "spawnForwardOffset": 0.75,
+          "spawnVerticalOffset": -0.1
+        },
+        "AbilityAttributes": { "stacks": { "quick-cast": 1 } }
+      },
+      "templateProfiles": {
+        "ability_creator": {
+          "statBudget": 20,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["homing-lite", "wide-impact", "quick-cast", "long-reach", "clumsy"],
+          "draftStats": { "power": 6, "velocity": 6, "efficiency": 4, "control": 4 },
+          "draftAttributes": { "quick-cast": 1 }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "key": "punch",
+      "name": "Punch",
+      "description": "Fast close-range melee strike.",
+      "metadata": { "authoredViaProfile": "ability_creator" },
+      "components": {
+        "AbilityStats": { "power": 7, "velocity": 4, "efficiency": 5, "control": 4 },
+        "MeleeAttack": {
+          "damage": 18,
+          "range": 1.95,
+          "radius": 0.34,
+          "cooldownSeconds": 2,
+          "arcDegrees": 62
+        },
+        "AbilityAttributes": { "stacks": { "quick-cast": 1 } }
+      },
+      "templateProfiles": {
+        "ability_creator": {
+          "statBudget": 20,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["quick-cast", "wide-impact", "long-reach", "clumsy"],
+          "draftStats": { "power": 7, "velocity": 4, "efficiency": 5, "control": 4 },
+          "draftAttributes": { "quick-cast": 1 }
+        }
+      }
+    },
+    {
+      "id": 100,
+      "key": "hostile_guard",
+      "name": "Hostile Guard",
+      "description": "Aggressive NPC guard that attacks on sight.",
+      "metadata": { "authoredViaProfile": "character_creator" },
+      "components": {
+        "Vitals": { "healthCurrent": 120, "healthMax": 120 },
+        "CharacterStats": {
+          "power": 0,
+          "durability": 0,
+          "speed": 0,
+          "stamina": 0,
+          "vitality": 0,
+          "spirit": 0
+        },
+        "MovementStats": { "moveSpeed": 5.25 },
+        "NpcBehavior": {
+          "behaviorTreeId": "hostile_guard.v1",
+          "perceptionRadius": 7,
+          "attackRange": 2.1,
+          "attackDamage": 10,
+          "attackCooldownSeconds": 1.1,
+          "activationRadius": 32,
+          "deactivationRadius": 38,
+          "capsuleHalfHeight": 0.45,
+          "capsuleRadius": 0.35
+        },
+        "MeleeAttack": {
+          "damage": 10,
+          "range": 2.1,
+          "radius": 0.35,
+          "cooldownSeconds": 1.1,
+          "arcDegrees": 62
+        }
+      },
+      "templateProfiles": {
+        "character_creator": {
+          "statBudget": 5,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["berserker", "tank", "clumsy"],
+          "draftStats": {
+            "power": 0,
+            "durability": 0,
+            "speed": 0,
+            "stamina": 0,
+            "vitality": 0,
+            "spirit": 0
+          },
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 101,
+      "key": "docile_flee",
+      "name": "Docile Flee",
+      "description": "Skittish NPC that flees when threatened.",
+      "metadata": { "authoredViaProfile": "character_creator" },
+      "components": {
+        "Vitals": { "healthCurrent": 95, "healthMax": 95 },
+        "CharacterStats": {
+          "power": 0,
+          "durability": 0,
+          "speed": 0,
+          "stamina": 0,
+          "vitality": 0,
+          "spirit": 0
+        },
+        "MovementStats": { "moveSpeed": 6.1 },
+        "NpcBehavior": {
+          "behaviorTreeId": "docile_flee.v1",
+          "perceptionRadius": 7,
+          "attackRange": 1.5,
+          "attackDamage": 6,
+          "attackCooldownSeconds": 1.2,
+          "activationRadius": 34,
+          "deactivationRadius": 41,
+          "capsuleHalfHeight": 0.45,
+          "capsuleRadius": 0.35
+        },
+        "MeleeAttack": {
+          "damage": 6,
+          "range": 1.5,
+          "radius": 0.3,
+          "cooldownSeconds": 1.2,
+          "arcDegrees": 52
+        }
+      },
+      "templateProfiles": {
+        "character_creator": {
+          "statBudget": 5,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["tank", "clumsy"],
+          "draftStats": {
+            "power": 0,
+            "durability": 0,
+            "speed": 0,
+            "stamina": 0,
+            "vitality": 0,
+            "spirit": 0
+          },
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 102,
+      "key": "wanderer",
+      "name": "Wanderer",
+      "description": "Neutral NPC that wanders aimlessly.",
+      "metadata": { "authoredViaProfile": "character_creator" },
+      "components": {
+        "Vitals": { "healthCurrent": 105, "healthMax": 105 },
+        "CharacterStats": {
+          "power": 0,
+          "durability": 0,
+          "speed": 0,
+          "stamina": 0,
+          "vitality": 0,
+          "spirit": 0
+        },
+        "MovementStats": { "moveSpeed": 4.4 },
+        "NpcBehavior": {
+          "behaviorTreeId": "wander.v1",
+          "perceptionRadius": 5,
+          "attackRange": 1.5,
+          "attackDamage": 6,
+          "attackCooldownSeconds": 1.2,
+          "activationRadius": 30,
+          "deactivationRadius": 37,
+          "capsuleHalfHeight": 0.45,
+          "capsuleRadius": 0.35
+        },
+        "MeleeAttack": {
+          "damage": 6,
+          "range": 1.5,
+          "radius": 0.3,
+          "cooldownSeconds": 1.2,
+          "arcDegrees": 52
+        }
+      },
+      "templateProfiles": {
+        "character_creator": {
+          "statBudget": 5,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["tank", "berserker", "clumsy"],
+          "draftStats": {
+            "power": 0,
+            "durability": 0,
+            "speed": 0,
+            "stamina": 0,
+            "vitality": 0,
+            "spirit": 0
+          },
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 200,
+      "key": "minor-vitality-shard",
+      "name": "Minor Vitality Shard",
+      "description": "A condensed soul-glass shard that restores a small amount of health.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "consumable",
+          "modelId": 40,
+          "stackMax": 10
+        },
+        "ConsumableEffect": {
+          "restoreHealth": 25,
+          "consumeQuantity": 1
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 201,
+      "key": "training-focus-blade",
+      "name": "Training Focus Blade",
+      "description": "A blunt practice focus for channeling melee energy.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "equipment",
+          "modelId": 41,
+          "stackMax": 1
+        },
+        "Equippable": { "slot": "weapon" },
+        "ItemStats": { "sharpness": 0 }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 10,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["sharpened", "brittle"],
+          "draftStats": { "sharpness": 0 },
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 202,
+      "key": "ether-crystal",
+      "name": "Ether Crystal",
+      "description": "A raw crafting material used by early item and ability experiments.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "material",
+          "modelId": 42,
+          "stackMax": 25
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 400,
+      "key": "platform-linear",
+      "name": "Linear Oscillator",
+      "description": "A platform that moves back and forth.",
+      "components": {
+        "PlatformMotion": {
+          "kind": 1,
+          "halfX": 2.25,
+          "halfY": 0.35,
+          "halfZ": 2.25,
+          "baseX": 0,
+          "baseY": 29.05,
+          "baseZ": -8,
+          "baseYaw": 0,
+          "amplitudeX": 3.5,
+          "amplitudeY": 1.2,
+          "frequency": 0.55,
+          "phase": 0,
+          "angularSpeed": 0
+        }
+      }
+    },
+    {
+      "id": 401,
+      "key": "platform-rotating",
+      "name": "Rotating Platform",
+      "description": "A platform that rotates continuously.",
+      "components": {
+        "PlatformMotion": {
+          "kind": 2,
+          "halfX": 2.8,
+          "halfY": 0.35,
+          "halfZ": 2.8,
+          "baseX": 7,
+          "baseY": 29.05,
+          "baseZ": -8,
+          "baseYaw": 0,
+          "amplitudeX": 0,
+          "amplitudeY": 0,
+          "frequency": 0,
+          "phase": 0,
+          "angularSpeed": 1.413716694115407
+        }
+      }
+    }
+  ]
+}

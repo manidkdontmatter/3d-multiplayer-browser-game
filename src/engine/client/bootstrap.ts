@@ -3,7 +3,7 @@ import { preloadCoreAssets } from "./assets/assetLoader";
 import { GameClientApp } from "./runtime/GameClientApp";
 import type { ClientCreatePhase } from "./runtime/GameClientApp";
 import { BootOverlay } from "./ui/BootOverlay";
-import { TooltipSystem } from "./ui/TooltipSystem";
+import { UiRuntime } from "./ui/UiRuntime";
 
 const ASSET_PROGRESS_START = 0.05;
 const ASSET_PROGRESS_END = 0.74;
@@ -11,13 +11,14 @@ const SYSTEM_PROGRESS_START = ASSET_PROGRESS_END;
 const SYSTEM_PROGRESS_END = 0.97;
 
 export async function bootstrapClient(): Promise<void> {
+  UiRuntime.ensureDocumentRoot(document).adoptElementById(document, "boot-overlay", "boot");
+
   const canvas = document.getElementById("game-canvas");
   if (!(canvas instanceof HTMLCanvasElement)) {
     throw new Error("Missing #game-canvas");
   }
 
   const overlay = BootOverlay.fromDocument(document);
-  TooltipSystem.install(document);
 
   overlay.setStage("Preparing startup");
   overlay.setDetail("Loading runtime manifest and preload plan...");

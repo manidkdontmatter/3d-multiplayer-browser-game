@@ -8,7 +8,6 @@ import {
   PHYSICS_GROUP_CHARACTER,
   quaternionFromYawPitchRoll
 } from "../../shared/index";
-import type { ArchetypeDefinition } from "../../shared/archetype";
 import type {
   CharacterArchetypeDefinition,
   NpcSpawnDefinition
@@ -48,7 +47,6 @@ export type NpcCharacter = {
   rotation: { x: number; y: number; z: number; w: number };
   characterArchetypeId: number;
   controllerKind: number;
-  definition: ArchetypeDefinition;
   _ecsEid?: number;
 };
 
@@ -898,7 +896,6 @@ export class NpcAiSystem {
       modelId: archetype.modelId,
       characterArchetypeId: archetype.id,
       controllerKind: this.options.controllerKindAi,
-      definition: null!,
       position: { x: spawn.x, y: spawn.y, z: spawn.z },
       rotation: quaternionFromYawPitchRoll(spawn.yaw, 0),
       x: spawn.x,

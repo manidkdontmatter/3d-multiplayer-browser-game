@@ -37,6 +37,7 @@ export interface TraitDefinition {
   readonly description: string;
   readonly polarity: "upside" | "downside";
   readonly budgetDelta: number;
+  readonly maxStacks?: number;
   readonly statModifiers: readonly StatModifier[];
   readonly effects: readonly EffectTemplate[];
   readonly constraints: readonly string[];
@@ -66,16 +67,20 @@ export function getTraitsForKind(kind: string): readonly TraitDefinition[] {
   return TRAIT_DEFINITIONS.filter((t) => t.appliesTo.includes(kind));
 }
 
+type TraitSelectionInput = readonly string[] | Record<string, number>;
+
 // Compiler: collects all EffectModifiers from a set of selected traits.
 // This is the bridge between player trait choices and the EffectResolver.
-export function collectTraitEffects(traitIds: readonly string[]): EffectModifier[] {
+export function collectTraitEffects(traitIds: TraitSelectionInput): EffectModifier[] {
   const effects: EffectModifier[] = [];
-  for (const traitId of traitIds) {
+  for (const [traitId, stacks] of normalizeTraitSelection(traitIds).entries()) {
     const trait = TRAIT_BY_ID.get(traitId);
     if (!trait) continue;
-    for (const effect of trait.effects) {
-      for (const modifier of effect.modifiers) {
-        effects.push(modifier);
+    for (let stack = 0; stack < stacks; stack += 1) {
+      for (const effect of trait.effects) {
+        for (const modifier of effect.modifiers) {
+          effects.push(modifier);
+        }
       }
     }
   }
@@ -90,16 +95,16 @@ export interface TraitBudget {
 
 export function computeTraitBudget(
   baseBudget: number,
-  selectedTraitIds: readonly string[]
+  selectedTraitIds: TraitSelectionInput
 ): TraitBudget {
   let spent = 0;
-  for (const traitId of selectedTraitIds) {
+  for (const [traitId, stacks] of normalizeTraitSelection(selectedTraitIds).entries()) {
     const trait = TRAIT_BY_ID.get(traitId);
     if (!trait) continue;
     if (trait.polarity === "upside") {
-      spent += Math.abs(trait.budgetDelta);
+      spent += Math.abs(trait.budgetDelta) * stacks;
     } else {
-      spent -= Math.abs(trait.budgetDelta);
+      spent -= Math.abs(trait.budgetDelta) * stacks;
     }
   }
   const total = baseBudget;
@@ -116,13 +121,14 @@ export interface ConstraintViolation {
 }
 
 export function checkTraitConstraints(
-  selectedTraitIds: readonly string[],
+  selectedTraitIds: TraitSelectionInput,
   kind: string
 ): ConstraintViolation[] {
   const violations: ConstraintViolation[] = [];
-  const selected = new Set(selectedTraitIds);
+  const normalizedSelection = normalizeTraitSelection(selectedTraitIds);
+  const selected = new Set(normalizedSelection.keys());
 
-  for (const traitId of selectedTraitIds) {
+  for (const [traitId, stacks] of normalizedSelection.entries()) {
     const trait = TRAIT_BY_ID.get(traitId);
     if (!trait) {
       violations.push({ traitId, message: `Unknown trait "${traitId}".` });
@@ -133,6 +139,14 @@ export function checkTraitConstraints(
       violations.push({
         traitId,
         message: `Trait "${trait.label}" cannot be applied to kind "${kind}".`
+      });
+    }
+
+    const maxStacks = Math.max(1, Math.floor(trait.maxStacks ?? 1));
+    if (stacks > maxStacks) {
+      violations.push({
+        traitId,
+        message: `Trait "${trait.label}" exceeds max stacks (${stacks}/${maxStacks}).`
       });
     }
 
@@ -162,25 +176,29 @@ export function checkTraitConstraints(
 }
 
 export function collectStatModifiers(
-  selectedTraitIds: readonly string[]
+  selectedTraitIds: TraitSelectionInput
 ): StatModifier[] {
   const modifiers: StatModifier[] = [];
-  for (const traitId of selectedTraitIds) {
+  for (const [traitId, stacks] of normalizeTraitSelection(selectedTraitIds).entries()) {
     const trait = TRAIT_BY_ID.get(traitId);
     if (!trait) continue;
-    modifiers.push(...trait.statModifiers);
+    for (let stack = 0; stack < stacks; stack += 1) {
+      modifiers.push(...trait.statModifiers);
+    }
   }
   return modifiers;
 }
 
 export function collectEffectTemplates(
-  selectedTraitIds: readonly string[]
+  selectedTraitIds: TraitSelectionInput
 ): EffectTemplate[] {
   const effects: EffectTemplate[] = [];
-  for (const traitId of selectedTraitIds) {
+  for (const [traitId, stacks] of normalizeTraitSelection(selectedTraitIds).entries()) {
     const trait = TRAIT_BY_ID.get(traitId);
     if (!trait) continue;
-    effects.push(...trait.effects);
+    for (let stack = 0; stack < stacks; stack += 1) {
+      effects.push(...trait.effects);
+    }
   }
   return effects;
 }
@@ -193,18 +211,41 @@ export interface TraitSlotInfo {
 }
 
 export function computeTraitSlots(
-  selectedTraitIds: readonly string[],
+  selectedTraitIds: TraitSelectionInput,
   upsideMax: number,
   downsideMax: number
 ): TraitSlotInfo {
   let upsideUsed = 0;
   let downsideUsed = 0;
-  for (const traitId of selectedTraitIds) {
+  for (const [traitId, stacks] of normalizeTraitSelection(selectedTraitIds).entries()) {
     const trait = TRAIT_BY_ID.get(traitId);
     if (!trait) continue;
-    if (trait.polarity === "upside") upsideUsed += 1;
-    else downsideUsed += 1;
+    if (trait.polarity === "upside") upsideUsed += stacks;
+    else downsideUsed += stacks;
   }
   const effectiveUpsideMax = upsideMax + downsideUsed;
   return { upsideUsed, downsideUsed, upsideMax: effectiveUpsideMax, downsideMax };
+}
+
+function normalizeTraitSelection(selectedTraitIds: TraitSelectionInput): Map<string, number> {
+  const normalized = new Map<string, number>();
+  if (Array.isArray(selectedTraitIds)) {
+    for (const traitId of selectedTraitIds) {
+      if (typeof traitId !== "string" || traitId.trim().length === 0) continue;
+      normalized.set(traitId, (normalized.get(traitId) ?? 0) + 1);
+    }
+    return normalized;
+  }
+
+  for (const [traitId, rawStacks] of Object.entries(selectedTraitIds)) {
+    if (typeof traitId !== "string" || traitId.trim().length === 0) continue;
+    const stacks =
+      typeof rawStacks === "number" && Number.isFinite(rawStacks)
+        ? Math.max(0, Math.floor(rawStacks))
+        : 0;
+    if (stacks > 0) {
+      normalized.set(traitId, stacks);
+    }
+  }
+  return normalized;
 }

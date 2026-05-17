@@ -20,14 +20,13 @@ import { RenderSnapshotAssembler } from "./RenderSnapshotAssembler";
 import { WorldRenderer } from "./WorldRenderer";
 import { ClientNetworkOrchestrator } from "./network/ClientNetworkOrchestrator";
 import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
-import { AbilityHud } from "../ui/AbilityHud";
 import { resolveAccessKey } from "../auth/accessKey";
 import {
-  NetworkDiagnosticsPanel,
   type NetworkDiagnosticsSnapshot
 } from "../ui/NetworkDiagnosticsPanel";
 import { preloadAssetGroup } from "../assets/assetLoader";
 import { ASSET_GROUP_SFX, ASSET_GROUP_WORLD_DEFAULT } from "../assets/assetManifest";
+import { ClientUiManager } from "../ui/ClientUiManager";
 
 const FIXED_STEP = 1 / 60;
 const LOOK_PITCH_LIMIT = 1.45;
@@ -48,10 +47,7 @@ export type ClientCreatePhase = "physics" | "network" | "ready";
 export class GameClientApp {
   private readonly input: InputController;
   private readonly renderer: WorldRenderer;
-  private readonly abilityHud: AbilityHud;
-  private readonly diagnosticsPanel: NetworkDiagnosticsPanel;
-  private readonly connectedPlayersNode: HTMLDivElement;
-  private readonly interactPromptNode: HTMLDivElement;
+  private readonly ui: ClientUiManager;
   private readonly network = new NetworkClient();
   private readonly networkOrchestrator: ClientNetworkOrchestrator;
   private readonly platformTimeline = new DeterministicPlatformTimeline();
@@ -86,7 +82,6 @@ export class GameClientApp {
   private transferInProgress = false;
   private currentInteractTargetNid: number | null = null;
   private inventoryState: InventoryStateSnapshot = { maxSlots: 32, items: [], equipment: {} };
-  private diagnosticsVisible = false;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -101,7 +96,7 @@ export class GameClientApp {
     this.cspEnabled = cspEnabled;
     this.e2eSimulationOnly = e2eSimulationOnly;
     this.input = new InputController(canvas);
-    this.abilityHud = AbilityHud.mount(document, {
+    this.ui = ClientUiManager.mount(document, {
       initialHotbarAssignments: this.hotbarAbilityIds,
       initialPrimaryMouseSlot: this.primaryMouseSlot,
       initialSecondaryMouseSlot: this.secondaryMouseSlot,
@@ -127,17 +122,7 @@ export class GameClientApp {
         this.network.queueUnequipInventorySlot(slot);
       }
     });
-    this.diagnosticsPanel = NetworkDiagnosticsPanel.mount(document);
-    this.diagnosticsPanel.setVisible(false);
     this.activeAccessKey = initialAccessKey.length > 0 ? initialAccessKey : null;
-    this.connectedPlayersNode = document.createElement("div");
-    this.connectedPlayersNode.id = "connected-players-indicator";
-    this.connectedPlayersNode.textContent = "Connected Players: 0";
-    document.body.append(this.connectedPlayersNode);
-    this.interactPromptNode = document.createElement("div");
-    this.interactPromptNode.id = "interact-prompt";
-    this.interactPromptNode.className = "interact-prompt-hidden";
-    document.body.append(this.interactPromptNode);
     this.renderer = new WorldRenderer(canvas);
     this.networkOrchestrator = new ClientNetworkOrchestrator(this.network, this.physics);
     this.renderSnapshotAssembler = new RenderSnapshotAssembler({
@@ -223,7 +208,7 @@ export class GameClientApp {
     this.trackFps(seconds);
 
     if (this.input.consumeMainMenuToggle()) {
-      const open = this.abilityHud.toggleMainMenu();
+      const open = this.ui.toggleMainMenu();
       this.input.setMainUiOpen(open);
       if (document.pointerLockElement === this.canvas) {
         void document.exitPointerLock();
@@ -231,7 +216,7 @@ export class GameClientApp {
     }
 
     this.currentInteractTargetNid = this.resolveInteractionTargetNid();
-    if (!this.abilityHud.isMainMenuOpen() && (this.input.consumeInteractTrigger() || this.consumeTestInteractTrigger())) {
+    if (!this.ui.isMainMenuOpen() && (this.input.consumeInteractTrigger() || this.consumeTestInteractTrigger())) {
       if (this.currentInteractTargetNid !== null) {
         this.network.queuePickupWorldItem(this.currentInteractTargetNid);
       }
@@ -246,8 +231,7 @@ export class GameClientApp {
       this.networkOrchestrator.onCspModeChanged();
     }
     if (this.input.consumeDiagnosticsToggle()) {
-      this.diagnosticsVisible = !this.diagnosticsVisible;
-      this.diagnosticsPanel.setVisible(this.diagnosticsVisible);
+      this.ui.toggleDiagnostics();
     }
 
     for (const bindingIntent of this.input.consumeBindingIntents()) {
@@ -274,7 +258,7 @@ export class GameClientApp {
   }
 
   private stepFixed(delta: number): void {
-    const mainUiOpen = this.abilityHud.isMainMenuOpen();
+    const mainUiOpen = this.ui.isMainMenuOpen();
     let movement =
       mainUiOpen
         ? { forward: 0, strafe: 0, jump: false, toggleFlyPressed: false, sprint: false }
@@ -331,25 +315,25 @@ export class GameClientApp {
     }
 
     for (const definition of events.definitions) {
-      this.abilityHud.upsertAbility(definition);
+      this.ui.upsertAbility(definition);
     }
 
     if (events.abilityState) {
       this.hotbarAbilityIds = [...events.abilityState.hotbarAbilityIds];
       this.primaryMouseSlot = events.abilityState.primaryMouseSlot;
       this.secondaryMouseSlot = events.abilityState.secondaryMouseSlot;
-      this.abilityHud.setHotbarAssignments(this.hotbarAbilityIds);
-      this.abilityHud.setMouseBindings(this.primaryMouseSlot, this.secondaryMouseSlot);
+      this.ui.setHotbarAssignments(this.hotbarAbilityIds);
+      this.ui.setMouseBindings(this.primaryMouseSlot, this.secondaryMouseSlot);
     }
     if (events.ownedAbilityIds) {
-      this.abilityHud.setOwnedAbilityIds(events.ownedAbilityIds);
+      this.ui.setOwnedAbilityIds(events.ownedAbilityIds);
     }
   }
 
   private applyAbilityCreatorEvents(): void {
     const genCreatorState = this.network.consumeCreatorState();
     if (genCreatorState) {
-      this.abilityHud.setCreatorState(genCreatorState);
+      this.ui.setCreatorState(genCreatorState);
     }
   }
 
@@ -359,15 +343,12 @@ export class GameClientApp {
       return;
     }
     this.inventoryState = inventoryState;
-    this.abilityHud.setInventoryState(inventoryState);
+    this.ui.setInventoryState(inventoryState);
   }
 
   private updateDiagnosticsOverlay(): void {
     this.updateConnectedPlayersIndicator();
-    if (!this.diagnosticsVisible) {
-      return;
-    }
-    this.diagnosticsPanel.update(this.buildNetworkDiagnosticsSnapshot());
+    this.ui.updateDiagnostics(this.buildNetworkDiagnosticsSnapshot());
   }
 
   private buildNetworkDiagnosticsSnapshot(): NetworkDiagnosticsSnapshot {
@@ -406,7 +387,7 @@ export class GameClientApp {
     const aoiCount = remoteCount + localCount;
     const serverPlayers = this.network.getServerPlayerCount();
     const playersText = serverPlayers === null ? "..." : String(serverPlayers);
-    this.connectedPlayersNode.textContent = `Players: ${playersText}\nAOI: ${aoiCount}`;
+    this.ui.updatePlayerCount(playersText, aoiCount);
   }
 
   private trackFps(seconds: number): void {
@@ -510,7 +491,7 @@ export class GameClientApp {
       },
       localAbility: {
         ui: {
-          mainMenuOpen: this.abilityHud.isMainMenuOpen()
+          mainMenuOpen: this.ui.isMainMenuOpen()
         },
         bindings: {
           primaryMouseSlot: this.primaryMouseSlot,
@@ -793,20 +774,19 @@ export class GameClientApp {
 
   private updateInteractPrompt(): void {
     const targetNid = this.currentInteractTargetNid;
-    if (targetNid === null || this.abilityHud.isMainMenuOpen()) {
-      this.interactPromptNode.className = "interact-prompt-hidden";
-      this.interactPromptNode.textContent = "";
+    if (targetNid === null || this.ui.isMainMenuOpen()) {
+      this.ui.clearInteractPrompt();
       return;
     }
     const item = this.network.getWorldEntities().find((entry) => entry.nid === targetNid && entry.itemArchetypeId > 0);
     const definition = item ? getItemDefinitionById(item.itemArchetypeId) : null;
     if (!item || !definition) {
-      this.interactPromptNode.className = "interact-prompt-hidden";
-      this.interactPromptNode.textContent = "";
+      this.ui.clearInteractPrompt();
       return;
     }
-    this.interactPromptNode.className = "interact-prompt-visible";
-    this.interactPromptNode.textContent = `E  Pick up ${definition.name}${item.itemQuantity > 1 ? ` x${item.itemQuantity}` : ""}`;
+    this.ui.showInteractPrompt(
+      `E  Pick up ${definition.name}${item.itemQuantity > 1 ? ` x${item.itemQuantity}` : ""}`
+    );
   }
 
   private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {

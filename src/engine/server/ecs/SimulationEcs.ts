@@ -10,7 +10,6 @@ import {
   sanitizeMovementMode
 } from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
-import type { ArchetypeDefinition } from "../../shared/archetype";
 import type { EntityFactoryOverrides } from "./EntityFactory";
 import { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
 import { SimulationEcsStore } from "./SimulationEcsStore";
@@ -33,8 +32,8 @@ export class SimulationEcs {
 
   // ── Entity lifecycle ──────────────────────────────────────────────────────
 
-  public createEntity(archetype: ArchetypeDefinition, overrides?: EntityFactoryOverrides): number {
-    return this.store.createEntity(archetype, overrides);
+  public createEntityByKind(kind: string, overrides?: EntityFactoryOverrides): number {
+    return this.store.createEntityByKind(kind, overrides);
   }
 
   public destroyEid(eid: number): void {
@@ -421,8 +420,8 @@ export class SimulationEcs {
 
   // ── Projectile state ──────────────────────────────────────────────────────
 
-  public createProjectileEid(overrides: EntityFactoryOverrides, archetype: ArchetypeDefinition): number {
-    return this.store.createEntity(archetype, overrides);
+  public createProjectileEid(overrides: EntityFactoryOverrides): number {
+    return this.store.createEntityByKind("projectile", overrides);
   }
 
   public getProjectileRuntimeStateByEid(eid: number): ProjectileState | null {

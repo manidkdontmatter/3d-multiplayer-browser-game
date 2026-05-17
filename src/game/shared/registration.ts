@@ -1,12 +1,16 @@
-// Game-specific stat, trait, and archetype registration.
-// The unified archetypes.json is the single source of truth.
+// Game-specific stat, attribute, and blueprint registration.
+// The unified blueprints.json catalog is the single authored source of truth.
 // Legacy gameplay systems (ability, item, platform) receive catalogs derived from it.
 
 import {
   injectStatDefinitions,
   injectDerivedEffectDefinitions,
   injectTraitDefinitions,
-  injectArchetypeCatalog,
+  injectBlueprintCatalog,
+  getAllBlueprintDefinitions,
+  buildAbilityDefinitionFromBlueprint,
+  buildItemDefinitionFromBlueprint,
+  buildPlatformDefinitionFromBlueprint,
   type StatAllocationDefinition,
   type DerivedEffectDefinition,
   type TraitDefinition
@@ -17,7 +21,7 @@ import { injectAbilityCatalog, type AbilityArchetypeCatalogRaw } from "../../eng
 import { injectItemCatalog, type ItemCatalogRaw } from "../../engine/shared/items";
 import { injectPlatformCatalog, type PlatformArchetypeCatalog } from "../../engine/shared/platforms";
 
-import archetypesRaw from "./archetypes.json";
+import blueprintsRaw from "./blueprints.json";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STAT DEFINITIONS
@@ -161,38 +165,34 @@ export function registerGameContent(): void {
   injectStatDefinitions(GAME_STAT_DEFINITIONS);
   injectDerivedEffectDefinitions(GAME_DERIVED_EFFECTS);
   injectTraitDefinitions(GAME_TRAIT_DEFINITIONS);
-  injectArchetypeCatalog(archetypesRaw as { version: unknown; archetypes: unknown });
+  injectBlueprintCatalog(blueprintsRaw as { version: unknown; blueprints: unknown });
 
-  // Build gameplay catalogs from unified archetypes
+  // Build gameplay catalogs from unified blueprints
   injectAbilityCatalog(buildAbilityCatalog());
   injectItemCatalog(buildItemCatalog());
   injectPlatformCatalog(buildPlatformCatalog());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CATALOG BUILDERS — derive from unified archetypes
+// CATALOG BUILDERS — derive from universal blueprints
 // ═══════════════════════════════════════════════════════════════════════════
 
-type RawArchetype = Record<string, unknown>;
-
-function allArchetypes(): RawArchetype[] {
-  return (archetypesRaw as { archetypes: RawArchetype[] }).archetypes;
-}
-
 function buildAbilityCatalog(): AbilityArchetypeCatalogRaw {
-  const abilities = allArchetypes().filter((a) => a.kind === "ability");
+  const abilities = getAllBlueprintDefinitions()
+    .map((blueprint) => buildAbilityDefinitionFromBlueprint(blueprint))
+    .filter((ability): ability is NonNullable<typeof ability> => Boolean(ability));
   return {
     version: 1,
-    baseAbilities: abilities.map((a) => ({
-      id: a.id,
-      key: a.key,
-      name: a.name,
-      description: a.description,
-      category: a.abilityCategory,
-      points: a.abilityPoints ?? { power: 0, velocity: 0, efficiency: 0, control: 0 },
-      attributes: a.abilityAttributes ?? [],
-      projectile: a.projectileProfile ?? undefined,
-      melee: a.meleeProfile ?? undefined
+    baseAbilities: abilities.map((ability) => ({
+      id: ability.id,
+      key: ability.key,
+      name: ability.name,
+      description: ability.description,
+      category: ability.category,
+      points: ability.points,
+      attributes: ability.attributes,
+      projectile: ability.projectile ?? undefined,
+      melee: ability.melee ?? undefined
     })),
     defaults: {
       hotbarAbilityIds: [1, 2, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -204,20 +204,22 @@ function buildAbilityCatalog(): AbilityArchetypeCatalogRaw {
 }
 
 function buildItemCatalog(): ItemCatalogRaw {
-  const items = allArchetypes().filter((a) => a.kind === "item");
+  const items = getAllBlueprintDefinitions()
+    .map((blueprint) => buildItemDefinitionFromBlueprint(blueprint))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
   return {
     version: 1,
     inventory: { maxSlots: 32 },
-    items: items.map((a) => ({
-      id: a.id,
-      key: a.key,
-      name: a.name,
-      description: a.description,
-      category: a.itemCategory,
-      modelId: a.modelId,
-      stackMax: a.itemStackMax ?? 1,
-      equipSlot: a.itemEquipSlot ?? null,
-      use: a.itemUse ?? null
+    items: items.map((item) => ({
+      id: item.id,
+      key: item.key,
+      name: item.name,
+      description: item.description,
+      category: item.category,
+      modelId: item.modelId,
+      stackMax: item.stackMax,
+      equipSlot: item.equipSlot ?? null,
+      use: item.use ?? null
     })),
     starterWorldItems: [
       { archetypeId: 200, quantity: 3, x: 2.35, y: 21.05, z: -2.4 },
@@ -228,24 +230,11 @@ function buildItemCatalog(): ItemCatalogRaw {
 }
 
 function buildPlatformCatalog(): PlatformArchetypeCatalog {
-  const platforms = allArchetypes().filter((a) => a.kind === "platform");
+  const platforms = getAllBlueprintDefinitions()
+    .map((blueprint) => buildPlatformDefinitionFromBlueprint(blueprint))
+    .filter((platform): platform is NonNullable<typeof platform> => Boolean(platform));
   return {
     version: 1,
-    platforms: platforms.map((a) => ({
-      pid: a.id,
-      kind: a.platformKind,
-      halfX: a.platformHalfX,
-      halfY: a.platformHalfY,
-      halfZ: a.platformHalfZ,
-      baseX: a.platformBaseX ?? 0,
-      baseY: a.platformBaseY ?? 29.05,
-      baseZ: a.platformBaseZ ?? -8,
-      baseYaw: a.platformBaseYaw ?? 0,
-      amplitudeX: a.platformAmplitudeX,
-      amplitudeY: a.platformAmplitudeY,
-      frequency: a.platformFrequency,
-      phase: a.platformPhase,
-      angularSpeed: a.platformAngularSpeed
-    }))
+    platforms
   };
 }

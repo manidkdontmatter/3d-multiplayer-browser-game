@@ -5,12 +5,12 @@ export class TooltipSystem {
   private readonly originalTitleByElement = new WeakMap<HTMLElement, string>();
   private activeElement: HTMLElement | null = null;
 
-  private constructor(private readonly documentRef: Document) {
+  private constructor(parent: HTMLElement, private readonly documentRef: Document) {
     this.tooltipNode = documentRef.createElement("div");
     this.tooltipNode.id = "global-tooltip";
     this.tooltipNode.className = "global-tooltip";
     this.tooltipNode.setAttribute("role", "tooltip");
-    documentRef.body.append(this.tooltipNode);
+    parent.append(this.tooltipNode);
     documentRef.addEventListener("mouseover", this.onMouseOver, true);
     documentRef.addEventListener("mousemove", this.onMouseMove, true);
     documentRef.addEventListener("mouseout", this.onMouseOut, true);
@@ -19,12 +19,12 @@ export class TooltipSystem {
     window.addEventListener("blur", this.onWindowBlur);
   }
 
-  public static install(documentRef: Document): void {
+  public static install(documentRef: Document, parent: HTMLElement): void {
     if (TooltipSystem.installed) {
       return;
     }
     TooltipSystem.installed = true;
-    new TooltipSystem(documentRef);
+    new TooltipSystem(parent, documentRef);
   }
 
   private readonly onMouseOver = (event: MouseEvent): void => {
@@ -171,4 +171,3 @@ export class TooltipSystem {
     node.style.top = `${Math.max(margin, top)}px`;
   }
 }
-

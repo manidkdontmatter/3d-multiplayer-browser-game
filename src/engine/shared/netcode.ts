@@ -392,12 +392,12 @@ export interface CreatorStateMessageWire {
 }
 
 export type CreatorCommandAction =
-  | { kind: "allocate_stat"; statId: string; delta: number }
-  | { kind: "toggle_trait"; traitId: string }
-  | { kind: "apply_name"; name: string }
-  | { kind: "select_base_archetype"; archetypeId: number }
+  | { kind: "set_name"; name: string }
+  | { kind: "select_base_blueprint"; blueprintId: number }
+  | { kind: "step_field"; fieldId: string; delta: number }
+  | { kind: "set_field"; fieldId: string; valueJson: string }
   | { kind: "submit_create" }
-  | { kind: "forget"; archetypeId: number };
+  | { kind: "forget_blueprint"; blueprintId: number };
 
 export interface CreatorCommandPayload {
   sessionId: number;
@@ -408,9 +408,10 @@ export interface CreatorCommandPayload {
 export interface CreatorStatePayload {
   sessionId: number;
   ackSequence: number;
-  kind: string;
+  profileId: string;
   draftJson: string;
   capacityJson: string;
   validationJson: string;
-  ownedArchetypeCount: number;
+  availableBlueprintCount: number;
+  availableBlueprintsJson: string;
 }

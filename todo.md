@@ -1,8 +1,6 @@
 # Priority
 
-VERY IMPORTANT. We must separate this project into engine and game code. Game code depends on the engine; the engine never imports game code. This is the single most important architectural decision — without it, the engine can never be reused and game code is hopelessly entangled with foundational code.
-
-Right now everything is in `src/` with clean client/server/shared separation but zero engine/game separation. Almost everything is engine code — we just haven't extracted the ~10% that is game-specific.
+get some performance metrics or tests or something idk to ensure performance and scalability of the server's netcode to ensure certain netcode requirements such as bytes sent/received per second as a whole and per player and we should pick sensible limits on for example what the maximum bytes should be sent per player per second on average as a whole so that we know if we go above those limits we need to optimize netcode and sanity check it 
 
 ## What the engine is
 

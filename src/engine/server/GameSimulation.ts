@@ -2,20 +2,22 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   ABILITY_ID_NONE, ABILITY_ID_PUNCH,
+  buildAbilityDefinitionFromBlueprint,
   clampHotbarSlotIndex, configurePlayerCharacterController,
+  creatorProfileIdToGrantedAccessTags,
   DEFAULT_HOTBAR_ABILITY_IDS, DEFAULT_VOID_SPAWN_ANCHOR, DEFAULT_UNLOCKED_ABILITY_IDS,
   HOTBAR_SLOT_COUNT, PLAYER_BODY_CENTER_HEIGHT, MOVEMENT_MODE_GROUNDED,
   PLAYER_CHARACTER_CONTROLLER_OFFSET, PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS,
   encodeInventoryStateSnapshot, getAbilityDefinitionById,
   quaternionFromYawPitchRoll,
+  type BlueprintAccessTag,
   type InventoryStateSnapshot, type MovementMode, SERVER_TICK_SECONDS
 } from "../shared/index";
-import type { AbilityDefinition, CreatorSessionSnapshot } from "../shared/index";
+import type { AbilityDefinition } from "../shared/index";
 import {
   NType,
   type AbilityCommand as AbilityWireCommand,
-  type CreatorCommandWire,
   type ItemCommand as ItemWireCommand,
   type InputCommand as InputWireCommand
 } from "../shared/netcode";
@@ -593,39 +595,53 @@ export class GameSimulation {
   }
 
   public applyCreatorCommand(user: UserLike, command: {
-    sessionId: number; sequence: number; applyName?: boolean; name?: string;
-    selectBaseArchetype?: boolean; baseArchetypeId?: number;
-    allocateStat?: boolean; statId?: string; statDelta?: number;
-    toggleTrait?: boolean; traitId?: string; submitCreate?: boolean; forgetArchetypeId?: number;
+    sessionId: number; sequence: number; setName?: boolean; name?: string;
+    selectBaseBlueprint?: boolean; baseBlueprintId?: number;
+    stepField?: boolean; fieldId?: string; fieldDelta?: number;
+    setField?: boolean; fieldValueJson?: string;
+    submitCreate?: boolean;
   }): void {
     const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
     if (accountId === null) return;
-    const ownedIds = this.creatorSystem.resolveOwnedArchetypeIds(accountId,
-      this.simulationEcs.getPlayerAbilityStateByUserId(user.id)?.unlockedAbilityIds ?? []);
-    const result = this.creatorSystem.applyCommand({ userId: user.id, accountId, ownedArchetypeIds: ownedIds, command });
+    const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+    const availableTemplateBlueprintIds = this.ensureBlueprintAccessLoaded(
+      accountId,
+      "blueprint.template",
+      abilityState?.unlockedAbilityIds ?? DEFAULT_UNLOCKED_ABILITY_IDS
+    );
+    const result = this.creatorSystem.applyCommand({
+      userId: user.id,
+      accountId,
+      availableTemplateBlueprintIds,
+      command
+    });
     this.replication.queueCreatorStateMessage(user, result.snapshot);
 
-    if (result.createdArchetype && result.nextOwnedArchetypeIds) {
-      const ownedChanged = this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(user.id, result.nextOwnedArchetypeIds);
-      if (result.createdArchetype.kind === "ability") {
-        const custom = result.createdArchetype;
-        const rs = custom.baseStats as Record<string, number>;
-        const def: AbilityDefinition = {
-          id: custom.id, key: custom.key, name: custom.name, description: custom.description,
-          category: custom.abilityCategory ?? "projectile",
-          points: { power: rs.power ?? 0, velocity: rs.velocity ?? 0, efficiency: rs.efficiency ?? 0, control: rs.control ?? 0 },
-          attributes: [...(custom.abilityAttributes ?? [])]
-        };
-        if (custom.projectileProfile) def.projectile = custom.projectileProfile;
-        if (custom.meleeProfile) def.melee = custom.meleeProfile;
-        this.replication.queueAbilityDefinitionMessage(user, def);
+    if (result.createdBlueprint) {
+      const grantedAccessTags = creatorProfileIdToGrantedAccessTags(result.snapshot.profileId);
+      this.persistence.saveBlueprintAndGrantAccess({
+        blueprint: result.createdBlueprint,
+        createdByAccountId: accountId,
+        grantAccessTags: grantedAccessTags
+      });
+      for (const accessTag of grantedAccessTags) {
+        this.creatorSystem.grantBlueprintAccess(accountId, accessTag, result.createdBlueprint.id);
       }
-      const refreshed = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
-      if (refreshed) {
-        this.replication.queueAbilityOwnershipMessage(user, refreshed.unlockedAbilityIds);
-        this.replication.queueAbilityStateMessageFromSnapshot(user, refreshed);
+      const createdAbility = buildAbilityDefinitionFromBlueprint(result.createdBlueprint);
+      if (createdAbility) {
+        const unlockedAbilityIds = this.creatorSystem.getAccessibleBlueprintIds(accountId, "ability.use") ?? [];
+        this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(user.id, unlockedAbilityIds);
+        this.replication.queueAbilityDefinitionMessage(user, createdAbility);
+        const refreshed = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+        if (refreshed) {
+          this.replication.queueAbilityOwnershipMessage(user, refreshed.unlockedAbilityIds);
+          this.replication.queueAbilityStateMessageFromSnapshot(user, refreshed);
+        }
       }
-      if (ownedChanged) this.persistenceSyncSystem.markAccountDirty(accountId, { dirtyCharacter: false, dirtyAbilityState: true });
+      const nextCreatorState = this.creatorSystem.synchronizeSessionAvailability(user.id);
+      if (nextCreatorState) {
+        this.replication.queueCreatorStateMessage(user, nextCreatorState);
+      }
     }
   }
 
@@ -644,29 +660,24 @@ export class GameSimulation {
     if (targetId <= ABILITY_ID_NONE) {
       this.replication.queueAbilityOwnershipMessage(user, before.unlockedAbilityIds);
       this.replication.queueAbilityStateMessageFromSnapshot(user, before);
-      const snap = this.creatorSystem.synchronizeSessionOwnedCount(user.id, before.unlockedAbilityIds.length);
+      const snap = this.creatorSystem.synchronizeSessionAvailability(user.id);
       if (snap) this.replication.queueCreatorStateMessage(user, snap);
       return;
     }
 
-    const forgetResult = this.creatorSystem.forgetArchetype(accountId, targetId);
-    if (!forgetResult.ok || !forgetResult.nextOwnedArchetypeIds) {
-      this.replication.queueAbilityOwnershipMessage(user, before.unlockedAbilityIds);
-      this.replication.queueAbilityStateMessageFromSnapshot(user, before);
-      const snap = this.creatorSystem.synchronizeSessionOwnedCount(user.id, before.unlockedAbilityIds.length);
-      if (snap) this.replication.queueCreatorStateMessage(user, snap);
-      return;
-    }
-
-    const ownedChanged = this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(user.id, forgetResult.nextOwnedArchetypeIds);
-    const hotbarChanged = this.simulationEcs.clearPlayerAbilityOnHotbarByUserId(user.id, forgetResult.forgottenArchetypeId ?? 0);
+    this.persistence.revokeBlueprintAccess(accountId, targetId, "ability.use");
+    this.persistence.revokeBlueprintAccess(accountId, targetId, "blueprint.template");
+    const nextUnlockedAbilityIds = this.creatorSystem.revokeBlueprintAccess(accountId, "ability.use", targetId);
+    this.creatorSystem.revokeBlueprintAccess(accountId, "blueprint.template", targetId);
+    this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(user.id, nextUnlockedAbilityIds);
+    const hotbarChanged = this.simulationEcs.clearPlayerAbilityOnHotbarByUserId(user.id, targetId);
     const after = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
     if (!after) return;
     this.replication.queueAbilityOwnershipMessage(user, after.unlockedAbilityIds);
     this.replication.queueAbilityStateMessageFromSnapshot(user, after);
-    const snap = this.creatorSystem.synchronizeSessionOwnedCount(user.id, after.unlockedAbilityIds.length);
+    const snap = this.creatorSystem.synchronizeSessionAvailability(user.id);
     if (snap) this.replication.queueCreatorStateMessage(user, snap);
-    if (ownedChanged || hotbarChanged) this.persistenceSyncSystem.markAccountDirty(accountId, { dirtyCharacter: false, dirtyAbilityState: true });
+    if (hotbarChanged) this.persistenceSyncSystem.markAccountDirty(accountId, { dirtyCharacter: false, dirtyAbilityState: true });
   }
 
   // ── Tick ──────────────────────────────────────────────────────────────────
@@ -721,6 +732,35 @@ export class GameSimulation {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  private ensureBlueprintAccessLoaded(
+    accountId: number,
+    accessTag: BlueprintAccessTag,
+    defaultIds: readonly number[]
+  ): number[] {
+    const cached = this.creatorSystem.getAccessibleBlueprintIds(accountId, accessTag);
+    if (cached) {
+      this.hydratePersistedBlueprintDefinitions(cached);
+      return cached;
+    }
+    const accessibleIds = this.persistence.loadAccessibleBlueprintIds(accountId, accessTag, defaultIds);
+    this.creatorSystem.hydrateAccessibleBlueprintIds(accountId, accessTag, accessibleIds);
+    this.hydratePersistedBlueprintDefinitions(accessibleIds);
+    return accessibleIds;
+  }
+
+  private hydratePersistedBlueprintDefinitions(blueprintIds: readonly number[]): void {
+    const unresolvedIds = blueprintIds.filter((blueprintId) =>
+      blueprintId > 0 && !this.creatorSystem.resolveBlueprintDefinitionById(blueprintId)
+    );
+    if (unresolvedIds.length === 0) {
+      return;
+    }
+    const persistedBlueprints = this.persistence.loadPersistedBlueprintDefinitions(unresolvedIds);
+    for (const blueprint of persistedBlueprints) {
+      this.creatorSystem.registerPersistedBlueprint(blueprint);
+    }
+  }
+
   private getAbilityDefinitionForUnlockedSet(unlocked: Set<number>, abilityId: number): AbilityDefinition | null {
     if (!unlocked.has(abilityId)) return null;
     return this.resolveAbilityDefinitionById(abilityId);
@@ -745,17 +785,8 @@ export class GameSimulation {
   private resolveAbilityDefinitionById(id: number): AbilityDefinition | null {
     const sd = getAbilityDefinitionById(id);
     if (sd) return sd;
-    const a = this.creatorSystem.resolveArchetypeDefinitionById(id);
-    if (a && a.kind === "ability") {
-      return {
-        id: a.id, key: a.key, name: a.name, description: a.description,
-        category: a.abilityCategory ?? "projectile",
-        points: a.abilityPoints ?? { power: 0, velocity: 0, efficiency: 0, control: 0 },
-        attributes: [...(a.abilityAttributes ?? [])] as any,
-        projectile: a.projectileProfile, melee: a.meleeProfile
-      };
-    }
-    return null;
+    const blueprint = this.creatorSystem.resolveBlueprintDefinitionById(id);
+    return blueprint ? buildAbilityDefinitionFromBlueprint(blueprint) : null;
   }
 
   private createInitialHotbar(saved?: number[]): number[] {
@@ -948,7 +979,7 @@ export class GameSimulation {
       maxPlayerHealth: this.archetypes.player.maxHealth,
       defaultUnlockedAbilityIds: DEFAULT_UNLOCKED_ABILITY_IDS,
       resolveInitialUnlockedAbilityIds: (aid, def) => {
-        const ids = this.creatorSystem.resolveOwnedArchetypeIds(aid, def as number[]);
+        const ids = this.ensureBlueprintAccessLoaded(aid, "ability.use", def as number[]);
         return ids.length > 0 ? ids : (def as number[]);
       },
       sanitizeHotbarSlot: (raw, fallback) => this.sanitizeHotbarSlot(raw, fallback),
@@ -992,7 +1023,17 @@ export class GameSimulation {
         const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
         if (!abilityState) return;
         this.replication.sendInitialAbilityStateFromSnapshot(user, abilityState);
-        const creatorState = this.creatorSystem.initializeSession(user.id, abilityState.unlockedAbilityIds, "ability");
+        const availableTemplateBlueprintIds = this.ensureBlueprintAccessLoaded(
+          accountId,
+          "blueprint.template",
+          abilityState.unlockedAbilityIds
+        );
+        const creatorState = this.creatorSystem.initializeSession(
+          user.id,
+          accountId,
+          availableTemplateBlueprintIds,
+          "ability_creator"
+        );
         this.replication.queueCreatorStateMessage(user, creatorState);
         this.queueInventoryStateMessage(user, this.itemInventorySystem.ensureInventoryLoaded(accountId));
       },

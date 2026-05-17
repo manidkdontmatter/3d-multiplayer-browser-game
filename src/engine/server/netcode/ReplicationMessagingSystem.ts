@@ -192,11 +192,12 @@ export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
       stateJson: JSON.stringify({
         sessionId: Math.max(0, Math.floor(snapshot.sessionId)),
         ackSequence: Math.max(0, Math.floor(snapshot.ackSequence)),
-        kind: snapshot.kind,
+        profileId: snapshot.profileId,
         draftJson: JSON.stringify(snapshot.draft),
         capacityJson: JSON.stringify(snapshot.capacity),
         validationJson: JSON.stringify(snapshot.validation),
-        ownedArchetypeCount: Math.max(0, Math.floor(snapshot.ownedArchetypeCount))
+        availableBlueprintCount: Math.max(0, Math.floor(snapshot.availableBlueprintCount)),
+        availableBlueprintsJson: JSON.stringify(snapshot.availableBlueprints)
       })
     });
   }

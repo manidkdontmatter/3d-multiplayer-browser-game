@@ -1,5 +1,5 @@
 // Maps abstract component names to bitecs component objects.
-// Used by EntityFactory to resolve archetype ComponentTemplate strings.
+// Used by EntityFactory to resolve runtime component set membership.
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 
 type ComponentDef = Record<string, unknown>;
@@ -26,7 +26,7 @@ export class ComponentRegistry {
   }
 }
 
-// Maps high-level archetype component names to the bitecs components they expand to.
+// Maps high-level runtime component groups to the bitecs components they expand to.
 // e.g. "CharacterController" → the set of components a character entity needs.
 export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
   // Base components shared by all replicated entities
@@ -68,7 +68,7 @@ export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
   worldItem: ["WorldItemTag", "ReplicatedTag"]
 };
 
-// Map from archetype kind to the component set keys to use.
+// Map from runtime spawn kind to the component set keys to use.
 export const KIND_TO_COMPONENT_SET: Record<string, readonly string[]> = {
   character: ["base", "character", "player"],
   npc: ["base", "character", "npc"],

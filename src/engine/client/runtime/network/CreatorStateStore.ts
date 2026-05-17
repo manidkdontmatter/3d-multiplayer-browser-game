@@ -1,17 +1,25 @@
 // Caches authoritative creator session snapshots from server owner-only messages.
-// Generalized replacement for AbilityCreatorStateStore — handles all archetype kinds.
+// Creator profiles constrain UI validation only; the stored draft remains universal blueprint data.
 
 import { NType, type CreatorStateMessageWire, type CreatorStatePayload } from "../../../shared/netcode";
-import type { CreatorDraft, CreatorCapacity, CreatorValidation } from "../../../shared/creator";
+import type {
+  BlueprintDefinition,
+  CreatorDraft,
+  CreatorCapacity,
+  CreatorProfileId,
+  CreatorValidation
+} from "../../../shared/index";
+import { isCreatorProfileId } from "../../../shared/index";
 
 export interface CreatorClientState {
   sessionId: number;
   ackSequence: number;
-  kind: string;
+  profileId: CreatorProfileId;
   draft: CreatorDraft;
   capacity: CreatorCapacity;
   validation: CreatorValidation;
-  ownedCount: number;
+  availableBlueprintCount: number;
+  availableBlueprints: readonly BlueprintDefinition[];
 }
 
 export class CreatorStateStore {
@@ -59,18 +67,27 @@ export class CreatorStateStore {
       const draft = JSON.parse(payload.draftJson) as CreatorDraft;
       const capacity = JSON.parse(payload.capacityJson) as CreatorCapacity;
       const validation = JSON.parse(payload.validationJson) as CreatorValidation;
+      const availableBlueprints = JSON.parse(payload.availableBlueprintsJson) as BlueprintDefinition[];
       return {
         sessionId: this.clampInt(payload.sessionId, 0xffff),
         ackSequence: this.clampInt(payload.ackSequence, 0xffff),
-        kind: typeof payload.kind === "string" ? payload.kind : "ability",
+        profileId: this.parseProfileId(payload.profileId),
         draft,
         capacity,
         validation,
-        ownedCount: this.clampInt(payload.ownedArchetypeCount, 0xff)
+        availableBlueprintCount: this.clampInt(payload.availableBlueprintCount, 0xffff),
+        availableBlueprints: Array.isArray(availableBlueprints) ? availableBlueprints : []
       };
     } catch {
       return null;
     }
+  }
+
+  private parseProfileId(raw: unknown): CreatorProfileId {
+    if (isCreatorProfileId(raw)) {
+      return raw;
+    }
+    return "ability_creator";
   }
 
   private clampInt(raw: number, max: number): number {

@@ -2,7 +2,7 @@
 // Converts CreatorPanelCommand → network messages and routes incoming
 // CreatorStateMessage → CreatorStateStore.
 
-import { NType, type CreatorCommandWire, type CreatorCommandPayload, type CreatorCommandAction } from "../../../shared/netcode";
+import { NType, type CreatorCommandPayload, type CreatorCommandAction } from "../../../shared/netcode";
 import { CreatorStateStore, type CreatorClientState } from "./CreatorStateStore";
 import type { CreatorPanelCommand } from "../../ui/CreatorPanel";
 
@@ -28,17 +28,21 @@ export class CreatorNetworkBridge {
     const jsonPayloads: string[] = [];
     for (const cmd of drained) {
       const actions: CreatorCommandAction[] = [];
-      if (cmd.applyName && cmd.name !== undefined) {
-        actions.push({ kind: "apply_name", name: cmd.name });
+      if (cmd.setName && cmd.name !== undefined) {
+        actions.push({ kind: "set_name", name: cmd.name });
       }
-      if (cmd.selectBaseArchetype && cmd.baseArchetypeId !== undefined) {
-        actions.push({ kind: "select_base_archetype", archetypeId: cmd.baseArchetypeId });
+      if (cmd.selectBaseBlueprint && cmd.baseBlueprintId !== undefined) {
+        actions.push({ kind: "select_base_blueprint", blueprintId: cmd.baseBlueprintId });
       }
-      if (cmd.allocateStat && cmd.statId) {
-        actions.push({ kind: "allocate_stat", statId: cmd.statId, delta: cmd.statDelta ?? 1 });
+      if (cmd.stepField && cmd.fieldId) {
+        actions.push({ kind: "step_field", fieldId: cmd.fieldId, delta: cmd.fieldDelta ?? 1 });
       }
-      if (cmd.toggleTrait && cmd.traitId) {
-        actions.push({ kind: "toggle_trait", traitId: cmd.traitId });
+      if (cmd.setField && cmd.fieldId && cmd.fieldValueJson !== undefined) {
+        actions.push({
+          kind: "set_field",
+          fieldId: cmd.fieldId,
+          valueJson: cmd.fieldValueJson
+        });
       }
       if (cmd.submitCreate) {
         actions.push({ kind: "submit_create" });

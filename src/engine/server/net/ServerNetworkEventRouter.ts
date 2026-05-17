@@ -67,27 +67,27 @@ export class ServerNetworkEventRouter {
             sequence: payload.sequence
           };
           for (const action of payload.actions) {
-            if (action.kind === "apply_name") { cmd.applyName = true; cmd.name = action.name; }
-            if (action.kind === "select_base_archetype") { cmd.selectBaseArchetype = true; cmd.baseArchetypeId = action.archetypeId; }
-            if (action.kind === "allocate_stat") { cmd.allocateStat = true; cmd.statId = action.statId; cmd.statDelta = action.delta; }
-            if (action.kind === "toggle_trait") { cmd.toggleTrait = true; cmd.traitId = action.traitId; }
+            if (action.kind === "set_name") { cmd.setName = true; cmd.name = action.name; }
+            if (action.kind === "select_base_blueprint") { cmd.selectBaseBlueprint = true; cmd.baseBlueprintId = action.blueprintId; }
+            if (action.kind === "step_field") { cmd.stepField = true; cmd.fieldId = action.fieldId; cmd.fieldDelta = action.delta; }
+            if (action.kind === "set_field") { cmd.setField = true; cmd.fieldId = action.fieldId; cmd.fieldValueJson = action.valueJson; }
             if (action.kind === "submit_create") { cmd.submitCreate = true; }
-            if (action.kind === "forget") { cmd.forgetArchetypeId = action.archetypeId; }
+            if (action.kind === "forget_blueprint") { cmd.forgetBlueprintId = action.blueprintId; }
           }
           this.simulation.applyCreatorCommand(commandUser, cmd as {
             sessionId: number;
             sequence: number;
-            applyName?: boolean;
+            setName?: boolean;
             name?: string;
-            selectBaseArchetype?: boolean;
-            baseArchetypeId?: number;
-            allocateStat?: boolean;
-            statId?: string;
-            statDelta?: number;
-            toggleTrait?: boolean;
-            traitId?: string;
+            selectBaseBlueprint?: boolean;
+            baseBlueprintId?: number;
+            stepField?: boolean;
+            fieldId?: string;
+            fieldDelta?: number;
+            setField?: boolean;
+            fieldValueJson?: string;
             submitCreate?: boolean;
-            forgetArchetypeId?: number;
+            forgetBlueprintId?: number;
           });
         } catch (error) {
           console.warn("[server] malformed creator command:", error);

@@ -52,6 +52,7 @@ This repository is a production quality first-person authoritative server multip
 
 ## Decision and Quality Heuristics
 
+- do not take screenshots do not analyze screenshots
 - do not alter any md files unless the user explicitly asks you to
 - Prefer to make one generalized system instead of multiple near duplicate overly specific systems where appropriate
 - Before adding something new, for example a system, you should consider if that system/etc already exists, otherwise there will be near duplicate systems
@@ -95,6 +96,7 @@ This repository is a production quality first-person authoritative server multip
 - do not run tests unless asked
 - do not create tests unless asked
 - running the server and checking for errors at the end of a task is something you can do if you want though
+- make sure to close terminals you opened when you are done with them. for example do not leave the game server running after you finished your task
 - Treat Rapier init-params deprecation warning (`using deprecated parameters for the initialization function; pass a single object instead`) as non-actionable because it originates from Rapier internal self-usage rather than project code.
 - Treat older/legacy tests as potentially stale: when a test fails, validate whether the test assumptions still match current game architecture/behavior before concluding the underlying game system is broken.
 - Get rid of tests that are no longer relevant or are nonsensical

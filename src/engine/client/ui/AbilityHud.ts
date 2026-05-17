@@ -14,7 +14,7 @@ import {
   type InventoryStateSnapshot
 } from "../../shared/items";
 import { CreatorPanel, type CreatorPanelCommand } from "./CreatorPanel";
-import { getAllArchetypeDefinitions } from "../../shared/archetype";
+import { getBlueprintDefinitionsForProfile } from "../../shared/blueprint";
 import type { CreatorClientState } from "../runtime/network/CreatorStateStore";
 
 export interface AbilityHudOptions {
@@ -63,7 +63,7 @@ export class AbilityHud {
   private primaryMouseSlot = 0;
   private secondaryMouseSlot = 1;
 
-  private constructor(private readonly options: AbilityHudOptions, documentRef: Document) {
+  private constructor(parent: HTMLElement, private readonly options: AbilityHudOptions, documentRef: Document) {
     this.root = documentRef.createElement("div");
     this.root.id = "ability-ui";
 
@@ -109,11 +109,11 @@ export class AbilityHud {
     this.setMouseBindings(options.initialPrimaryMouseSlot, options.initialSecondaryMouseSlot);
     this.refreshEditSlotSelection();
 
-    documentRef.body.append(this.root);
+    parent.append(this.root);
   }
 
-  public static mount(documentRef: Document, options: AbilityHudOptions): AbilityHud {
-    return new AbilityHud(options, documentRef);
+  public static mount(parent: HTMLElement, documentRef: Document, options: AbilityHudOptions): AbilityHud {
+    return new AbilityHud(parent, options, documentRef);
   }
 
   public toggleMainMenu(): boolean {
@@ -259,13 +259,11 @@ export class AbilityHud {
     this.abilityBookGrid = grid;
     abilityBookPanel.append(grid);
 
-    // Generalized creator panel — ability, character, and item archetypes
-    const creatorKinds = new Set(["ability", "character", "item"]);
-    const baseArchetypes = getAllArchetypeDefinitions().filter((a) => creatorKinds.has(a.kind));
+    const baseBlueprints = getBlueprintDefinitionsForProfile("ability_creator");
     this.creatorPanel = new CreatorPanel(documentRef, {
-      kind: "ability",
-      kindLabel: "Creator",
-      availableBaseArchetypes: baseArchetypes,
+      profileId: "ability_creator",
+      profileLabel: "Ability Creator",
+      availableBaseBlueprints: baseBlueprints,
       onCommand: (command) => this.options.onCreatorCommand?.(command)
     });
     const creatorPanelEl = this.creatorPanel.getElement();
