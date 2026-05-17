@@ -1,4 +1,8 @@
-// Headless network load harness for a single configurable bot count, with benchmark and hosted inspection modes.
+/**
+ * Purpose: This file handles network transport, message flow, or network state, and simulates many clients/actions to measure server/network scalability.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";

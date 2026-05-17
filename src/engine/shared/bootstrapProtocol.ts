@@ -1,4 +1,8 @@
-// Shared bootstrap protocol between the browser client and the orchestrator entry service.
+/**
+ * Purpose: This file defines message shapes and command/event names used between systems, and runs ordered startup steps so dependencies initialize correctly.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import type { RuntimeMapConfig } from "./world";
 
 export interface BootstrapRequest {

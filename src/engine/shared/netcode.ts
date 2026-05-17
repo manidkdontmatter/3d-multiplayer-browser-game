@@ -1,4 +1,8 @@
-// Shared nengi protocol schemas and typed wire contracts for client/server communication.
+/**
+ * Purpose: This file defines the "netcode" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import { Binary, Context, defineSchema } from "nengi";
 
 export enum NType {

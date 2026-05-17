@@ -1,4 +1,8 @@
-// Owns server-authoritative world item interaction, player inventories, equipment, and item persistence.
+/**
+ * Purpose: This file manages item inventory state and inventory-related updates, and manages shared item data or item-related runtime behavior.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   INVENTORY_MAX_SLOTS,

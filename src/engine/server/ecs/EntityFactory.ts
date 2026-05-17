@@ -1,4 +1,8 @@
-// Data-oriented ECS entity construction from fixed runtime component sets.
+/**
+ * Purpose: This file creates entities/objects from structured definitions.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { addComponent, addEntity } from "bitecs";
 import {
   MOVEMENT_MODE_GROUNDED,

@@ -1,4 +1,8 @@
-// Applies client input commands to server-authoritative player ECS state. Mutates ECS components directly.
+/**
+ * Purpose: This file defines the "input system" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import {
   MOVEMENT_MODE_FLYING,
   MOVEMENT_MODE_GROUNDED,

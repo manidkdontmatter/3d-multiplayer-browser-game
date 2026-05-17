@@ -1,4 +1,8 @@
-// Type contracts for the bitecs world component layout.
+/**
+ * Purpose: This file defines data/type contracts that keep connected systems compatible, and runs core simulation state updates in tick order.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { MovementMode } from "../../shared/index";
 
 export type WorldWithComponents = {

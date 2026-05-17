@@ -1,4 +1,8 @@
-// Shared module barrel for simulation, protocol, and content helpers used by client and server.
+/**
+ * Purpose: This file re-exports this module group through a single import surface.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export * from "./abilities";
 export * from "./blueprint";
 export * from "./config";

@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file maps gameplay/network events to sound playback, and lists reusable definitions used by runtime systems.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { SFX_HIT_ASSET_ID } from "../../assets/assetManifest";
 
 export interface AudioEventConfig {

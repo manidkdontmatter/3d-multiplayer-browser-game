@@ -1,4 +1,8 @@
-// Game-specific visual definitions injected into the engine's VisualRegistry.
+/**
+ * Purpose: This file maps gameplay/network state to renderable visual objects.
+ * Scope: It belongs to the game-specific client composition layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { Color } from "three";
 import {
   injectVisualPalette,

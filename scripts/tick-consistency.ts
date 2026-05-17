@@ -1,4 +1,8 @@
-// Measures authoritative server fixed-tick consistency over a short local run.
+/**
+ * Purpose: This file checks whether simulation tick behavior stays consistent.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";

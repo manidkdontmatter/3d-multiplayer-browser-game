@@ -1,4 +1,8 @@
-// Stores the latest private inventory snapshot received from the authoritative server.
+/**
+ * Purpose: This file manages item inventory state and inventory-related updates, and keeps module state organized and queryable in memory.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   INVENTORY_MAX_SLOTS,
   decodeInventoryStateSnapshot,

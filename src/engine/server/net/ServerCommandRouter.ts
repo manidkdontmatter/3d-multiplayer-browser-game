@@ -1,4 +1,8 @@
-// Routes parsed nengi command payloads to input simulation or ability-state mutation handlers.
+/**
+ * Purpose: This file coordinates authoritative server behavior, and routes incoming messages/commands/events to the right handler.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { NType } from "../../shared/netcode";
 import type {
   AbilityCommand as AbilityWireCommand,

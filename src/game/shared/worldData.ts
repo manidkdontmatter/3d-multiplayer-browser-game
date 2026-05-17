@@ -1,4 +1,8 @@
-// Game-specific world data injected into engine catalogs at startup.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior.
+ * Scope: It belongs to the game-specific shared data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import { injectLocationDefinitions } from "../../engine/shared/worldLocations";
 import { injectEnvironmentVolumeDefinitions } from "../../engine/shared/environmentVolumes";
 import { injectMovingLocationCollisionExtents } from "../../engine/shared/worldPhysics";

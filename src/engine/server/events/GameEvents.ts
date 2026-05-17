@@ -1,7 +1,8 @@
-// Typed event constants and payload interfaces for the game event bus.
-// Events are produced by simulation systems and consumed by any interested system.
-// This decouples cross-cutting concerns from GameSimulation's constructor.
-
+/**
+ * Purpose: This file defines the "game events" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { MovementMode } from "../../shared/index";
 import type { AbilityCategory } from "../../shared/index";
 import type { AbilityState } from "../ecs/SimulationEcsTypes";

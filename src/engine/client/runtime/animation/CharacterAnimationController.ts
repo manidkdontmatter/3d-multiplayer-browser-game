@@ -1,4 +1,8 @@
-// Character animation state blender for locomotion and upper-body action overlays.
+/**
+ * Purpose: This file maps gameplay state to character animation playback.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   AdditiveAnimationBlendMode,
   AnimationAction,

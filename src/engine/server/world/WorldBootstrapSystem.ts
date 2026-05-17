@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior, and runs ordered startup steps so dependencies initialize correctly.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   createStaticWorldColliders,

@@ -1,4 +1,8 @@
-// Client-side deterministic physics world used for local prediction and reconciliation replay.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior, and defines physics setup, queries, or shared collision behavior.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,

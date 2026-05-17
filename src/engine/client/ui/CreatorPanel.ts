@@ -1,5 +1,8 @@
-// Creator profile UI panel for editing universal blueprint drafts.
-// The panel constrains editing through a chosen profile, but the resulting blueprint remains universal.
+/**
+ * Purpose: This file defines the "creator panel" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import type { BlueprintDefinition } from "../../shared/blueprint";
 import type { CreatorClientState } from "../runtime/network/CreatorStateStore";
 import { getBlueprintTemplateProfile } from "../../shared/blueprint";

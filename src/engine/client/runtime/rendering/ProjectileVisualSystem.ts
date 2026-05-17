@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file simulates projectile spawn, travel, and hit behavior, and maps gameplay/network state to renderable visual objects.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   AdditiveBlending,
   Group,

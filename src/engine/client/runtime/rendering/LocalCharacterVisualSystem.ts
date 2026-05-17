@@ -1,4 +1,8 @@
-// Local player character visual/animation presenter for first-person runtime rendering.
+/**
+ * Purpose: This file maps gameplay/network state to renderable visual objects.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { Group, type Object3D, type Scene } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type VRM } from "@pixiv/three-vrm";

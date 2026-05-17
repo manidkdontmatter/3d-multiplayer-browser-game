@@ -1,4 +1,8 @@
-// Ensures runtime asset manifest exists and is fresh enough for local dev; rebuilds only when needed.
+/**
+ * Purpose: This file defines or loads runtime asset metadata for reliable asset access.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";

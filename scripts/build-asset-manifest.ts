@@ -1,4 +1,8 @@
-// Generates hashed runtime assets/manifests with KTX2 texture conversion, meshopt-ready model processing, and transcoder runtime files.
+/**
+ * Purpose: This file renders or coordinates in-game UI panels and overlays, and defines or loads runtime asset metadata for reliable asset access.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile, copyFile } from "node:fs/promises";
 import path from "node:path";

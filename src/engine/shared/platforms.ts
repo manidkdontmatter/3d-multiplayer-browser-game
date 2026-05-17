@@ -1,6 +1,8 @@
-// Shared deterministic platform definitions and math used by server authority and client prediction/rendering.
-// Archetype data is injected by the game layer at startup via injectPlatformCatalog().
-
+/**
+ * Purpose: This file handles deterministic moving platform data and runtime updates.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export type PlatformKind = 1 | 2;
 
 export interface PlatformDefinition {

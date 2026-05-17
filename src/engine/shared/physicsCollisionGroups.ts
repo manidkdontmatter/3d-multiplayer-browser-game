@@ -1,4 +1,8 @@
-// Defines Rapier collision layers so solid geometry, characters, triggers, and dynamic bodies do not interfere accidentally.
+/**
+ * Purpose: This file defines physics setup, queries, or shared collision behavior.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export const PHYSICS_LAYER_SOLID = 1 << 0;
 export const PHYSICS_LAYER_CHARACTER = 1 << 1;
 export const PHYSICS_LAYER_CARRIER_TRIGGER = 1 << 2;

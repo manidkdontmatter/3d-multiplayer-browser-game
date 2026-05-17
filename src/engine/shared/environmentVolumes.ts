@@ -1,6 +1,8 @@
-// Shared environment volume definitions and blend helpers.
-// Game data is injected by the game layer at startup via injectEnvironmentVolumeDefinitions().
-
+/**
+ * Purpose: This file defines the "environment volumes" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export type EnvironmentVolumeKind = "voidRegion" | "location" | "interior";
 
 export const ENVIRONMENT_PRIORITY_GLOBAL = 0;

@@ -1,4 +1,8 @@
-// Deterministic parity harness validating client prediction and server authority movement alignment.
+/**
+ * Purpose: This file handles character/world movement rules and integration.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import process from "node:process";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LocalPhysicsWorld } from "../src/engine/client/runtime/LocalPhysicsWorld";

@@ -1,6 +1,8 @@
-// Universal blueprint catalog and adapters for creator profiles and runtime content.
-// Blueprints are persisted bags of authored component payloads. They are not enforcing
-// gameplay "types"; creator profiles decide which blueprints can be edited through which UI.
+/**
+ * Purpose: This file defines the "blueprint" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import type {
   AbilityAttributeKey,
   AbilityCategory,

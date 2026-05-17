@@ -1,4 +1,8 @@
-// Boots the client runtime, asset preload sequence, and startup overlay before entering the world.
+/**
+ * Purpose: This file runs ordered startup steps so dependencies initialize correctly.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { preloadCoreAssets } from "./assets/assetLoader";
 import { GameClientApp } from "./runtime/GameClientApp";
 import type { ClientCreatePhase } from "./runtime/GameClientApp";

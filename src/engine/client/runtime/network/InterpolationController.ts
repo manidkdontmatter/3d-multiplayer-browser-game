@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file smooths remote state movement between network updates.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { SERVER_TICK_RATE } from "../../../shared/config";
 
 const SERVER_TICK_INTERVAL_MS = 1000 / SERVER_TICK_RATE;

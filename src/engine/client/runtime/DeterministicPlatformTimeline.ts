@@ -1,4 +1,8 @@
-// Samples shared deterministic platform definitions for client-side rendering.
+/**
+ * Purpose: This file handles deterministic moving platform data and runtime updates.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,

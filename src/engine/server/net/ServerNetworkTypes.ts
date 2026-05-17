@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file defines data/type contracts that keep connected systems compatible, and coordinates authoritative server behavior.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { NetworkEvent } from "nengi";
 
 export type ServerNetworkAdapter = {

@@ -1,4 +1,8 @@
-// Deterministic procedural static-world generation shared by server and client.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import { createNoise2D } from "simplex-noise";
 
 export interface StaticWorldBlock {

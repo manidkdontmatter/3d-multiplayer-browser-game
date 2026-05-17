@@ -1,4 +1,8 @@
-// Executes authoritative ability usage, cooldown checks, and spawned combat effects.
+/**
+ * Purpose: This file manages ability definitions, state, or execution flow.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { clampHotbarSlotIndex } from "../../../shared/index";
 import type { AbilityDefinition } from "../../../shared/index";
 import { resolveProjectileProfile } from "../../../shared/index";

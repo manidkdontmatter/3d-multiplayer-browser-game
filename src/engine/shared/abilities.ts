@@ -1,4 +1,8 @@
-// Shared ability catalogs and helpers used by both client and server runtime code.
+/**
+ * Purpose: This file defines the "abilities" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import {
   MAGIC_BOLT_KIND_PRIMARY,
   MAGIC_BOLT_SPAWN_FORWARD_OFFSET,

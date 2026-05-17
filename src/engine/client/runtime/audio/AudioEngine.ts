@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file maps gameplay/network events to sound playback.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   Audio,
   AudioListener,

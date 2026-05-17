@@ -1,4 +1,8 @@
-// Validates deterministic procedural world outputs (terrain, biomes, static props) across seeds/configs.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior, and verifies deterministic behavior assumptions across repeated runs.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import { createHash } from "node:crypto";
 import {
   buildTerrainMeshData,

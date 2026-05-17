@@ -1,6 +1,8 @@
-// ECS facade — owns the store, indexes, and provides direct component read/write
-// for all simulation systems. No typed-object marshalling. Components are the
-// single source of truth.
+/**
+ * Purpose: This file runs core simulation state updates in tick order.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type RAPIER from "@dimforge/rapier3d-compat";
 import { query } from "bitecs";
 import {

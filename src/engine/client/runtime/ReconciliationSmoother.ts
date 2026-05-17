@@ -1,4 +1,8 @@
-// Smooths client prediction corrections while preserving offsets in moving frame-local space.
+/**
+ * Purpose: This file reconciles client prediction with authoritative server updates.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { normalizeYaw } from "../../shared/index";
 import type { PlayerPose } from "./types";
 

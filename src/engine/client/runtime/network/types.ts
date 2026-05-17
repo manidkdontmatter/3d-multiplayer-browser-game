@@ -1,4 +1,8 @@
-// Client network-layer types used by reconciliation and ability-state message handling.
+/**
+ * Purpose: This file defines data/type contracts that keep connected systems compatible.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import type {
   AbilityDefinition,
   AbilityCreatorType,

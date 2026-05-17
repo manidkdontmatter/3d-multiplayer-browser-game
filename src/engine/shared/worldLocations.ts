@@ -1,6 +1,8 @@
-// Shared location root definitions and lookup helpers.
-// Game data is injected by the game layer at startup via injectLocationDefinitions().
-// All lookup functions return empty/null results until the catalog is initialized.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior, and manages large world location roots and their replicated identity.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import {
   MODEL_ID_LOCATION_MOVING_CASTLE,
   MODEL_ID_LOCATION_MOVING_TEST_PLATFORM,

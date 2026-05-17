@@ -1,4 +1,8 @@
-// Routes inbound transport messages into identity, reconciliation, and ability-state handlers.
+/**
+ * Purpose: This file routes incoming messages/commands/events to the right handler.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { NType } from "../../../shared/netcode";
 import type {
   AbilityUseMessage,

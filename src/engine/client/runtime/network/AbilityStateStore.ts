@@ -1,4 +1,8 @@
-// Client-side authoritative ability state cache populated from server messages.
+/**
+ * Purpose: This file manages ability definitions, state, or execution flow, and keeps module state organized and queryable in memory.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY,
   ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY,

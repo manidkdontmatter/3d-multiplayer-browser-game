@@ -1,4 +1,8 @@
-// Declares browser testing hooks and structured runtime state exposed by the client.
+/**
+ * Purpose: This file defines the "global" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 declare global {
   interface RenderGameStatePlayer {
     x: number;

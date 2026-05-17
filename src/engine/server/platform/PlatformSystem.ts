@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file handles deterministic moving platform data and runtime updates.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,

@@ -1,5 +1,8 @@
-// Shared creator-profile contracts and compile/decompile helpers for universal blueprints.
-// Creator profiles are the only restrictive "type-like" layer; the resulting blueprints remain universal.
+/**
+ * Purpose: This file defines the "creator" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import {
   createAbilityDefinitionFromDraft,
   type AbilityAttributeKey,

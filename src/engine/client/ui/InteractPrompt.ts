@@ -1,4 +1,8 @@
-// Renders the context-sensitive interaction prompt on the gameplay HUD layer.
+/**
+ * Purpose: This file defines the "interact prompt" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 export class InteractPrompt {
   private readonly root: HTMLDivElement;
 

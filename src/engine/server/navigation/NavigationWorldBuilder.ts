@@ -1,4 +1,8 @@
-// Builds server navigation contexts from authored void locations, with optional runtime cache and boot telemetry.
+/**
+ * Purpose: This file builds or queries navigation data for movement/pathing, and defines world state, world helpers, or world orchestration behavior.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

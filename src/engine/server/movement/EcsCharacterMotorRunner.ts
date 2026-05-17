@@ -1,4 +1,8 @@
-// Shared ECS character motor runner used by authoritative player and NPC movement wrappers.
+/**
+ * Purpose: This file applies low-level character motion and collision behavior.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   GROUND_CONTACT_MIN_NORMAL_Y,

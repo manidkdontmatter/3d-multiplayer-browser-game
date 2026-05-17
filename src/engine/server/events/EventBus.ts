@@ -1,8 +1,8 @@
-// Lightweight synchronous typed event bus. No dynamic allocation on hot path —
-// event objects are pre-allocated and reused. Systems subscribe to events they
-// care about; producers emit when significant state changes occur.
-// This replaces the ~300 lines of ad-hoc callback wiring in GameSimulation.
-
+/**
+ * Purpose: This file provides publish/subscribe event flow between decoupled systems.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 export type EventHandler<T> = (payload: T) => void;
 
 interface Subscription<T> {

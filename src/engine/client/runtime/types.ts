@@ -1,4 +1,8 @@
-// Shared client runtime types for movement input, snapshots, and render handoff.
+/**
+ * Purpose: This file defines data/type contracts that keep connected systems compatible.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import type { MovementMode } from "../../shared/index";
 import type { AbilityCategory } from "../../shared/index";
 import type { WorldItemState } from "../../shared/index";

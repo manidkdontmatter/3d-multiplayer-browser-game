@@ -1,5 +1,8 @@
-// Bridges ECS state into nengi entity create/update/despawn operations.
-// Reads ECS components directly — no intermediary snapshot object.
+/**
+ * Purpose: This file controls what server data is replicated and how it is packaged.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { NType } from "../../shared/netcode";
 import { MOVEMENT_MODE_GROUNDED, sanitizeMovementMode, type MovementMode } from "../../shared/index";
 import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";

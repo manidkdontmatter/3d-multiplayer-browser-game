@@ -1,4 +1,8 @@
-// Supervises map server child processes for each configured map instance.
+/**
+ * Purpose: This file defines the "map process supervisor" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the multi-process map orchestration layer.
+ * Human Summary: Used by process orchestration to supervise map/server processes and cross-process control flow.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import type { RuntimeMapConfig } from "../engine/shared/world";

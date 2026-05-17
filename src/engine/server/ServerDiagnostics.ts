@@ -1,4 +1,8 @@
-// Captures server errors and fatal diagnostics into a tiny capped local log file for host troubleshooting.
+/**
+ * Purpose: This file coordinates authoritative server behavior, and collects and reports runtime diagnostic information.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 

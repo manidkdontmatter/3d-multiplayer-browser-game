@@ -1,7 +1,8 @@
-// Universal trait system — composable, budgeted modifiers that can attach to any archetype kind.
-// Traits are the customization primitive: a player spends trait budget to select traits
-// that modify an entity's stats and grant runtime effects.
-
+/**
+ * Purpose: This file defines the "traits" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import type { StatModifier } from "./stats";
 
 export type StackPolicy = "replace" | "refresh" | "stack_add" | "max";

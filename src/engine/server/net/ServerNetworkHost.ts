@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file coordinates authoritative server behavior, and handles network transport, message flow, or network state.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import {
   AABB3D,
   Channel,

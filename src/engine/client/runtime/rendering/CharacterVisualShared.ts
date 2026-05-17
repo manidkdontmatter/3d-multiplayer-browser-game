@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file maps gameplay/network state to renderable visual objects.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { Box3, Group, type Object3D } from "three";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { VRMHumanoid, type VRM, type VRMCore, type VRMHumanBoneName, type VRMHumanBones } from "@pixiv/three-vrm";

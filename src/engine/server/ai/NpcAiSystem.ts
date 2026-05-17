@@ -1,4 +1,8 @@
-// Runs server-authoritative NPC behavior trees with Rapier broadphase perception and navigation-backed movement.
+/**
+ * Purpose: This file defines the "npc ai system" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   ABILITY_ID_PUNCH,

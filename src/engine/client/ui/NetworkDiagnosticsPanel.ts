@@ -1,4 +1,8 @@
-// Renders a toggleable top-right overlay with live client/network diagnostics for gameplay troubleshooting.
+/**
+ * Purpose: This file handles network transport, message flow, or network state, and collects and reports runtime diagnostic information.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 export interface NetworkDiagnosticsSnapshot {
   connectionMode: string;
   endpoint: string;

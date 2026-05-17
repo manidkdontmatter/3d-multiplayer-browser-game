@@ -1,4 +1,8 @@
-// Engine-generic network/simulation constants.
+/**
+ * Purpose: This file holds tunable settings and constants for this module area.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export const SERVER_PORT = 9001;
 export const SERVER_TICK_RATE = 30;
 export const SERVER_TICK_MS = 1000 / SERVER_TICK_RATE;

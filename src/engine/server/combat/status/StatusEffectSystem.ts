@@ -1,7 +1,8 @@
-// Authoritative status effect system. Tracks active status effects per entity,
-// applies periodic ticks, and removes expired effects. Subscribes to events
-// for triggers (health changed, damage dealt, etc.).
-
+/**
+ * Purpose: This file applies timed status effects and their ongoing impact.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";
 import type { EventBus } from "../../events/EventBus";
 import { GameEvent, type HealthChangedPayload } from "../../events/GameEvents";

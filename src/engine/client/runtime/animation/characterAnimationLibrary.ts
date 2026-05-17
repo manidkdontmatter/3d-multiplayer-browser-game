@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file maps gameplay state to character animation playback.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { AnimationClip, AnimationUtils } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { VRM, VRMCore } from "@pixiv/three-vrm";

@@ -1,4 +1,8 @@
-// Server-side wire message helpers for ability state, acks, and ability-use events.
+/**
+ * Purpose: This file controls what server data is replicated and how it is packaged.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import {
   ABILITY_ID_NONE,
   HOTBAR_SLOT_COUNT,

@@ -1,7 +1,8 @@
-// Game-specific stat, attribute, and blueprint registration.
-// The unified blueprints.json catalog is the single authored source of truth.
-// Legacy gameplay systems (ability, item, platform) receive catalogs derived from it.
-
+/**
+ * Purpose: This file defines the "registration" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the game-specific shared data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import {
   injectStatDefinitions,
   injectDerivedEffectDefinitions,

@@ -1,4 +1,8 @@
-// Client network facade handling commands, snapshots, interpolation, and ability-state sync.
+/**
+ * Purpose: This file coordinates client-side behavior and presentation, and handles network transport, message flow, or network state.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   coerceRuntimeMapConfig,
   ITEM_COMMAND_DROP,

@@ -1,6 +1,8 @@
-// Server-authoritative creator-profile system for universal blueprints.
-// Creator profiles constrain editing, while blueprint storage and character access
-// are kept global and generic.
+/**
+ * Purpose: This file defines the "creator system" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import {
   compileBlueprintFromCreatorDraft,
   createDraftFromBlueprint,

@@ -1,4 +1,8 @@
-// Renderer facade that applies frame snapshots to world visuals and audio systems.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior, and turns server-auth state into visible world rendering output.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { Vector3 } from "three";
 import { AudioEngine } from "./audio/AudioEngine";
 import type { RenderFrameSnapshot } from "./types";

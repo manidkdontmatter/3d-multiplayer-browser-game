@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file defines the "rotation" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export interface QuaternionLike {
   x: number;
   y: number;

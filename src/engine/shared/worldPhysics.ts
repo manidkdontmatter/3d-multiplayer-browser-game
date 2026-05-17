@@ -1,4 +1,8 @@
-// Builds deterministic static Rapier colliders for authored void locations and terrain children.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior, and defines physics setup, queries, or shared collision behavior.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import { buildTerrainMeshData } from "./world";
 import {

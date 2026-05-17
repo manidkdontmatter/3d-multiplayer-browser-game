@@ -1,4 +1,8 @@
-// Creates the shared runtime UI root and named layers used by all engine/client DOM UI.
+/**
+ * Purpose: This file renders or coordinates in-game UI panels and overlays.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 export type UiLayerName = "boot" | "gameplay" | "debug" | "tooltip";
 
 const UI_ROOT_ID = "ui-root";

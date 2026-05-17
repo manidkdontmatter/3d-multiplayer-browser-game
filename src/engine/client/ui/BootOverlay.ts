@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file defines the "boot overlay" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 const BOOT_HIDDEN_CLASS = "boot-overlay-hidden";
 const BOOT_ERROR_CLASS = "boot-overlay-error";
 

@@ -1,4 +1,8 @@
-// Shared world-query helpers that unify terrain/biome sampling for gameplay systems.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior, and provides filtered lookup/query helpers over world or ECS data.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import {
   sampleBiomeWeightsAt,
   sampleDominantBiomeAt,

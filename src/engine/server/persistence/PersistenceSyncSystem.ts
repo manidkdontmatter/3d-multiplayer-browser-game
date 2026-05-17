@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file loads/saves persistent data through the persistence pipeline.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { PlayerSnapshot } from "./PersistenceService";
 import { GUEST_ACCOUNT_ID_BASE } from "./PersistenceService";
 

@@ -1,4 +1,8 @@
-// Collects keyboard/mouse input and exposes deterministic sampled actions for the game loop.
+/**
+ * Purpose: This file defines the "input controller" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import type { MovementInput } from "./types";
 
 export type MouseBindingTarget = "primary" | "secondary";

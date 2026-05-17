@@ -1,6 +1,8 @@
-// ECS storage layer — owns the bitecs world with all component arrays.
-// Entity creation is delegated to EntityFactory; the store provides
-// low-level component accessors and hotbar/abilities helpers.
+/**
+ * Purpose: This file runs core simulation state updates in tick order, and keeps module state organized and queryable in memory.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { addEntity, createWorld, query, removeEntity } from "bitecs";
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 import { ComponentRegistry } from "./ComponentRegistry";

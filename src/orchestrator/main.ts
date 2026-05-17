@@ -1,4 +1,8 @@
-// Runs local control-plane orchestration for map process supervision, auth bootstrap, transfer tickets, and single-writer persistence.
+/**
+ * Purpose: This file starts this runtime entrypoint and wires the initial systems together.
+ * Scope: It belongs to the multi-process map orchestration layer.
+ * Human Summary: Used by process orchestration to supervise map/server processes and cross-process control flow.
+ */
 import { createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {

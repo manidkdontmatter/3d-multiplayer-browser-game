@@ -1,7 +1,8 @@
-// Lightweight bridge between the CreatorPanel UI and the network layer.
-// Converts CreatorPanelCommand → network messages and routes incoming
-// CreatorStateMessage → CreatorStateStore.
-
+/**
+ * Purpose: This file handles network transport, message flow, or network state.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { NType, type CreatorCommandPayload, type CreatorCommandAction } from "../../../shared/netcode";
 import { CreatorStateStore, type CreatorClientState } from "./CreatorStateStore";
 import type { CreatorPanelCommand } from "../../ui/CreatorPanel";

@@ -1,6 +1,8 @@
-// Shared item archetype, inventory, equipment, and interaction helpers for client/server gameplay.
-// Archetype data is injected by the game layer at startup via injectItemCatalog().
-
+/**
+ * Purpose: This file manages shared item data or item-related runtime behavior.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export type ItemCategory = "consumable" | "equipment" | "material" | "quest";
 export type EquipmentSlot = "weapon" | "head" | "body" | "legs" | "accessory";
 

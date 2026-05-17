@@ -1,4 +1,8 @@
-// Authoritative server simulation orchestrator — all systems read/write ECS components directly.
+/**
+ * Purpose: This file runs core simulation state updates in tick order.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   ABILITY_ID_NONE, ABILITY_ID_PUNCH,

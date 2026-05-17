@@ -1,4 +1,8 @@
-// Canonical asset ids and build-time source catalog for runtime-manifest generation.
+/**
+ * Purpose: This file defines or loads runtime asset metadata for reliable asset access.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 export type AssetKind = "gltf" | "vrma" | "texture" | "cubemap" | "audio" | "binary";
 export type AssetPriorityHint = "critical" | "near" | "background";
 

@@ -1,4 +1,8 @@
-// Game-specific client asset catalog bootstrap.
+/**
+ * Purpose: This file lists reusable definitions used by runtime systems, and defines or loads runtime asset metadata for reliable asset access.
+ * Scope: It belongs to the game-specific client composition layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   ASSET_GROUP_CORE,
   ASSET_GROUP_SFX,

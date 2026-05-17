@@ -1,4 +1,8 @@
-// Server-authoritative projectile simulation. Operates directly on ECS component arrays (no per-projectile objects).
+/**
+ * Purpose: This file simulates projectile spawn, travel, and hit behavior.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import { asBuffer, query } from "bitecs";
 import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";

@@ -1,4 +1,8 @@
-// Remote player visual/animation presenter used for replicated character rendering.
+/**
+ * Purpose: This file maps gameplay/network state to renderable visual objects.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { Group, Mesh, MeshStandardMaterial, BoxGeometry, CapsuleGeometry, type Object3D, type Scene } from "three";
 import { getFallbackAvatarVisual } from "./VisualRegistry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";

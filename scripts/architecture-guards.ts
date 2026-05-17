@@ -1,4 +1,8 @@
-// Architecture guard checks that enforce critical layering and determinism contracts.
+/**
+ * Purpose: This file enforces architecture boundaries and repo conventions automatically.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 

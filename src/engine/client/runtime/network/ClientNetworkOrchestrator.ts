@@ -1,4 +1,8 @@
-// Coordinates client prediction, reconciliation, and net-step ordering in the render loop.
+/**
+ * Purpose: This file coordinates client-side behavior and presentation, and handles network transport, message flow, or network state.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   getLocationDefinitionByPid,
   normalizeYaw,

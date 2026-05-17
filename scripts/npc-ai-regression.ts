@@ -1,4 +1,8 @@
-// Validates broadphase-driven NPC perception, hostile/docile behavior branches, and lifecycle tiering.
+/**
+ * Purpose: This file runs regression checks to catch behavior drift early.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import assert from "node:assert/strict";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { init as initNavigation } from "recast-navigation";

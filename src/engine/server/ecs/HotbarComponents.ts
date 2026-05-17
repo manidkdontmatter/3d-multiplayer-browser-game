@@ -1,4 +1,8 @@
-// Data-oriented helpers for fixed-width hotbar component slot access.
+/**
+ * Purpose: This file defines the "hotbar components" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { HOTBAR_SLOT_COUNT, clampHotbarSlotIndex } from "../../shared/index";
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 

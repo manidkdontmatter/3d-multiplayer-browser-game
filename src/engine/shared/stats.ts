@@ -1,7 +1,8 @@
-// Universal stat allocation + derivation system shared by server and client.
-// The engine provides the derivation function; the game layer injects which stat
-// buckets and derived effects exist for each archetype kind at startup.
-
+/**
+ * Purpose: This file defines the "stats" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 export interface StatAllocationDefinition {
   readonly id: string;
   readonly label: string;

@@ -1,4 +1,8 @@
-// Thin wrapper around nengi client transport, handshake, and message draining behavior.
+/**
+ * Purpose: This file coordinates client-side behavior and presentation.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { Client, Interpolator, type Context } from "nengi";
 import { WebSocketClientAdapter } from "nengi-websocket-client-adapter";
 

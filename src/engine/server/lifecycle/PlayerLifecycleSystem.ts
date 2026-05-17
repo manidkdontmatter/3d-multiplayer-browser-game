@@ -1,5 +1,8 @@
-// Player connect/disconnect flow. Creates Rapier bodies, calls back to create
-// ECS entities, manages channel subscriptions and lifecycle cleanup.
+/**
+ * Purpose: This file handles player/session lifecycle transitions.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import { PHYSICS_GROUP_CHARACTER } from "../../shared/index";
 import type { PlayerSnapshot } from "../persistence/PersistenceService";

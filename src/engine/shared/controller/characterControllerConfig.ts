@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file holds tunable settings and constants for this module area.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import type RAPIER from "@dimforge/rapier3d-compat";
 
 export const PLAYER_CHARACTER_CONTROLLER_OFFSET = 0.01;

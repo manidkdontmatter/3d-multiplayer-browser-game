@@ -1,4 +1,8 @@
-// Main client runtime loop coordinating input, networking, prediction, rendering, and UI state.
+/**
+ * Purpose: This file coordinates client-side behavior and presentation.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { Clock } from "three";
 import {
   ABILITY_ID_NONE,

@@ -1,4 +1,8 @@
-// EID-based lookup indexes. No typed-object references.
+/**
+ * Purpose: This file re-exports this module group through a single import surface, and runs core simulation state updates in tick order.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type RAPIER from "@dimforge/rapier3d-compat";
 
 export class SimulationEcsIndexRegistry {

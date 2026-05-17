@@ -1,4 +1,8 @@
-// Centralized client asset manager with runtime manifest loading, request deduplication, and prioritized on-demand fetches.
+/**
+ * Purpose: This file defines or loads runtime asset metadata for reliable asset access.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   AudioLoader,
   CubeTexture,

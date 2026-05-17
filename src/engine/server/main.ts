@@ -1,4 +1,8 @@
-// Boots the authoritative server runtime and installs basic fatal/error diagnostics for hosts.
+/**
+ * Purpose: This file starts this runtime entrypoint and wires the initial systems together.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { resolve } from "node:path";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { init as initNavigation } from "recast-navigation";

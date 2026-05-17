@@ -1,5 +1,8 @@
-// Maps abstract component names to bitecs component objects.
-// Used by EntityFactory to resolve runtime component set membership.
+/**
+ * Purpose: This file tracks known definitions and lookup mappings in one place.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 
 type ComponentDef = Record<string, unknown>;

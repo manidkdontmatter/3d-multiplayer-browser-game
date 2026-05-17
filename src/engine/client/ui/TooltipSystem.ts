@@ -1,4 +1,8 @@
-// Provides a global themed tooltip layer that skins native title-based tooltips across the client UI.
+/**
+ * Purpose: This file defines the "tooltip system" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 export class TooltipSystem {
   private static installed = false;
   private readonly tooltipNode: HTMLDivElement;

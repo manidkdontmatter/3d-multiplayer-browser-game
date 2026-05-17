@@ -1,4 +1,8 @@
-// Bridges simulation state changes into nengi replication entities and server messages.
+/**
+ * Purpose: This file coordinates authoritative server behavior, and controls what server data is replicated and how it is packaged.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { AbilityDefinition } from "../../shared/index";
 import type { CreatorSessionSnapshot } from "../../shared/index";
 import { NType } from "../../shared/netcode";

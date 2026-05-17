@@ -1,4 +1,8 @@
-// Authoritative fixed-step movement for NPC characters. Reads/writes ECS components directly.
+/**
+ * Purpose: This file handles character/world movement rules and integration.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { GroundSupportHit } from "../../shared/index";
 import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";

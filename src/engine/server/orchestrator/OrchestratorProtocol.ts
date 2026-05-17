@@ -1,4 +1,8 @@
-// Server-side orchestrator and map-process contract types for control-plane RPC and persistence.
+/**
+ * Purpose: This file defines message shapes and command/event names used between systems, and coordinates multi-process map/server management and IPC contracts.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { InventoryStateSnapshot } from "../../shared/items";
 import type { RuntimeMapConfig } from "../../shared/world";
 

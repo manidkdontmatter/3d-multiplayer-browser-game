@@ -1,4 +1,8 @@
-// Game server entry point — initializes shared/server game data and boots the authoritative runtime.
+/**
+ * Purpose: This file starts this runtime entrypoint and wires the initial systems together.
+ * Scope: It belongs to the game-specific server composition layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { coerceRuntimeMapConfig } from "../../engine/shared/world";
 import { bootstrapServer } from "../../engine/server/main";
 import { initializeSharedGameData } from "../shared/index";

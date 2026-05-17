@@ -1,4 +1,8 @@
-// Applies server-authoritative ability bar mutation intents (slot assignment + mouse-slot bindings).
+/**
+ * Purpose: This file manages ability definitions, state, or execution flow, and executes one focused command/event handling path.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { AbilityCommand as AbilityWireCommand } from "../../shared/netcode";
 import { ABILITY_ID_NONE } from "../../shared/index";
 

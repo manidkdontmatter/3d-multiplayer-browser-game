@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file declares sqlite adapter typing used by persistence code.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 declare module "better-sqlite3" {
   interface RunResult {
     changes: number;

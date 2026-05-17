@@ -1,4 +1,8 @@
-// Regression checks for client networking helpers including reconciliation, interpolation, and ability message state.
+/**
+ * Purpose: This file coordinates client-side behavior and presentation, and handles network transport, message flow, or network state.
+ * Scope: It belongs to the developer validation and maintenance scripts.
+ * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
+ */
 import process from "node:process";
 import {
   NType,

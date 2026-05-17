@@ -1,4 +1,8 @@
-// Handles typed request/response IPC between a map child process and the parent orchestrator process.
+/**
+ * Purpose: This file sends and receives inter-process messages between runtime processes.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import {
   type OrchestratorIpcEnvelope,
   type OrchestratorIpcEventMap,

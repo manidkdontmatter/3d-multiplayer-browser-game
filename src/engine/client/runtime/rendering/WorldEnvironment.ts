@@ -1,4 +1,8 @@
-// Owns client-only scene/camera/renderer setup, void lighting, fog, and environment blending.
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,

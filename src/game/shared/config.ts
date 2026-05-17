@@ -1,4 +1,8 @@
-// Game-specific configuration values injected into the engine at startup.
+/**
+ * Purpose: This file holds tunable settings and constants for this module area.
+ * Scope: It belongs to the game-specific shared data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import { injectGameConfig, type GameConfig } from "../../engine/shared/config";
 
 const gameConfig: GameConfig = {

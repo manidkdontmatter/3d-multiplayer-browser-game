@@ -1,3 +1,8 @@
+/**
+ * Purpose: This file defines world state, world helpers, or world orchestration behavior.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type RAPIER from "@dimforge/rapier3d-compat";
 import { PlatformSystem } from "../platform/PlatformSystem";
 import {

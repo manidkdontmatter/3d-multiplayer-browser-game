@@ -1,4 +1,8 @@
-// Provides mode-aware server navigation so AI and future player automation are not tied to one pathfinding backend.
+/**
+ * Purpose: This file builds or queries navigation data for movement/pathing.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { NavMeshQuery, type NavMesh } from "recast-navigation";
 
 export interface NavPoint {

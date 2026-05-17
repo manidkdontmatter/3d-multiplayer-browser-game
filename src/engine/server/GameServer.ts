@@ -1,4 +1,8 @@
-// Runs the authoritative fixed-tick server loop, persistence flush cadence, and runtime health telemetry.
+/**
+ * Purpose: This file coordinates authoritative server behavior.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { performance } from "node:perf_hooks";
 import type { Context } from "nengi";
 import type { InventoryStateSnapshot } from "../shared/items";

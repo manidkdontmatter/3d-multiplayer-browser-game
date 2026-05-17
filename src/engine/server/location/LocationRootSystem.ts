@@ -1,4 +1,8 @@
-// Owns authoritative prototype void-location roots and moving-location frame carry.
+/**
+ * Purpose: This file manages large world location roots and their replicated identity.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type RAPIER from "@dimforge/rapier3d-compat";
 import {
   createLocationCarrierSensorColliders,

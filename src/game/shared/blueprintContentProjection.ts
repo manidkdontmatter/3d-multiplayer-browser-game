@@ -1,4 +1,8 @@
-// Projects the unified blueprint catalog into runtime catalogs consumed by legacy systems.
+/**
+ * Purpose: This file defines the "blueprint content projection" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the game-specific shared data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import {
   buildAbilityDefinitionFromBlueprint,
   buildItemDefinitionFromBlueprint,

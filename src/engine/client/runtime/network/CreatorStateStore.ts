@@ -1,6 +1,8 @@
-// Caches authoritative creator session snapshots from server owner-only messages.
-// Creator profiles constrain UI validation only; the stored draft remains universal blueprint data.
-
+/**
+ * Purpose: This file keeps module state organized and queryable in memory.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { NType, type CreatorStateMessageWire, type CreatorStatePayload } from "../../../shared/netcode";
 import type {
   BlueprintDefinition,

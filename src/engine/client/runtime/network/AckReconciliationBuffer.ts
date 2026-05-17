@@ -1,4 +1,8 @@
-// Client-side reconciliation buffer for pending input replay and authoritative ack ingestion.
+/**
+ * Purpose: This file reconciles client prediction with authoritative server updates.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { normalizeYaw, sanitizeMovementMode } from "../../../shared/index";
 import type { InputAckMessage } from "../../../shared/netcode";
 import type { MovementInput } from "../types";

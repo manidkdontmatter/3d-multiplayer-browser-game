@@ -1,4 +1,8 @@
-// Sends authoritative snapshot persistence events from map process to orchestrator single-writer endpoint.
+/**
+ * Purpose: This file coordinates multi-process map/server management and IPC contracts, and loads/saves persistent data through the persistence pipeline.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type { PersistSnapshotBatchRequest, PersistSnapshotRequest } from "../orchestrator/OrchestratorProtocol";
 import { MapProcessIpcChannel } from "../ipc/MapProcessIpcChannel";
 import type { PlayerSnapshot } from "./PersistenceService";

@@ -1,4 +1,8 @@
-// Client interpolated snapshot cache and projection into runtime render entity slices.
+/**
+ * Purpose: This file stores or assembles timeline snapshots for smooth network playback, and keeps module state organized and queryable in memory.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import { NType } from "../../../shared/netcode";
 import {
   MOVEMENT_MODE_GROUNDED,

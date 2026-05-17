@@ -1,4 +1,8 @@
-// Shared deterministic kinematic character motor used by server authority and client prediction.
+/**
+ * Purpose: This file applies low-level character motion and collision behavior.
+ * Scope: It belongs to the engine shared rules/data layer.
+ * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import { GRAVITY } from "../config";
 import { MOVEMENT_MODE_FLYING, type MovementMode } from "../movementMode";

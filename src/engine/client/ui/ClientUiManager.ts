@@ -1,4 +1,8 @@
-// Owns the engine client UI runtime, layers, shared widgets, and cross-widget UI policy.
+/**
+ * Purpose: This file coordinates client-side behavior and presentation, and renders or coordinates in-game UI panels and overlays.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import type { AbilityDefinition } from "../../shared/abilities";
 import type { InventoryStateSnapshot } from "../../shared/items";
 import type { CreatorClientState } from "../runtime/network/CreatorStateStore";

@@ -1,4 +1,8 @@
-// Tracks which controller currently drives each generic character.
+/**
+ * Purpose: This file defines the "controller system" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 export const CONTROLLER_KIND_NONE = 0;
 export const CONTROLLER_KIND_PLAYER = 1;
 export const CONTROLLER_KIND_AI = 2;

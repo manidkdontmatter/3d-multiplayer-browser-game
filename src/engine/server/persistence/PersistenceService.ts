@@ -1,5 +1,8 @@
-// SQLite persistence service for auth, character snapshots, blueprint access,
-// and other authoritative server-side durable state.
+/**
+ * Purpose: This file loads/saves persistent data through the persistence pipeline.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";

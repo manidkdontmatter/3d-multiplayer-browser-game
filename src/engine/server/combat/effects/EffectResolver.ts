@@ -1,8 +1,8 @@
-// Resolves declarative EffectModifiers into runtime consequences via ECS + EventBus.
-// This is the execution side of the creator pipeline: blueprints compile into
-// EffectModifier[], and the EffectResolver applies them at runtime.
-// Called by ability hits, projectile impacts, status ticks, trait triggers, etc.
-
+/**
+ * Purpose: This file defines the "effect resolver" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import type RAPIER from "@dimforge/rapier3d-compat";
 import type { EffectModifier } from "../../../shared/traits";
 import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";

@@ -1,4 +1,8 @@
-// Loads and validates server-only archetype data while using shared catalogs for cross-runtime content.
+/**
+ * Purpose: This file lists reusable definitions used by runtime systems.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import { PLATFORM_DEFINITIONS, type PlatformDefinition } from "../../shared/platforms";
 
 type Vec3Yaw = {

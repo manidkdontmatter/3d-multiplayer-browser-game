@@ -1,4 +1,8 @@
-// Authoritative damage application and player respawn handling for combat targets.
+/**
+ * Purpose: This file applies damage rules and health impact resolution.
+ * Scope: It belongs to the engine authoritative server layer.
+ * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
+ */
 import RAPIER from "@dimforge/rapier3d-compat";
 import { MOVEMENT_MODE_GROUNDED, type MovementMode } from "../../../shared/index";
 import type { EventBus } from "../../events/EventBus";

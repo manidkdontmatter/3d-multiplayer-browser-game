@@ -1,4 +1,8 @@
-// Handles access-key generation, URL-fragment parsing, and browser storage persistence per server URL.
+/**
+ * Purpose: This file defines the "access key" module so this responsibility has a dedicated, discoverable file.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 const ACCESS_KEY_LENGTH = 12;
 const ACCESS_KEY_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const ACCESS_KEY_FRAGMENT_PARAM = "k";

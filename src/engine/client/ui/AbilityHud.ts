@@ -1,4 +1,8 @@
-// Renders the fullscreen Main UI shell + combat hotbar for authoritative ability-book/hotbar interactions.
+/**
+ * Purpose: This file manages ability definitions, state, or execution flow, and renders real-time player HUD information.
+ * Scope: It belongs to the engine client runtime layer.
+ * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
+ */
 import {
   ABILITY_ID_NONE,
   HOTBAR_SLOT_COUNT,
