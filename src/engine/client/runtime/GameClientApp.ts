@@ -9,6 +9,14 @@ import {
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_PRIMARY_MOUSE_SLOT,
   DEFAULT_SECONDARY_MOUSE_SLOT,
+  NET_DIAGNOSTICS_WARNING_AVG_IN_BYTES,
+  NET_DIAGNOSTICS_WARNING_AVG_IN_MESSAGES,
+  NET_DIAGNOSTICS_WARNING_AVG_OUT_BYTES,
+  NET_DIAGNOSTICS_WARNING_AVG_OUT_MESSAGES,
+  NET_DIAGNOSTICS_WARNING_P95_IN_BYTES,
+  NET_DIAGNOSTICS_WARNING_P95_IN_MESSAGES,
+  NET_DIAGNOSTICS_WARNING_P95_OUT_BYTES,
+  NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES,
   getAbilityDefinitionById,
   getItemDefinitionById,
   movementModeToLabel,
@@ -363,6 +371,7 @@ export class GameClientApp {
     const mapLabel =
       mapConfig ? `${mapConfig.instanceId} (${mapConfig.mapId})` : "unknown";
     const localPlayerNid = this.network.getLocalPlayerNid();
+    const netDiagnostics = this.network.getServerNetDiagnostics();
     return {
       connectionMode: this.network.getConnectionState(),
       endpoint: this.network.getCurrentServerUrl() ?? this.serverUrl,
@@ -376,6 +385,24 @@ export class GameClientApp {
       serverClockOffsetMs: `${this.network.getServerClockOffsetMs().toFixed(1)} ms`,
       serverPlayers:
         this.network.getServerPlayerCount() === null ? "--" : String(this.network.getServerPlayerCount()),
+      netWindow: netDiagnostics ? `${netDiagnostics.windowSeconds}s` : "--",
+      netBudgetStatus: this.formatNetWarningStatus(netDiagnostics?.warningMask ?? 0),
+      netOutBytesPerSecond: this.formatNetKibPerSecondPair(
+        netDiagnostics?.avgOutboundBytesPerSecond ?? 0,
+        netDiagnostics?.p95OutboundBytesPerSecond ?? 0
+      ),
+      netInBytesPerSecond: this.formatNetKibPerSecondPair(
+        netDiagnostics?.avgInboundBytesPerSecond ?? 0,
+        netDiagnostics?.p95InboundBytesPerSecond ?? 0
+      ),
+      netOutMessagesPerSecond: this.formatNetRatePair(
+        netDiagnostics?.avgOutboundMessagesPerSecond ?? 0,
+        netDiagnostics?.p95OutboundMessagesPerSecond ?? 0
+      ),
+      netInMessagesPerSecond: this.formatNetRatePair(
+        netDiagnostics?.avgInboundMessagesPerSecond ?? 0,
+        netDiagnostics?.p95InboundMessagesPerSecond ?? 0
+      ),
       aoiPlayers: String(aoiPlayers),
       locationRoots: String(this.network.getLocationRoots().length),
       worldEntities: String(this.network.getWorldEntities().length),
@@ -823,6 +850,30 @@ export class GameClientApp {
       }
     }
     this.groundedLastFixedTick = groundedNow;
+  }
+
+  private formatNetKibPerSecondPair(avgBytesPerSecond: number, p95BytesPerSecond: number): string {
+    return `${(avgBytesPerSecond / 1024).toFixed(2)} / ${(p95BytesPerSecond / 1024).toFixed(2)}`;
+  }
+
+  private formatNetRatePair(avgRate: number, p95Rate: number): string {
+    return `${avgRate.toFixed(2)} / ${p95Rate.toFixed(2)}`;
+  }
+
+  private formatNetWarningStatus(mask: number): string {
+    if (mask === 0) {
+      return "ok";
+    }
+    const parts: string[] = [];
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_OUT_BYTES) parts.push("avg out bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_IN_BYTES) parts.push("avg in bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_OUT_MESSAGES) parts.push("avg out msg");
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_IN_MESSAGES) parts.push("avg in msg");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_OUT_BYTES) parts.push("p95 out bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_IN_BYTES) parts.push("p95 in bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES) parts.push("p95 out msg");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_IN_MESSAGES) parts.push("p95 in msg");
+    return `warn: ${parts.join(", ")}`;
   }
 
   private static resolveServerUrl(): string {

@@ -8,8 +8,6 @@ import { GUEST_ACCOUNT_ID_BASE } from "./PersistenceService";
 
 type PendingOfflineSnapshot = {
   snapshot: PlayerSnapshot;
-  dirtyCharacter: boolean;
-  dirtyAbilityState: boolean;
 };
 
 export class PersistenceSyncSystem {
@@ -40,9 +38,7 @@ export class PersistenceSyncSystem {
       return;
     }
     this.pendingOfflineSnapshots.set(accountId, {
-      snapshot,
-      dirtyCharacter: true,
-      dirtyAbilityState: true
+      snapshot
     });
     this.dirtyCharacterAccountIds.add(accountId);
     this.dirtyAbilityStateAccountIds.add(accountId);
@@ -57,12 +53,6 @@ export class PersistenceSyncSystem {
       return null;
     }
     this.pendingOfflineSnapshots.delete(accountId);
-    if (!pendingOfflineSnapshot.dirtyCharacter) {
-      this.dirtyCharacterAccountIds.delete(accountId);
-    }
-    if (!pendingOfflineSnapshot.dirtyAbilityState) {
-      this.dirtyAbilityStateAccountIds.delete(accountId);
-    }
     return pendingOfflineSnapshot.snapshot;
   }
 
@@ -84,9 +74,9 @@ export class PersistenceSyncSystem {
       }
 
       const shouldSaveCharacter =
-        this.dirtyCharacterAccountIds.has(accountId) || Boolean(pendingOfflineSnapshot?.dirtyCharacter);
+        this.dirtyCharacterAccountIds.has(accountId);
       const shouldSaveAbilityState =
-        this.dirtyAbilityStateAccountIds.has(accountId) || Boolean(pendingOfflineSnapshot?.dirtyAbilityState);
+        this.dirtyAbilityStateAccountIds.has(accountId);
 
       if (shouldSaveCharacter) {
         saveCharacterSnapshot(snapshot);

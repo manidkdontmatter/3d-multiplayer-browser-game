@@ -22,7 +22,8 @@ export enum NType {
   ItemCommand = 21,
   InventoryStateMessage = 22,
   CreatorCommand = 23,
-  CreatorStateMessage = 24
+  CreatorStateMessage = 24,
+  ServerNetDiagnosticsMessage = 25
 }
 
 export const inputCommandSchema = defineSchema({
@@ -190,6 +191,20 @@ export const creatorStateMessageSchema = defineSchema({
   stateJson: Binary.String
 });
 
+export const serverNetDiagnosticsMessageSchema = defineSchema({
+  connectedPlayers: Binary.UInt16,
+  windowSeconds: Binary.UInt8,
+  avgInboundBytesPerSecond: Binary.Float32,
+  avgOutboundBytesPerSecond: Binary.Float32,
+  avgInboundMessagesPerSecond: Binary.Float32,
+  avgOutboundMessagesPerSecond: Binary.Float32,
+  p95InboundBytesPerSecond: Binary.Float32,
+  p95OutboundBytesPerSecond: Binary.Float32,
+  p95InboundMessagesPerSecond: Binary.Float32,
+  p95OutboundMessagesPerSecond: Binary.Float32,
+  warningMask: Binary.UInt8
+});
+
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCommand, abilityCommandSchema);
@@ -208,6 +223,7 @@ ncontext.register(NType.MapTransferMessage, mapTransferMessageSchema);
 ncontext.register(NType.InventoryStateMessage, inventoryStateMessageSchema);
 ncontext.register(NType.CreatorCommand, creatorCommandSchema);
 ncontext.register(NType.CreatorStateMessage, creatorStateMessageSchema);
+ncontext.register(NType.ServerNetDiagnosticsMessage, serverNetDiagnosticsMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -419,3 +435,27 @@ export interface CreatorStatePayload {
   availableBlueprintCount: number;
   availableBlueprintsJson: string;
 }
+
+export interface ServerNetDiagnosticsMessage {
+  ntype: NType.ServerNetDiagnosticsMessage;
+  connectedPlayers: number;
+  windowSeconds: number;
+  avgInboundBytesPerSecond: number;
+  avgOutboundBytesPerSecond: number;
+  avgInboundMessagesPerSecond: number;
+  avgOutboundMessagesPerSecond: number;
+  p95InboundBytesPerSecond: number;
+  p95OutboundBytesPerSecond: number;
+  p95InboundMessagesPerSecond: number;
+  p95OutboundMessagesPerSecond: number;
+  warningMask: number;
+}
+
+export const NET_DIAGNOSTICS_WARNING_AVG_OUT_BYTES = 1 << 0;
+export const NET_DIAGNOSTICS_WARNING_AVG_IN_BYTES = 1 << 1;
+export const NET_DIAGNOSTICS_WARNING_AVG_OUT_MESSAGES = 1 << 2;
+export const NET_DIAGNOSTICS_WARNING_AVG_IN_MESSAGES = 1 << 3;
+export const NET_DIAGNOSTICS_WARNING_P95_OUT_BYTES = 1 << 4;
+export const NET_DIAGNOSTICS_WARNING_P95_IN_BYTES = 1 << 5;
+export const NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES = 1 << 6;
+export const NET_DIAGNOSTICS_WARNING_P95_IN_MESSAGES = 1 << 7;

@@ -593,8 +593,8 @@ export class PersistenceService {
       const upsertCharacter = this.db.prepare(
         `INSERT INTO characters (
             player_id, x, y, z, yaw, pitch, vx, vy, vz, health,
-            active_hotbar_slot, primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(player_id) DO UPDATE SET
            x=excluded.x,
            y=excluded.y,
@@ -605,7 +605,6 @@ export class PersistenceService {
            vy=excluded.vy,
            vz=excluded.vz,
            health=excluded.health,
-           active_hotbar_slot=excluded.active_hotbar_slot,
            primary_mouse_slot=excluded.primary_mouse_slot,
            secondary_mouse_slot=excluded.secondary_mouse_slot,
            updated_at=excluded.updated_at,
@@ -630,7 +629,6 @@ export class PersistenceService {
             snapshot.vy,
             snapshot.vz,
             this.clampInteger(snapshot.health, 0, PLAYER_MAX_HEALTH),
-            this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             this.clampInteger(snapshot.secondaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             now,
@@ -662,8 +660,8 @@ export class PersistenceService {
       .prepare(
         `INSERT INTO characters (
             player_id, x, y, z, yaw, pitch, vx, vy, vz, health,
-            active_hotbar_slot, primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(player_id) DO UPDATE SET
            x=excluded.x,
            y=excluded.y,
@@ -674,7 +672,6 @@ export class PersistenceService {
            vy=excluded.vy,
            vz=excluded.vz,
            health=excluded.health,
-           active_hotbar_slot=excluded.active_hotbar_slot,
            primary_mouse_slot=excluded.primary_mouse_slot,
            secondary_mouse_slot=excluded.secondary_mouse_slot,
            updated_at=excluded.updated_at,
@@ -691,7 +688,6 @@ export class PersistenceService {
         snapshot.vy,
         snapshot.vz,
         this.clampInteger(snapshot.health, 0, PLAYER_MAX_HEALTH),
-        this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         this.clampInteger(snapshot.secondaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         now,

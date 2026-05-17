@@ -16,6 +16,8 @@ import type {
   ServerNetworkQueueEvent,
   ServerNetworkUser
 } from "./ServerNetworkTypes";
+import { InstrumentedUwsInstanceAdapter } from "./InstrumentedUwsInstanceAdapter";
+import { ServerNetDiagnosticsCollector } from "./ServerNetDiagnosticsCollector";
 
 export interface ServerNetworkHostStartOptions {
   readonly port: number;
@@ -36,7 +38,7 @@ export class ServerNetworkHost {
   private readonly farChannel: ChannelAABB3D;
   private adapter: ServerNetworkAdapter | null = null;
 
-  public constructor(context: Context) {
+  public constructor(context: Context, private readonly diagnostics: ServerNetDiagnosticsCollector) {
     this.instance = new Instance(context);
     this.globalChannel = new Channel(this.instance.localState);
     this.nearChannel = new ChannelAABB3D(this.instance.localState);
@@ -112,6 +114,10 @@ export class ServerNetworkHost {
     this.instance.step();
   }
 
+  public getConnectedUsers(): ServerNetworkUser[] {
+    return Array.from(this.instance.users.values()) as ServerNetworkUser[];
+  }
+
   private async createNetworkAdapter(): Promise<ServerNetworkAdapter> {
     const nodeMajor = Number(process.versions.node.split(".")[0] ?? 0);
     const nodeSupportsUws = nodeMajor === 20;
@@ -122,9 +128,8 @@ export class ServerNetworkHost {
     }
 
     try {
-      const { uWebSocketsInstanceAdapter } = await import("nengi-uws-instance-adapter");
       console.log("[server] transport=uws");
-      return new uWebSocketsInstanceAdapter(this.instance.network, {});
+      return new InstrumentedUwsInstanceAdapter(this.instance.network, this.diagnostics);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`uWS adapter failed to initialize: ${message}`);

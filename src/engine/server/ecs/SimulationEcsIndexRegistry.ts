@@ -11,9 +11,7 @@ export class SimulationEcsIndexRegistry {
 
   // Player lookup indexes
   private readonly playerEidByUserId = new Map<number, number>();
-  private readonly playerEidByNid = new Map<number, number>();
   private readonly playerEidByAccountId = new Map<number, number>();
-  private readonly playerEids = new Set<number>();
 
   // Character (NPC) lookup indexes
   private readonly characterEids = new Set<number>();
@@ -22,35 +20,25 @@ export class SimulationEcsIndexRegistry {
   // Rapier physics refs — stored by EID
   private readonly bodyByEid = new Map<number, RAPIER.RigidBody>();
   private readonly colliderByEid = new Map<number, RAPIER.Collider>();
-  private readonly playerBodyByEid = new Map<number, RAPIER.RigidBody>();
-  private readonly playerColliderByEid = new Map<number, RAPIER.Collider>();
   private readonly dummyBodyByEid = new Map<number, RAPIER.RigidBody>();
   private readonly dummyColliderByEid = new Map<number, RAPIER.Collider>();
 
   // ── Player indexes ────────────────────────────────────────────────────────
 
   public bindPlayerIndexes(userId: number, eid: number, nid: number, accountId: number): void {
-    this.playerEids.add(eid);
     this.characterEids.add(eid);
     this.playerEidByUserId.set(userId, eid);
-    this.playerEidByNid.set(Math.max(0, Math.floor(nid)), eid);
     this.playerEidByAccountId.set(Math.max(1, Math.floor(accountId)), eid);
   }
 
   public unbindPlayerIndexes(userId: number, eid: number, nid: number, accountId: number): void {
-    this.playerEids.delete(eid);
     this.characterEids.delete(eid);
     this.playerEidByUserId.delete(userId);
-    this.playerEidByNid.delete(Math.max(0, Math.floor(nid)));
     this.playerEidByAccountId.delete(Math.max(1, Math.floor(accountId)));
   }
 
   public getPlayerEidByUserId(userId: number): number | undefined {
     return this.playerEidByUserId.get(userId);
-  }
-
-  public getPlayerEidByNid(nid: number): number | undefined {
-    return this.playerEidByNid.get(Math.max(0, Math.floor(nid)));
   }
 
   public getPlayerEidByAccountId(accountId: number): number | undefined {
@@ -67,11 +55,6 @@ export class SimulationEcsIndexRegistry {
 
   public updatePlayerNidIndex(eid: number, previousNid: number, nextNid: number): void {
     this.updateCharacterNidIndex(eid, previousNid, nextNid);
-    if (!this.playerEids.has(eid)) return;
-    if (previousNid !== nextNid) {
-      this.playerEidByNid.delete(Math.max(0, Math.floor(previousNid)));
-    }
-    this.playerEidByNid.set(Math.max(0, Math.floor(nextNid)), eid);
   }
 
   public updateGlobalNidIndex(eid: number, previousNid: number, nextNid: number): void {
@@ -130,16 +113,6 @@ export class SimulationEcsIndexRegistry {
 
   public registerPlayerRefs(eid: number, body: RAPIER.RigidBody, collider: RAPIER.Collider): void {
     this.registerCharacterRefs(eid, body, collider);
-    this.playerBodyByEid.set(eid, body);
-    this.playerColliderByEid.set(eid, collider);
-  }
-
-  public getPlayerBody(eid: number): RAPIER.RigidBody | undefined {
-    return this.playerBodyByEid.get(eid);
-  }
-
-  public getPlayerCollider(eid: number): RAPIER.Collider | undefined {
-    return this.playerColliderByEid.get(eid);
   }
 
   // ── Dummy physics refs ────────────────────────────────────────────────────
@@ -163,21 +136,15 @@ export class SimulationEcsIndexRegistry {
     for (const [userId, indexedEid] of this.playerEidByUserId.entries()) {
       if (indexedEid === eid) { this.playerEidByUserId.delete(userId); break; }
     }
-    for (const [nid, indexedEid] of this.playerEidByNid.entries()) {
-      if (indexedEid === eid) { this.playerEidByNid.delete(nid); break; }
-    }
     for (const [accountId, indexedEid] of this.playerEidByAccountId.entries()) {
       if (indexedEid === eid) { this.playerEidByAccountId.delete(accountId); break; }
     }
-    this.playerEids.delete(eid);
     this.characterEids.delete(eid);
     for (const [nid, indexedEid] of this.characterEidByNid.entries()) {
       if (indexedEid === eid) { this.characterEidByNid.delete(nid); break; }
     }
     this.bodyByEid.delete(eid);
     this.colliderByEid.delete(eid);
-    this.playerBodyByEid.delete(eid);
-    this.playerColliderByEid.delete(eid);
     this.dummyBodyByEid.delete(eid);
     this.dummyColliderByEid.delete(eid);
   }

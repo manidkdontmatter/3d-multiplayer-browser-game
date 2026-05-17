@@ -21,6 +21,7 @@ import {
   type CreatorCommandWire,
   type ItemCommand,
   type MapTransferCommand,
+  type ServerNetDiagnosticsMessage,
   ncontext
 } from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
@@ -68,6 +69,7 @@ export class NetworkClient {
   private queuedAbilityCommand: QueuedAbilityCommand | null = null;
   private localPlayerNid: number | null = null;
   private serverPlayerCount: number | null = null;
+  private serverNetDiagnostics: ServerNetDiagnosticsMessage | null = null;
   private pendingMapTransferInstruction: MapTransferInstruction | null = null;
 
   public constructor() {
@@ -87,6 +89,7 @@ export class NetworkClient {
         this.ackBuffer.reset();
         this.queuedAbilityCommand = null;
         this.serverPlayerCount = null;
+        this.serverNetDiagnostics = null;
         this.pendingMapTransferInstruction = null;
       },
       () => {
@@ -344,6 +347,10 @@ export class NetworkClient {
     return this.serverPlayerCount;
   }
 
+  public getServerNetDiagnostics(): ServerNetDiagnosticsMessage | null {
+    return this.serverNetDiagnostics;
+  }
+
   public consumeMapTransferInstruction(): MapTransferInstruction | null {
     const pending = this.pendingMapTransferInstruction;
     this.pendingMapTransferInstruction = null;
@@ -419,6 +426,23 @@ export class NetworkClient {
       onServerPopulationMessage: (message) => {
         const raw = Number(message.onlinePlayers);
         this.serverPlayerCount = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : null;
+      },
+      onServerNetDiagnosticsMessage: (message) => {
+        this.serverNetDiagnostics = {
+          ...message,
+          connectedPlayers: this.clampUnsignedInt(message.connectedPlayers, 0xffff),
+          windowSeconds: this.clampUnsignedInt(message.windowSeconds, 0xff),
+          avgInboundBytesPerSecond: this.sanitizeFiniteMetric(message.avgInboundBytesPerSecond),
+          avgOutboundBytesPerSecond: this.sanitizeFiniteMetric(message.avgOutboundBytesPerSecond),
+          avgInboundMessagesPerSecond: this.sanitizeFiniteMetric(message.avgInboundMessagesPerSecond),
+          avgOutboundMessagesPerSecond: this.sanitizeFiniteMetric(message.avgOutboundMessagesPerSecond),
+          p95InboundBytesPerSecond: this.sanitizeFiniteMetric(message.p95InboundBytesPerSecond),
+          p95OutboundBytesPerSecond: this.sanitizeFiniteMetric(message.p95OutboundBytesPerSecond),
+          p95InboundMessagesPerSecond: this.sanitizeFiniteMetric(message.p95InboundMessagesPerSecond),
+          p95OutboundMessagesPerSecond: this.sanitizeFiniteMetric(message.p95OutboundMessagesPerSecond),
+          warningMask: this.clampUnsignedInt(message.warningMask, 0xff)
+        };
+        this.serverPlayerCount = this.serverNetDiagnostics.connectedPlayers;
       },
       onMapTransferMessage: (message) => {
         const wsUrl = typeof message.wsUrl === "string" ? message.wsUrl : "";
@@ -524,5 +548,12 @@ export class NetworkClient {
     }
     const integer = Math.floor(raw);
     return Math.max(0, Math.min(max, integer));
+  }
+
+  private sanitizeFiniteMetric(raw: number): number {
+    if (!Number.isFinite(raw)) {
+      return 0;
+    }
+    return Math.max(0, raw);
   }
 }

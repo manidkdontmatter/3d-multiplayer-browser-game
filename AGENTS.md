@@ -8,9 +8,12 @@ This repository is a production quality first-person authoritative server multip
 - Networking: nengi 2.0
 - Rendering: Three.js. Physics: Rapier.
 - Humanoid runtime standards: VRM avatars + VRMA animations (no new humanoid runtime formats unless user approves).
+- ecs via bitecs
+- sqlite
 
 ## Architecture Rules
 
+- prefer zero allocation solutions when feasible especially in the hot path, or solutions that are easy on the garbage collector at least
 - add automated enforcement of rules in this document where feasible and appropriate
 - existing tests may represent outdated assumptions and should be reported
 - do not abuse abstraction, abstraction must have a purpose
@@ -19,7 +22,7 @@ This repository is a production quality first-person authoritative server multip
 - Maintain authoritative server multiplayer fundamentals: server-authoritative simulation, client intent-only input, client should be as much of a graphical dummy as possible, simply rendering what the server told it should appear where, what it looks like, the size it should be, etc, appearance related data. client side prediction for player, deterministic tick/order, strict client/server separation with anything shared going in shared as appropriate.
 - Heavily favor composition over inheritance where applicable. This is one of those "anything can be anything" games like Caves of Qud or Dwarf Fortress where for example a door could become a hostile npc, or for example you could transfer your mind from your character into the door and play as the door. So we must have ultimate flexibility in this sandbox game.
 - Always put at the top of every script a comment explaining what it is, if an existing script doesn't have that yet, add it. This is to help humans understand the script's purpose, make the comment easy for them to understand.
-- Prefer Data Oriented Design and Data Driven Design. be against object oriented design and inheritence. prefer extreme composition, composition over inheritence
+- Prefer Data Oriented Design and Data Driven Design. be against object oriented design and inheritance. prefer extreme composition, composition over inheritance
 - report near-duplicated systems
 - Prefer common game design patterns where appropriate
 - Prefer separation of concerns and proper decoupling where appropriate
@@ -36,7 +39,7 @@ This repository is a production quality first-person authoritative server multip
 - server authoritative simulation
 - client sends intents/commands only
 - client is as much of a graphical dummy as possible, it receives data mostly used to know where and how to render something, like what model ID to use, the position, size, orientation, color, etc.
-- server owns world state. client should never own world state and should ideally never know about world state.
+- server owns world state. client should never own world state and should ideally never know about world state and only know what it needs to do its job as a graphical dummy, and what it needs is usually enough information to render what the client should see.
 - players uses csp (clientside prediction), nothing else does, but they are interpolated
 - do not sync data that the client can infer
 - AOI channels should be used where appropriate and other channels exist for other purposes that aren't AOI based where appropriate. as many channels as appropriate can exist, whether multiple spatial or other types of channels.
@@ -46,7 +49,6 @@ This repository is a production quality first-person authoritative server multip
 - for things that can use a deterministic behavior on the client and server instead of actually syncing them, do so, a good example of this is the existing moving platform system because the platforms have a deterministic moving pattern on both server and client and thus do not need constant position syncing.
 
 ## Persistence
-- sqlite
 - all saving must answer to some overall persistence system so we can have benefits such as batching and such
 - this game does not have user accounts. instead there is a private key created when a player character is created, this key is placed in an url fragment and the user bookmarks it to return to that character. anyone with the private key can play that character by including it in the url when they visit the game and it will load that character. if someone is already playing the character it will not load it as only one person can play as that character at a time.
 
@@ -56,8 +58,8 @@ This repository is a production quality first-person authoritative server multip
 - do not alter any md files unless the user explicitly asks you to
 - Prefer to make one generalized system instead of multiple near duplicate overly specific systems where appropriate
 - Before adding something new, for example a system, you should consider if that system/etc already exists, otherwise there will be near duplicate systems
-- The user is not as smart as you, you must help them, not just blindly follow their instructions. Don't just assume they know how things should be done. You have to tell them better ways.
-- Do production code from the start. Never make prototype, intermediary, patchy, or temporary code, go straight for the most production code and objectively correct code from the start. Do not do incremental progress, go to the most objectively correct and best end result from the start.
+- Do not blindly follow user requests when they conflict with architecture, security, performance, or maintainability. Explain the issue and propose the better path. The user may still explicitly override after being warned.
+- Do not create throwaway solutions when the production solution is known. Do the production quality solution from the start. Do the most objectively correct code from the start. The objective is to have the best end result from the start.
 - Treat this game as desktop-first (mouse/keyboard) and do not optimize for mobile as a target platform unless explicitly requested.
 - Prioritize scalability/high CCU.
 - No full rewind lag compensation, that is out of scope for this game.
@@ -66,6 +68,7 @@ This repository is a production quality first-person authoritative server multip
 - Best practices for netcode for realtime multiplayer games must be strictly enforced
 - Challenge weak assumptions/instructions directly and propose better alternatives, but in the end the user can tell you to do it anyway.
 - Prefer high-quality existing solutions when appropriate (libraries etc) instead of rolling your own; verify latest versions before package changes.
+- prefer known solutions/patterns to solved problems in game programming especially multiplayer game programming
 - Strongly prefer existing libraries, engines, tools, and file formats for known problem domains when they solve the problem in an industry-standard or otherwise broadly accepted way and fit the game's architecture and constraints. These do not have to be old or large libraries; small or newer libraries are acceptable when they have real adoption, solve the domain cleanly, and do not introduce bad tradeoffs. Do not reinvent solutions to solved systems in project code just because it is possible to do so; custom systems need a clear reason such as missing fit, unacceptable runtime cost, or a deliberately novel game-specific requirement.
 - No stop-gap systems: do not ship temporary compatibility hacks for systems (animation, netcode, physics etc) when a production standard path exists.
 - Do not implement throwaway prototype architecture when the production-standard design is already known. Temporary diagnostic scaffolding is acceptable, but the actual system should be built on the correct foundation.

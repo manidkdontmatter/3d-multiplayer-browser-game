@@ -6,19 +6,35 @@
 import { performance } from "node:perf_hooks";
 import type { Context } from "nengi";
 import type { InventoryStateSnapshot } from "../shared/items";
-import { SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
+import { NType, SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
 import { GameSimulation } from "./GameSimulation";
 import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
 import { PersistenceService } from "./persistence/PersistenceService";
 import { OrchestratorPersistenceBridge } from "./persistence/OrchestratorPersistenceBridge";
+import {
+  NET_DIAGNOSTICS_WARNING_AVG_IN_BYTES,
+  NET_DIAGNOSTICS_WARNING_AVG_IN_MESSAGES,
+  NET_DIAGNOSTICS_WARNING_AVG_OUT_BYTES,
+  NET_DIAGNOSTICS_WARNING_AVG_OUT_MESSAGES,
+  NET_DIAGNOSTICS_WARNING_P95_IN_BYTES,
+  NET_DIAGNOSTICS_WARNING_P95_IN_MESSAGES,
+  NET_DIAGNOSTICS_WARNING_P95_OUT_BYTES,
+  NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES
+} from "../shared/netcode";
 import { ServerNetworkHost } from "./net/ServerNetworkHost";
+import {
+  ServerNetDiagnosticsCollector,
+  type ServerNetDiagnosticsSnapshot
+} from "./net/ServerNetDiagnosticsCollector";
 import { ServerNetworkEventRouter } from "./net/ServerNetworkEventRouter";
 
 const MAX_TICK_INTERVAL_SAMPLES = 6000;
 const DEFAULT_PERSIST_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_HEALTH_LOG_INTERVAL_MS = 30000;
+const DEFAULT_NET_DIAGNOSTICS_BROADCAST_INTERVAL_MS = 1000;
 
 export class GameServer {
+  private readonly netDiagnostics: ServerNetDiagnosticsCollector;
   private readonly networkHost: ServerNetworkHost;
   private readonly simulation: GameSimulation;
   private readonly persistence: PersistenceService;
@@ -43,6 +59,7 @@ export class GameServer {
   private catchUpStepCount = 0;
   private skippedTickResyncCount = 0;
   private lastHealthLogMs = 0;
+  private nextNetDiagnosticsBroadcastAtMs = 0;
   private lastTickStartMs: number | null = null;
   private readonly tickIntervalsMs: number[] = [];
   private tickIntervalSampleWriteIndex = 0;
@@ -50,7 +67,8 @@ export class GameServer {
   private lastLiveMetricsSampleCount = 0;
 
   public constructor(context: Context, private readonly ipcChannel: MapProcessIpcChannel | null = null) {
-    this.networkHost = new ServerNetworkHost(context);
+    this.netDiagnostics = new ServerNetDiagnosticsCollector();
+    this.networkHost = new ServerNetworkHost(context, this.netDiagnostics);
     this.persistFlushIntervalMs = this.resolvePersistFlushIntervalMs();
     this.healthLogIntervalMs = this.resolveHealthLogIntervalMs();
     this.persistence = new PersistenceService(process.env.SERVER_DATA_PATH ?? "./data/game.sqlite");
@@ -102,6 +120,7 @@ export class GameServer {
     this.serverStartAtMs = now;
     this.nextTickAtMs = now + SERVER_TICK_MS;
     this.nextPersistFlushAtMs = now + this.persistFlushIntervalMs;
+    this.nextNetDiagnosticsBroadcastAtMs = now + DEFAULT_NET_DIAGNOSTICS_BROADCAST_INTERVAL_MS;
     this.lastHealthLogMs = now;
     this.scheduleLoop(0);
   }
@@ -234,6 +253,7 @@ export class GameServer {
 
     this.simulation.step(SERVER_TICK_SECONDS);
     this.maybeFlushPersistence(performance.now());
+    this.maybeBroadcastNetDiagnostics(performance.now());
     this.networkHost.step();
 
     const tickDurationMs = performance.now() - tickStart;
@@ -356,9 +376,11 @@ export class GameServer {
     const uptimeSeconds = Math.max(0, Math.floor((nowMs - this.serverStartAtMs) / 1000));
     const runtime = this.simulation.getRuntimeStats();
     const targetTps = SERVER_TICK_MS > 0 ? 1000 / SERVER_TICK_MS : 0;
+    const netDiagnostics = this.captureNetDiagnostics(Date.now());
+    const netSummary = this.formatNetDiagnosticsSummary(netDiagnostics);
 
     console.log(
-      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} npcs(active/inactive/hibernating)=${runtime.activeNpcs}/${runtime.inactiveNpcs}/${runtime.hibernatingNpcs} projectiles=${runtime.activeProjectiles} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots}`
+      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} npcs(active/inactive/hibernating)=${runtime.activeNpcs}/${runtime.inactiveNpcs}/${runtime.hibernatingNpcs} projectiles=${runtime.activeProjectiles} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots} ${netSummary}`
     );
 
     this.tickDurationAccumMs = 0;
@@ -450,5 +472,60 @@ export class GameServer {
 
   public finalizeSourceRelease(accountId: number, transferId: string): boolean {
     return this.networkEventRouter.releaseAuthorityForTransfer(accountId, transferId);
+  }
+
+  private maybeBroadcastNetDiagnostics(nowMs: number): void {
+    if (nowMs < this.nextNetDiagnosticsBroadcastAtMs) {
+      return;
+    }
+    const snapshot = this.captureNetDiagnostics(Date.now());
+    const users = this.networkHost.getConnectedUsers();
+    for (const user of users) {
+      user.queueMessage({
+        ntype: NType.ServerNetDiagnosticsMessage,
+        connectedPlayers: snapshot.connectedPlayers,
+        windowSeconds: snapshot.windowSeconds,
+        avgInboundBytesPerSecond: snapshot.avgInboundBytesPerSecond,
+        avgOutboundBytesPerSecond: snapshot.avgOutboundBytesPerSecond,
+        avgInboundMessagesPerSecond: snapshot.avgInboundMessagesPerSecond,
+        avgOutboundMessagesPerSecond: snapshot.avgOutboundMessagesPerSecond,
+        p95InboundBytesPerSecond: snapshot.p95InboundBytesPerSecond,
+        p95OutboundBytesPerSecond: snapshot.p95OutboundBytesPerSecond,
+        p95InboundMessagesPerSecond: snapshot.p95InboundMessagesPerSecond,
+        p95OutboundMessagesPerSecond: snapshot.p95OutboundMessagesPerSecond,
+        warningMask: snapshot.warningMask
+      });
+    }
+    this.nextNetDiagnosticsBroadcastAtMs = nowMs + DEFAULT_NET_DIAGNOSTICS_BROADCAST_INTERVAL_MS;
+  }
+
+  private captureNetDiagnostics(nowMs: number): ServerNetDiagnosticsSnapshot {
+    const connectedUserIds = this.networkHost.getConnectedUsers().map((user) => user.id);
+    return this.netDiagnostics.createSnapshot(connectedUserIds, nowMs);
+  }
+
+  private formatNetDiagnosticsSummary(snapshot: ServerNetDiagnosticsSnapshot): string {
+    const avgOutKib = snapshot.avgOutboundBytesPerSecond / 1024;
+    const p95OutKib = snapshot.p95OutboundBytesPerSecond / 1024;
+    const avgInKib = snapshot.avgInboundBytesPerSecond / 1024;
+    const p95InKib = snapshot.p95InboundBytesPerSecond / 1024;
+    const warningText = this.describeNetWarningMask(snapshot.warningMask);
+    return `net(avg_out_kib_s_per_player/p95=${avgOutKib.toFixed(2)}/${p95OutKib.toFixed(2)} avg_in_kib_s_per_player/p95=${avgInKib.toFixed(2)}/${p95InKib.toFixed(2)} avg_out_msgs_s_per_player/p95=${snapshot.avgOutboundMessagesPerSecond.toFixed(2)}/${snapshot.p95OutboundMessagesPerSecond.toFixed(2)} avg_in_msgs_s_per_player/p95=${snapshot.avgInboundMessagesPerSecond.toFixed(2)}/${snapshot.p95InboundMessagesPerSecond.toFixed(2)} warn=${warningText})`;
+  }
+
+  private describeNetWarningMask(mask: number): string {
+    if (mask === 0) {
+      return "ok";
+    }
+    const parts: string[] = [];
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_OUT_BYTES) parts.push("avg out bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_IN_BYTES) parts.push("avg in bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_OUT_MESSAGES) parts.push("avg out messages");
+    if (mask & NET_DIAGNOSTICS_WARNING_AVG_IN_MESSAGES) parts.push("avg in messages");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_OUT_BYTES) parts.push("p95 out bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_IN_BYTES) parts.push("p95 in bytes");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES) parts.push("p95 out messages");
+    if (mask & NET_DIAGNOSTICS_WARNING_P95_IN_MESSAGES) parts.push("p95 in messages");
+    return parts.join(", ");
   }
 }

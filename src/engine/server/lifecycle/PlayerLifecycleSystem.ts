@@ -49,14 +49,18 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser> {
   readonly maxPlayerHealth: number;
   readonly defaultUnlockedAbilityIds: readonly number[];
   readonly resolveInitialUnlockedAbilityIds: (accountId: number, defaultIds: readonly number[]) => number[];
-  readonly sanitizeHotbarSlot: (rawSlot: unknown, fallbackSlot: number) => number;
   readonly createInitialHotbar: (savedHotbar?: number[]) => number[];
   readonly clampHealth: (value: number) => number;
   // Called after ECS entity is created. Returns void — all wiring is done here.
   readonly spawnPlayer: (user: TUser, ctx: PlayerSpawnContext) => number;
   readonly despawnPlayer: (user: TUser, eid: number) => void;
   readonly sendInitialReplicationState: (user: TUser, accountId: number) => void;
-  readonly resolvePlayerEidByUserId: (userId: number) => number | undefined;
+  readonly resolvePlayerRuntimeRefsByUserId: (userId: number) => {
+    eid: number;
+    nid: number;
+    body: RAPIER.RigidBody;
+    collider: RAPIER.Collider;
+  } | null;
   readonly takePendingSnapshotForLogin: (accountId: number) => PlayerSnapshot | null;
   readonly loadPlayerState: (accountId: number) => PlayerSnapshot | null;
   readonly queueOfflineSnapshot: (accountId: number, snapshot: PlayerSnapshot) => void;
@@ -64,14 +68,11 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser> {
   readonly markPlayerDirty: (accountId: number, options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }) => void;
   readonly unregisterPlayerCollider: (colliderHandle: number) => void;
   readonly removeProjectilesByOwner: (ownerNid: number) => void;
-  readonly queueIdentityMessage: (user: TUser, playerNid: number) => void;
   readonly viewHalfWidth: number; readonly viewHalfHeight: number; readonly viewHalfDepth: number;
   readonly farViewHalfWidth: number; readonly farViewHalfHeight: number; readonly farViewHalfDepth: number;
 }
 
 export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
-  private readonly spawnedByUserId = new Map<number, { eid: number; nid: number; body: RAPIER.RigidBody; collider: RAPIER.Collider }>();
-
   public constructor(private readonly options: PlayerLifecycleSystemOptions<TUser>) {}
 
   public addUser(user: TUser): void {
@@ -115,7 +116,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
       vz: loaded?.vz ?? 0
     };
 
-    const eid = this.options.spawnPlayer(user, ctx);
+    this.options.spawnPlayer(user, ctx);
 
     // Channel subscriptions
     this.options.globalChannel.subscribe(user);
@@ -142,14 +143,12 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
     this.options.sendInitialReplicationState(user, accountId);
     this.options.markPlayerDirty(accountId, { dirtyCharacter: true, dirtyAbilityState: true });
 
-    this.spawnedByUserId.set(user.id, { eid, nid: 0, body, collider });
   }
 
   public removeUser(user: TUser): void {
-    const spawned = this.spawnedByUserId.get(user.id);
-    if (!spawned) return;
-
-    const eid = spawned.eid;
+    const runtimeRefs = this.options.resolvePlayerRuntimeRefsByUserId(user.id);
+    if (!runtimeRefs) return;
+    const { eid, nid, body, collider } = runtimeRefs;
     const accountId = user.accountId;
 
     if (typeof accountId === "number" && Number.isFinite(accountId)) {
@@ -159,22 +158,12 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
       }
     }
 
-    this.options.unregisterPlayerCollider(spawned.collider.handle);
+    this.options.unregisterPlayerCollider(collider.handle);
     this.options.usersById.delete(user.id);
-    this.options.removeProjectilesByOwner(spawned.nid);
-    this.options.world.removeCollider(spawned.collider, true);
-    this.options.world.removeRigidBody(spawned.body);
+    this.options.removeProjectilesByOwner(nid);
+    this.options.world.removeCollider(collider, true);
+    this.options.world.removeRigidBody(body);
     this.options.despawnPlayer(user, eid);
-    this.spawnedByUserId.delete(user.id);
-  }
-
-  public getSpawnedEid(userId: number): number | undefined {
-    return this.spawnedByUserId.get(userId)?.eid;
-  }
-
-  public updateSpawnedNid(userId: number, nid: number): void {
-    const spawned = this.spawnedByUserId.get(userId);
-    if (spawned) spawned.nid = nid;
   }
 
   private resolveAccountId(rawAccountId: number | undefined): number | null {

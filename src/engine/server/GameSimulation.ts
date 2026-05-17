@@ -986,7 +986,6 @@ export class GameSimulation {
         const ids = this.ensureBlueprintAccessLoaded(aid, "ability.use", def as number[]);
         return ids.length > 0 ? ids : (def as number[]);
       },
-      sanitizeHotbarSlot: (raw, fallback) => this.sanitizeHotbarSlot(raw, fallback),
       createInitialHotbar: (saved) => this.createInitialHotbar(saved),
       clampHealth: (v) => this.clampHealth(v),
       spawnPlayer: (user, ctx) => {
@@ -1041,7 +1040,18 @@ export class GameSimulation {
         this.replication.queueCreatorStateMessage(user, creatorState);
         this.itemInventorySystem.queueInventoryStateForUser(user.id);
       },
-      resolvePlayerEidByUserId: (uid) => this.simulationEcs.getPlayerEidByUserId(uid),
+      resolvePlayerRuntimeRefsByUserId: (uid) => {
+        const runtime = this.simulationEcs.getPlayerRuntimeStateByUserId(uid);
+        if (!runtime) {
+          return null;
+        }
+        return {
+          eid: runtime.eid,
+          nid: runtime.nid,
+          body: runtime.body,
+          collider: runtime.collider
+        };
+      },
       takePendingSnapshotForLogin: (aid) => this.persistenceSyncSystem.takePendingSnapshotForLogin(aid),
       loadPlayerState: (aid) => this.persistence.loadPlayerState(aid),
       queueOfflineSnapshot: (aid, snap) => this.persistenceSyncSystem.queueOfflineSnapshot(aid, snap),
@@ -1049,7 +1059,6 @@ export class GameSimulation {
       markPlayerDirty: (aid, opts) => this.persistenceSyncSystem.markAccountDirty(aid, opts),
       unregisterPlayerCollider: (h) => this.damageSystem.unregisterCollider(h),
       removeProjectilesByOwner: (nid) => this.projectileSystem.removeByOwner(nid),
-      queueIdentityMessage: (user, nid) => this.replication.queueIdentityMessage(user, nid),
       viewHalfWidth: 256, viewHalfHeight: 128, viewHalfDepth: 256,
       farViewHalfWidth: 3200, farViewHalfHeight: 1600, farViewHalfDepth: 3200
     });

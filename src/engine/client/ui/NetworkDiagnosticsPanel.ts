@@ -15,6 +15,12 @@ export interface NetworkDiagnosticsSnapshot {
   ackJitterMs: string;
   serverClockOffsetMs: string;
   serverPlayers: string;
+  netWindow: string;
+  netBudgetStatus: string;
+  netOutBytesPerSecond: string;
+  netInBytesPerSecond: string;
+  netOutMessagesPerSecond: string;
+  netInMessagesPerSecond: string;
   aoiPlayers: string;
   locationRoots: string;
   worldEntities: string;
@@ -52,6 +58,12 @@ export class NetworkDiagnosticsPanel {
     this.appendRow(documentRef, grid, "ackJitterMs", "Ack jitter");
     this.appendRow(documentRef, grid, "serverClockOffsetMs", "Clock offset");
     this.appendRow(documentRef, grid, "serverPlayers", "Server players");
+    this.appendRow(documentRef, grid, "netWindow", "Net window");
+    this.appendRow(documentRef, grid, "netBudgetStatus", "Net status");
+    this.appendRow(documentRef, grid, "netOutBytesPerSecond", "Out KB/s avg/p95");
+    this.appendRow(documentRef, grid, "netInBytesPerSecond", "In KB/s avg/p95");
+    this.appendRow(documentRef, grid, "netOutMessagesPerSecond", "Out msg/s avg/p95");
+    this.appendRow(documentRef, grid, "netInMessagesPerSecond", "In msg/s avg/p95");
     this.appendRow(documentRef, grid, "aoiPlayers", "AOI players");
     this.appendRow(documentRef, grid, "locationRoots", "Locations");
     this.appendRow(documentRef, grid, "worldEntities", "World entities");

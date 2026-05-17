@@ -77,10 +77,6 @@ export class SimulationEcs {
     return this.indexes.getPlayerEidByUserId(userId);
   }
 
-  public getPlayerEidByNid(nid: number): number | undefined {
-    return this.indexes.getPlayerEidByNid(nid);
-  }
-
   public getCharacterEidByNid(nid: number): number | undefined {
     return this.indexes.getCharacterEidByNid(nid);
   }
@@ -114,11 +110,11 @@ export class SimulationEcs {
   }
 
   public getPlayerBody(eid: number): RAPIER.RigidBody | undefined {
-    return this.indexes.getPlayerBody(eid);
+    return this.indexes.getCharacterBody(eid);
   }
 
   public getPlayerCollider(eid: number): RAPIER.Collider | undefined {
-    return this.indexes.getPlayerCollider(eid);
+    return this.indexes.getCharacterCollider(eid);
   }
 
   public getCharacterColliderByNid(nid: number): RAPIER.Collider | undefined {
@@ -136,9 +132,9 @@ export class SimulationEcs {
   }
 
   public getPlayerColliderByNid(nid: number): RAPIER.Collider | undefined {
-    const eid = this.indexes.getPlayerEidByNid(nid);
+    const eid = this.indexes.getCharacterEidByNid(nid);
     if (typeof eid !== "number") return undefined;
-    return this.indexes.getPlayerCollider(eid);
+    return this.indexes.getCharacterCollider(eid);
   }
 
   public resolveCombatTargetRuntime(target: { kind: "character" | "player" | "dummy"; eid: number }): {
@@ -164,8 +160,8 @@ export class SimulationEcs {
   public getPlayerRuntimeStateByUserId(userId: number): PlayerStateSnapshot | null {
     const eid = this.indexes.getPlayerEidByUserId(userId);
     if (typeof eid !== "number") return null;
-    const body = this.indexes.getPlayerBody(eid);
-    const collider = this.indexes.getPlayerCollider(eid);
+    const body = this.indexes.getCharacterBody(eid);
+    const collider = this.indexes.getCharacterCollider(eid);
     if (!body || !collider) return null;
 
     const c = this.world.components;
