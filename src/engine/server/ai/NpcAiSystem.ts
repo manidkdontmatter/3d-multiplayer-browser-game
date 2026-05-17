@@ -12,6 +12,8 @@ import type {
   CharacterArchetypeDefinition,
   NpcSpawnDefinition
 } from "../content/ArchetypeCatalog";
+import type { SimulationEcs } from "../ecs/SimulationEcs";
+import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 import type {
   CharacterNavigationPlanner,
   NavPoint,
@@ -22,32 +24,9 @@ export type NpcLifecycleState = "active" | "inactive" | "hibernating";
 export type NpcBehaviorState = "idle" | "patrol" | "wander" | "chase" | "attack" | "flee";
 
 export type NpcCharacter = {
-  nid: number;
-  modelId: number;
-  x: number; y: number; z: number;
-  yaw: number; pitch: number;
-  vx: number; vy: number; vz: number;
-  grounded: boolean;
-  movementMode: number;
-  groundedPlatformPid: number | null;
-  carriedFramePid: number | null;
-  health: number;
-  maxHealth: number;
-  primaryMouseSlot: number;
-  secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
-  unlockedAbilityIds: Set<number>;
-  lastPrimaryFireAtSeconds: number;
-  lastProcessedSequence: number;
-  primaryHeld: boolean;
-  secondaryHeld: boolean;
-  body: RAPIER.RigidBody;
-  collider: RAPIER.Collider;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  characterArchetypeId: number;
-  controllerKind: number;
-  _ecsEid?: number;
+  readonly eid: number;
+  readonly body: RAPIER.RigidBody;
+  readonly collider: RAPIER.Collider;
 };
 
 export interface AiVisibleTarget {
@@ -121,15 +100,17 @@ export interface NpcAiStats {
 
 export interface NpcAiSystemOptions {
   readonly world: RAPIER.World;
+  readonly ecs: SimulationEcs;
+  readonly ecsComponents: WorldWithComponents["components"];
+  readonly replication: { spawnEntity: (eid: number) => number };
   readonly navigation: CharacterNavigationPlanner;
   readonly characterArchetypes: ReadonlyMap<number, CharacterArchetypeDefinition>;
   readonly spawns: readonly NpcSpawnDefinition[];
   readonly controllerKindAi: number;
-  readonly onCharacterCreated: (character: NpcCharacter) => void;
-  readonly onCharacterUpdated: (character: NpcCharacter) => void;
+  readonly onNpcSpawned: (eid: number, colliderHandle: number) => void;
   readonly hasPerceptionTargets: () => boolean;
   readonly resolvePerceptionTargetByColliderHandle: (colliderHandle: number) => AiVisibleTarget | null;
-  readonly usePrimaryAbility: (character: NpcCharacter) => void;
+  readonly usePrimaryAbilityByEid: (eid: number) => void;
   readonly aiTickIntervalSeconds: number;
   readonly perceptionTickIntervalSeconds: number;
   readonly pathReplanIntervalSeconds: number;
@@ -163,6 +144,7 @@ export class NpcAiSystem {
   private readonly npcByColliderHandle = new Map<number, NpcRuntime>();
   private readonly perceptionShapeCache = new Map<number, RAPIER.Ball>();
   private readonly separationShape = new RAPIER.Ball(NPC_SEPARATION_RADIUS);
+  private readonly npcEids: number[] = [];
   private behaviorTicks = 0;
   private perceptionTicks = 0;
   private pathReplans = 0;
@@ -212,7 +194,8 @@ export class NpcAiSystem {
       };
       this.npcs.push(runtime);
       this.npcByColliderHandle.set(character.collider.handle, runtime);
-      this.options.onCharacterCreated(character);
+      this.options.onNpcSpawned(character.eid, character.collider.handle);
+      this.npcEids.push(character.eid);
     }
   }
 
@@ -234,8 +217,7 @@ export class NpcAiSystem {
 
       const profile = this.resolveLifecycleProfile(guard.blackboard.lifecycleState);
       if (!profile.allowBehaviorTick) {
-        this.stopCharacter(guard.character);
-        this.options.onCharacterUpdated(guard.character);
+        this.stopCharacter(guard.character.eid);
         continue;
       }
       if (elapsedSeconds < guard.blackboard.nextThinkAtSeconds) {
@@ -250,21 +232,11 @@ export class NpcAiSystem {
         elapsedSeconds,
         profile.thinkIntervalSeconds
       );
-      this.options.onCharacterUpdated(guard.character);
     }
   }
 
-  public getCharacters(): readonly NpcCharacter[] {
-    return this.npcs.map((guard) => guard.character);
-  }
-
-  public getCharacterEids(): number[] {
-    const eids: number[] = [];
-    for (const npc of this.npcs) {
-      const eid = npc.character._ecsEid;
-      if (typeof eid === "number") eids.push(eid);
-    }
-    return eids;
+  public getNpcEids(): readonly number[] {
+    return this.npcEids;
   }
 
   public getActiveCount(): number {
@@ -280,9 +252,14 @@ export class NpcAiSystem {
     if (!runtime) {
       return false;
     }
-    const dx = stimulus.x - runtime.character.x;
-    const dy = stimulus.y - runtime.character.y;
-    const dz = stimulus.z - runtime.character.z;
+    const eid = runtime.character.eid;
+    const c = this.options.ecsComponents;
+    const cx = c.Position.x[eid] ?? 0;
+    const cy = c.Position.y[eid] ?? 0;
+    const cz = c.Position.z[eid] ?? 0;
+    const dx = stimulus.x - cx;
+    const dy = stimulus.y - cy;
+    const dz = stimulus.z - cz;
     const distanceSq = dx * dx + dy * dy + dz * dz;
     const maxDistance = runtime.archetype.deactivationRadius;
     if (distanceSq > maxDistance * maxDistance) {
@@ -382,22 +359,26 @@ export class NpcAiSystem {
       return;
     }
 
-    const dx = target.x - guard.character.x;
-    const dz = target.z - guard.character.z;
+    const eid = guard.character.eid;
+    const c = this.options.ecsComponents;
+    const gx = c.Position.x[eid] ?? 0;
+    const gz = c.Position.z[eid] ?? 0;
+    const dx = target.x - gx;
+    const dz = target.z - gz;
     const distance = Math.hypot(dx, dz);
-    this.faceDirection(guard.character, dx, dz);
+    this.faceDirection(eid, dx, dz);
     if (distance <= guard.archetype.attackRange) {
       guard.blackboard.behaviorState = "attack";
-      this.stopCharacter(guard.character);
-      guard.character.pitch = ATTACK_FACE_PITCH;
-      this.options.usePrimaryAbility(guard.character);
+      this.stopCharacter(eid);
+      c.Pitch.value[eid] = ATTACK_FACE_PITCH;
+      this.options.usePrimaryAbilityByEid(eid);
       return;
     }
 
     guard.blackboard.behaviorState = "chase";
     if (elapsedSeconds >= guard.blackboard.nextPathAtSeconds || guard.blackboard.path.length === 0) {
       this.pathReplans += 1;
-      const path = this.findPathToTarget(guard.character, target);
+      const path = this.findPathToTarget(eid, target);
       if (path.length === 0) {
         this.pathFailures += 1;
         guard.blackboard.consecutivePathFailures += 1;
@@ -408,7 +389,7 @@ export class NpcAiSystem {
             profile.pathReplanIntervalSeconds,
             this.options.pathStuckRecoveryDelaySeconds * guard.blackboard.consecutivePathFailures
           );
-        this.stopCharacter(guard.character);
+        this.stopCharacter(eid);
         return;
       }
       guard.blackboard.path = path;
@@ -431,12 +412,17 @@ export class NpcAiSystem {
   ): void {
     const threat = guard.blackboard.target;
     if (!threat) {
-      this.stopCharacter(guard.character);
+      this.stopCharacter(guard.character.eid);
       return;
     }
 
-    const awayX = guard.character.x - threat.x;
-    const awayZ = guard.character.z - threat.z;
+    const eid = guard.character.eid;
+    const c = this.options.ecsComponents;
+    const gx = c.Position.x[eid] ?? 0;
+    const gy = c.Position.y[eid] ?? 0;
+    const gz = c.Position.z[eid] ?? 0;
+    const awayX = gx - threat.x;
+    const awayZ = gz - threat.z;
     const awayDistance = Math.hypot(awayX, awayZ);
     const fallbackAngle = guard.blackboard.phase * Math.PI * 2 + FLEE_FALLBACK_ANGLE_OFFSET;
     const dirX = awayDistance > 1e-6 ? awayX / awayDistance : Math.cos(fallbackAngle);
@@ -446,15 +432,15 @@ export class NpcAiSystem {
       Math.min(16, guard.archetype.perceptionRadius * 0.8)
     );
     const fleeGoal = {
-      x: guard.character.x + dirX * fleeDistance,
-      y: guard.character.y,
-      z: guard.character.z + dirZ * fleeDistance
+      x: gx + dirX * fleeDistance,
+      y: gy,
+      z: gz + dirZ * fleeDistance
     };
 
     guard.blackboard.behaviorState = "flee";
     if (elapsedSeconds >= guard.blackboard.nextPathAtSeconds || guard.blackboard.path.length === 0) {
       this.pathReplans += 1;
-      const path = this.findPathToPoint(guard.character, fleeGoal, threat);
+      const path = this.findPathToPoint(eid, fleeGoal, threat);
       if (path.length === 0) {
         this.pathFailures += 1;
         guard.blackboard.consecutivePathFailures += 1;
@@ -466,9 +452,9 @@ export class NpcAiSystem {
             this.options.pathStuckRecoveryDelaySeconds * guard.blackboard.consecutivePathFailures
           );
         const moveSpeed = guard.archetype.moveSpeed * 1.1 * profile.moveSpeedScale;
-        guard.character.vx = dirX * moveSpeed;
-        guard.character.vz = dirZ * moveSpeed;
-        this.faceDirection(guard.character, dirX, dirZ);
+        c.Velocity.x[eid] = dirX * moveSpeed;
+        c.Velocity.z[eid] = dirZ * moveSpeed;
+        this.faceDirection(eid, dirX, dirZ);
         return;
       }
       guard.blackboard.path = path;
@@ -496,18 +482,22 @@ export class NpcAiSystem {
     const target = patrolPoints[guard.blackboard.patrolIndex % patrolPoints.length];
     if (!target) {
       guard.blackboard.behaviorState = "idle";
-      this.stopCharacter(guard.character);
+      this.stopCharacter(guard.character.eid);
       return;
     }
     guard.blackboard.behaviorState = patrolPoints.length > 1 ? "patrol" : "idle";
-    const dx = target.x - guard.character.x;
-    const dz = target.z - guard.character.z;
+    const eid = guard.character.eid;
+    const c = this.options.ecsComponents;
+    const gx = c.Position.x[eid] ?? 0;
+    const gz = c.Position.z[eid] ?? 0;
+    const dx = target.x - gx;
+    const dz = target.z - gz;
     if (Math.hypot(dx, dz) <= ARRIVAL_DISTANCE) {
       guard.blackboard.patrolIndex = (guard.blackboard.patrolIndex + 1) % patrolPoints.length;
-      this.stopCharacter(guard.character);
+      this.stopCharacter(eid);
       return;
     }
-    guard.blackboard.path = [this.toNavPoint(guard.character), target];
+    guard.blackboard.path = [this.toNavPoint(eid), target];
     guard.blackboard.pathIndex = 1;
     this.markPathProgressReset(guard, elapsedSeconds);
     this.followPath(guard, guard.archetype.moveSpeed * 0.65 * profile.moveSpeedScale, elapsedSeconds);
@@ -520,20 +510,24 @@ export class NpcAiSystem {
   ): void {
     if (elapsedSeconds < guard.blackboard.nextWanderAtSeconds) {
       guard.blackboard.behaviorState = "idle";
-      this.stopCharacter(guard.character);
+      this.stopCharacter(guard.character.eid);
       return;
     }
 
     const currentGoal = guard.blackboard.wanderGoal;
     if (currentGoal) {
-      const dx = currentGoal.x - guard.character.x;
-      const dz = currentGoal.z - guard.character.z;
+      const eid = guard.character.eid;
+      const c = this.options.ecsComponents;
+      const gx = c.Position.x[eid] ?? 0;
+      const gz = c.Position.z[eid] ?? 0;
+      const dx = currentGoal.x - gx;
+      const dz = currentGoal.z - gz;
       if (Math.hypot(dx, dz) <= ARRIVAL_DISTANCE) {
         guard.blackboard.wanderGoal = null;
         guard.blackboard.path = [];
         guard.blackboard.pathIndex = 0;
         guard.blackboard.nextWanderAtSeconds = elapsedSeconds + this.nextWanderIdleSeconds(guard);
-        this.stopCharacter(guard.character);
+        this.stopCharacter(eid);
         return;
       }
     }
@@ -549,18 +543,18 @@ export class NpcAiSystem {
     if (elapsedSeconds >= guard.blackboard.nextPathAtSeconds || guard.blackboard.path.length === 0) {
       const goal = guard.blackboard.wanderGoal;
       if (!goal) {
-        this.stopCharacter(guard.character);
+        this.stopCharacter(guard.character.eid);
         return;
       }
       this.pathReplans += 1;
-      const path = this.findPathToPoint(guard.character, goal);
+      const path = this.findPathToPoint(guard.character.eid, goal);
       if (path.length === 0) {
         this.pathFailures += 1;
         guard.blackboard.wanderGoal = null;
         guard.blackboard.consecutivePathFailures += 1;
         guard.blackboard.nextWanderAtSeconds = elapsedSeconds + this.nextWanderIdleSeconds(guard);
         guard.blackboard.nextPathAtSeconds = elapsedSeconds + this.options.pathStuckRecoveryDelaySeconds;
-        this.stopCharacter(guard.character);
+        this.stopCharacter(guard.character.eid);
         return;
       }
       guard.blackboard.path = path;
@@ -677,9 +671,14 @@ export class NpcAiSystem {
       guard.blackboard.stimulus = null;
       return Number.POSITIVE_INFINITY;
     }
-    const dx = stimulus.x - guard.character.x;
-    const dy = stimulus.y - guard.character.y;
-    const dz = stimulus.z - guard.character.z;
+    const eid = guard.character.eid;
+    const c = this.options.ecsComponents;
+    const gx = c.Position.x[eid] ?? 0;
+    const gy = c.Position.y[eid] ?? 0;
+    const gz = c.Position.z[eid] ?? 0;
+    const dx = stimulus.x - gx;
+    const dy = stimulus.y - gy;
+    const dz = stimulus.z - gz;
     return Math.hypot(dx, dy, dz);
   }
 
@@ -699,9 +698,14 @@ export class NpcAiSystem {
     const shape = this.getPerceptionShape(range);
     let nearestTarget: AiVisibleTarget | null = null;
     let nearestDistanceSq = range * range;
+    const eid = guard.character.eid;
+    const c = this.options.ecsComponents;
+    const gx = c.Position.x[eid] ?? 0;
+    const gy = c.Position.y[eid] ?? 0;
+    const gz = c.Position.z[eid] ?? 0;
 
     this.options.world.intersectionsWithShape(
-      { x: guard.character.x, y: guard.character.y, z: guard.character.z },
+      { x: gx, y: gy, z: gz },
       IDENTITY_ROTATION,
       shape,
       (collider) => {
@@ -709,9 +713,9 @@ export class NpcAiSystem {
         if (!target) {
           return true;
         }
-        const dx = target.x - guard.character.x;
-        const dy = target.y - guard.character.y;
-        const dz = target.z - guard.character.z;
+        const dx = target.x - gx;
+        const dy = target.y - gy;
+        const dz = target.z - gz;
         const distanceSq = dx * dx + dy * dy + dz * dz;
         if (distanceSq <= nearestDistanceSq) {
           nearestDistanceSq = distanceSq;
@@ -739,11 +743,15 @@ export class NpcAiSystem {
   private followPath(guard: NpcRuntime, speed: number, elapsedSeconds: number): void {
     const waypoint = guard.blackboard.path[guard.blackboard.pathIndex];
     if (!waypoint) {
-      this.stopCharacter(guard.character);
+      this.stopCharacter(guard.character.eid);
       return;
     }
-    const dx = waypoint.x - guard.character.x;
-    const dz = waypoint.z - guard.character.z;
+    const eid = guard.character.eid;
+    const c = this.options.ecsComponents;
+    const gx = c.Position.x[eid] ?? 0;
+    const gz = c.Position.z[eid] ?? 0;
+    const dx = waypoint.x - gx;
+    const dz = waypoint.z - gz;
     const distance = Math.hypot(dx, dz);
     if (distance <= ARRIVAL_DISTANCE) {
       guard.blackboard.pathIndex += 1;
@@ -761,21 +769,27 @@ export class NpcAiSystem {
       guard.blackboard.consecutivePathFailures += 1;
       guard.blackboard.nextPathAtSeconds = elapsedSeconds + this.options.pathStuckRecoveryDelaySeconds;
       this.markPathProgressReset(guard, elapsedSeconds);
-      this.stopCharacter(guard.character);
+      this.stopCharacter(eid);
       return;
     }
 
     const invDistance = distance > 1e-6 ? 1 / distance : 0;
-    guard.character.vx = dx * invDistance * speed;
-    guard.character.vz = dz * invDistance * speed;
-    this.faceDirection(guard.character, dx, dz);
+    c.Velocity.x[eid] = dx * invDistance * speed;
+    c.Velocity.z[eid] = dz * invDistance * speed;
+    this.faceDirection(eid, dx, dz);
   }
 
   private applyLocalSeparation(guard: NpcRuntime): void {
+    const eid = guard.character.eid;
+    const c = this.options.ecsComponents;
+    const gx = c.Position.x[eid] ?? 0;
+    const gy = c.Position.y[eid] ?? 0;
+    const gz = c.Position.z[eid] ?? 0;
+
     let separationX = 0;
     let separationZ = 0;
     this.options.world.intersectionsWithShape(
-      { x: guard.character.x, y: guard.character.y, z: guard.character.z },
+      { x: gx, y: gy, z: gz },
       IDENTITY_ROTATION,
       this.separationShape,
       (collider) => {
@@ -783,8 +797,11 @@ export class NpcAiSystem {
         if (!other || other === guard) {
           return true;
         }
-        const dx = guard.character.x - other.character.x;
-        const dz = guard.character.z - other.character.z;
+        const oeid = other.character.eid;
+        const ox = c.Position.x[oeid] ?? 0;
+        const oz = c.Position.z[oeid] ?? 0;
+        const dx = gx - ox;
+        const dz = gz - oz;
         const distance = Math.hypot(dx, dz);
         if (distance >= NPC_SEPARATION_RADIUS) {
           return true;
@@ -810,49 +827,58 @@ export class NpcAiSystem {
       return;
     }
 
-    const currentSpeed = Math.hypot(guard.character.vx, guard.character.vz);
+    const currentVx = c.Velocity.x[eid] ?? 0;
+    const currentVz = c.Velocity.z[eid] ?? 0;
+    const currentSpeed = Math.hypot(currentVx, currentVz);
     const separationScale = guard.blackboard.behaviorState === "attack"
       ? NPC_ATTACK_SEPARATION_SPEED_SCALE
       : NPC_SEPARATION_SPEED_SCALE;
     const separationSpeed = guard.archetype.moveSpeed * separationScale;
-    guard.character.vx += (separationX / separationLength) * separationSpeed;
-    guard.character.vz += (separationZ / separationLength) * separationSpeed;
+    let nextVx = currentVx + (separationX / separationLength) * separationSpeed;
+    let nextVz = currentVz + (separationZ / separationLength) * separationSpeed;
 
     const maxSpeed = Math.max(currentSpeed, guard.archetype.moveSpeed) * NPC_SEPARATION_MAX_SPEED_SCALE;
-    const nextSpeed = Math.hypot(guard.character.vx, guard.character.vz);
+    const nextSpeed = Math.hypot(nextVx, nextVz);
     if (nextSpeed > maxSpeed && nextSpeed > 1e-6) {
       const scale = maxSpeed / nextSpeed;
-      guard.character.vx *= scale;
-      guard.character.vz *= scale;
+      nextVx *= scale;
+      nextVz *= scale;
     }
+
+    c.Velocity.x[eid] = nextVx;
+    c.Velocity.z[eid] = nextVz;
   }
 
-  private stopCharacter(character: NpcCharacter): void {
-    character.vx = 0;
-    character.vz = 0;
+  private stopCharacter(eid: number): void {
+    const c = this.options.ecsComponents;
+    c.Velocity.x[eid] = 0;
+    c.Velocity.z[eid] = 0;
   }
 
-  private findPathToTarget(character: NpcCharacter, target: AiVisibleTarget): NavPoint[] {
-    return this.findPathToPoint(character, { x: target.x, y: target.y, z: target.z }, target);
+  private findPathToTarget(eid: number, target: AiVisibleTarget): NavPoint[] {
+    return this.findPathToPoint(eid, { x: target.x, y: target.y, z: target.z }, target);
   }
 
   private findPathToPoint(
-    character: NpcCharacter,
+    eid: number,
     goal: NavPoint,
     targetContext?: Pick<AiVisibleTarget, "movementMode" | "carriedFramePid" | "groundedPlatformPid">
   ): NavPoint[] {
-    const frameId = character.carriedFramePid ?? character.groundedPlatformPid ?? null;
+    const c = this.options.ecsComponents;
+    const cf = c.CarriedFramePid.value[eid] ?? -1;
+    const gp = c.GroundedPlatformPid.value[eid] ?? -1;
+    const frameId = cf >= 0 ? cf : gp >= 0 ? gp : null;
     const targetFrameId = targetContext
       ? targetContext.carriedFramePid ?? targetContext.groundedPlatformPid ?? null
       : frameId;
     const targetMovementMode = targetContext?.movementMode;
     const mode: NavigationMode =
-      character.movementMode === MOVEMENT_MODE_FLYING || targetMovementMode === MOVEMENT_MODE_FLYING
+      (c.MovementMode.value[eid] ?? MOVEMENT_MODE_GROUNDED) === MOVEMENT_MODE_FLYING || targetMovementMode === MOVEMENT_MODE_FLYING
         ? "freeFlight"
         : "auto";
 
     return this.options.navigation.planPath({
-      start: this.toNavPoint(character),
+      start: this.toNavPoint(eid),
       end: goal,
       mode,
       startFrameId: frameId,
@@ -862,16 +888,11 @@ export class NpcAiSystem {
     }).points;
   }
 
-  private faceDirection(character: NpcCharacter, dx: number, dz: number): void {
+  private faceDirection(eid: number, dx: number, dz: number): void {
     if (Math.hypot(dx, dz) <= 1e-6) {
       return;
     }
-    character.yaw = Math.atan2(-dx, -dz);
-    const rotation = quaternionFromYawPitchRoll(character.yaw, 0);
-    character.rotation.x = rotation.x;
-    character.rotation.y = rotation.y;
-    character.rotation.z = rotation.z;
-    character.rotation.w = rotation.w;
+    this.options.ecsComponents.Yaw.value[eid] = Math.atan2(-dx, -dz);
   }
 
   private createCharacter(
@@ -889,44 +910,46 @@ export class NpcAiSystem {
         .setSolverGroups(PHYSICS_GROUP_CHARACTER),
       body
     );
+
     const hotbarAbilityIds = new Array<number>(HOTBAR_SLOT_COUNT).fill(0);
     hotbarAbilityIds[0] = ABILITY_ID_PUNCH;
-    return {
-      nid: 0,
+    const rotation = quaternionFromYawPitchRoll(spawn.yaw, 0);
+
+    const eid = this.options.ecs.createEntityFromPreset("npc", {
       modelId: archetype.modelId,
-      characterArchetypeId: archetype.id,
-      controllerKind: this.options.controllerKindAi,
       position: { x: spawn.x, y: spawn.y, z: spawn.z },
-      rotation: quaternionFromYawPitchRoll(spawn.yaw, 0),
-      x: spawn.x,
-      y: spawn.y,
-      z: spawn.z,
+      rotation,
       yaw: spawn.yaw,
       pitch: 0,
-      vx: 0,
-      vy: 0,
-      vz: 0,
+      velocity: { x: 0, y: 0, z: 0 },
       grounded: false,
       movementMode: MOVEMENT_MODE_GROUNDED,
       groundedPlatformPid: null,
       carriedFramePid: null,
       health: archetype.maxHealth,
       maxHealth: archetype.maxHealth,
+      characterArchetypeId: archetype.id,
+      controllerKind: this.options.controllerKindAi,
       primaryMouseSlot: 0,
       secondaryMouseSlot: 0,
       hotbarAbilityIds,
+      unlockedAbilityIds: [ABILITY_ID_PUNCH],
       lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
       lastProcessedSequence: 0,
       primaryHeld: false,
-      secondaryHeld: false,
-      unlockedAbilityIds: new Set<number>([ABILITY_ID_PUNCH]),
-      body,
-      collider
-    };
+      secondaryHeld: false
+    });
+
+    this.options.ecs.registerCharacterPhysicsRefs(eid, body, collider);
+    const nid = this.options.replication.spawnEntity(eid);
+    this.options.ecs.setEntityNidByEid(eid, nid);
+
+    return { eid, body, collider };
   }
 
-  private toNavPoint(character: NpcCharacter): NavPoint {
-    return { x: character.x, y: character.y, z: character.z };
+  private toNavPoint(eid: number): NavPoint {
+    const c = this.options.ecsComponents;
+    return { x: c.Position.x[eid] ?? 0, y: c.Position.y[eid] ?? 0, z: c.Position.z[eid] ?? 0 };
   }
 
   private computePhase(spawn: NpcSpawnDefinition, index: number): number {

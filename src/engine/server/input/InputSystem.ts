@@ -1,4 +1,4 @@
-// Applies client input commands to server-authoritative player state. Mutates a state snapshot.
+// Applies client input commands to server-authoritative player ECS state. Mutates ECS components directly.
 import {
   MOVEMENT_MODE_FLYING,
   MOVEMENT_MODE_GROUNDED,
@@ -12,7 +12,7 @@ import {
 } from "../../shared/index";
 import type { InputCommand as InputWireCommand } from "../../shared/netcode";
 import { NType } from "../../shared/netcode";
-import type { PlayerStateSnapshot } from "../ecs/SimulationEcsTypes";
+import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 
 const INPUT_SEQUENCE_MODULO = 0x10000;
 const INPUT_SEQUENCE_HALF_RANGE = INPUT_SEQUENCE_MODULO >>> 1;
@@ -20,29 +20,31 @@ const LOOK_PITCH_MIN = -1.45;
 const LOOK_PITCH_MAX = 1.45;
 
 export interface InputSystemOptions {
-  readonly onPrimaryPressed: (unlockedAbilityIds: Set<number>, primaryMouseSlot: number, hotbarAbilityIds: number[]) => void;
-  readonly onSecondaryPressed: (unlockedAbilityIds: Set<number>, secondaryMouseSlot: number, hotbarAbilityIds: number[]) => void;
-  readonly onCastSlotPressed: (unlockedAbilityIds: Set<number>, slot: number, hotbarAbilityIds: number[]) => void;
+  readonly ecsComponents: WorldWithComponents["components"];
+  readonly onPrimaryPressed: (eid: number) => void;
+  readonly onSecondaryPressed: (eid: number) => void;
+  readonly onCastSlotPressed: (eid: number, slot: number) => void;
 }
 
 export class InputSystem {
   public constructor(private readonly options: InputSystemOptions) {}
 
-  public applyCommands(player: PlayerStateSnapshot, commands: Partial<InputWireCommand>[]): void {
-    let latestSequence = player.lastProcessedSequence;
+  public applyCommands(eid: number, commands: Partial<InputWireCommand>[]): void {
+    const c = this.options.ecsComponents;
+    let latestSequence = c.LastProcessedSequence.value[eid] ?? 0;
     let hasAcceptedCommand = false;
     let mergedForward = 0;
     let mergedStrafe = 0;
-    let mergedPitch = player.pitch;
+    let mergedPitch = c.Pitch.value[eid] ?? 0;
     let mergedSprint = false;
     let queuedUsePrimaryPressed = false;
-    let mergedUsePrimaryHeld = player.primaryHeld;
+    let mergedUsePrimaryHeld = (c.PrimaryHeld.value[eid] ?? 0) !== 0;
     let queuedUseSecondaryPressed = false;
-    let mergedUseSecondaryHeld = player.secondaryHeld;
+    let mergedUseSecondaryHeld = (c.SecondaryHeld.value[eid] ?? 0) !== 0;
     let queuedCastSlot: number | null = null;
     let queuedJump = false;
     let queuedToggleFly = false;
-    let mergedYaw = player.yaw;
+    let mergedYaw = c.Yaw.value[eid] ?? 0;
 
     for (const command of commands) {
       if (command.ntype !== NType.InputCommand) continue;
@@ -88,52 +90,66 @@ export class InputSystem {
 
     if (!hasAcceptedCommand) return;
 
+    let movementMode = (c.MovementMode.value[eid] ?? MOVEMENT_MODE_GROUNDED) as MovementMode;
+    let grounded = (c.Grounded.value[eid] ?? 0) !== 0;
+    let groundedPlatformPid = c.GroundedPlatformPid.value[eid] ?? -1;
+    let vy = c.Velocity.y[eid] ?? 0;
+    let vx = c.Velocity.x[eid] ?? 0;
+    let vz = c.Velocity.z[eid] ?? 0;
+
     if (queuedToggleFly) {
-      player.movementMode = toggleMovementMode(player.movementMode);
-      player.grounded = false;
-      player.groundedPlatformPid = null;
-      player.vy = 0;
+      movementMode = toggleMovementMode(movementMode);
+      grounded = false;
+      groundedPlatformPid = -1;
+      vy = 0;
     }
 
-    if (player.movementMode === MOVEMENT_MODE_GROUNDED && queuedJump && player.grounded) {
-      player.vy = PLAYER_JUMP_VELOCITY;
-      player.grounded = false;
-      player.groundedPlatformPid = null;
+    if (movementMode === MOVEMENT_MODE_GROUNDED && queuedJump && grounded) {
+      vy = PLAYER_JUMP_VELOCITY;
+      grounded = false;
+      groundedPlatformPid = -1;
     }
 
-    player.yaw = mergedYaw;
     const clampedPitch = Math.max(LOOK_PITCH_MIN, Math.min(LOOK_PITCH_MAX, mergedPitch));
-    if (player.movementMode === MOVEMENT_MODE_FLYING) {
-      player.grounded = false;
-      player.groundedPlatformPid = null;
+    if (movementMode === MOVEMENT_MODE_FLYING) {
+      grounded = false;
+      groundedPlatformPid = -1;
       const d = stepFlyingMovement(
-        { vx: player.vx, vy: player.vy, vz: player.vz },
-        { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw, pitch: clampedPitch },
+        { vx, vy, vz },
+        { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: mergedYaw, pitch: clampedPitch },
         SERVER_TICK_SECONDS
       );
-      player.vx = d.vx; player.vy = d.vy; player.vz = d.vz;
+      vx = d.vx; vy = d.vy; vz = d.vz;
     } else {
       const h = stepHorizontalMovement(
-        { vx: player.vx, vz: player.vz },
-        { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: player.yaw },
-        player.grounded, SERVER_TICK_SECONDS
+        { vx, vz },
+        { forward: mergedForward, strafe: mergedStrafe, sprint: mergedSprint, yaw: mergedYaw },
+        grounded, SERVER_TICK_SECONDS
       );
-      player.vx = h.vx; player.vz = h.vz;
+      vx = h.vx; vz = h.vz;
     }
-    player.pitch = clampedPitch;
-    player.primaryHeld = mergedUsePrimaryHeld;
-    player.secondaryHeld = mergedUseSecondaryHeld;
+
+    c.Yaw.value[eid] = mergedYaw;
+    c.Pitch.value[eid] = clampedPitch;
+    c.MovementMode.value[eid] = movementMode;
+    c.Grounded.value[eid] = grounded ? 1 : 0;
+    c.GroundedPlatformPid.value[eid] = groundedPlatformPid;
+    c.Velocity.x[eid] = vx;
+    c.Velocity.y[eid] = vy;
+    c.Velocity.z[eid] = vz;
+    c.PrimaryHeld.value[eid] = mergedUsePrimaryHeld ? 1 : 0;
+    c.SecondaryHeld.value[eid] = mergedUseSecondaryHeld ? 1 : 0;
 
     if (queuedUsePrimaryPressed) {
-      this.options.onPrimaryPressed(player.unlockedAbilityIds, player.primaryMouseSlot, player.hotbarAbilityIds);
+      this.options.onPrimaryPressed(eid);
     }
     if (queuedUseSecondaryPressed) {
-      this.options.onSecondaryPressed(player.unlockedAbilityIds, player.secondaryMouseSlot, player.hotbarAbilityIds);
+      this.options.onSecondaryPressed(eid);
     }
     if (queuedCastSlot !== null) {
-      this.options.onCastSlotPressed(player.unlockedAbilityIds, queuedCastSlot, player.hotbarAbilityIds);
+      this.options.onCastSlotPressed(eid, queuedCastSlot);
     }
-    player.lastProcessedSequence = latestSequence;
+    c.LastProcessedSequence.value[eid] = latestSequence;
   }
 
   private clampAxis(value: number): number {

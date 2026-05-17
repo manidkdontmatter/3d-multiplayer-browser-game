@@ -2,11 +2,14 @@
 import { clampHotbarSlotIndex } from "../../../shared/index";
 import type { AbilityDefinition } from "../../../shared/index";
 import { resolveProjectileProfile } from "../../../shared/index";
+import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";
+import { getHotbarSlot } from "../../ecs/HotbarComponents";
 
 export interface AbilityExecutionSystemOptions {
   readonly getElapsedSeconds: () => number;
-  readonly resolveAbilityById: (unlockedAbilityIds: Set<number>, abilityId: number) => AbilityDefinition | null;
+  readonly resolveAbilityById: (unlockedAbilityIds: readonly number[], abilityId: number) => AbilityDefinition | null;
   readonly broadcastAbilityUse: (playerNid: number, ability: AbilityDefinition, x: number, y: number, z: number) => void;
+  readonly ecsComponents: WorldWithComponents["components"];
   readonly spawnProjectile: (request: {
     ownerNid: number; kind: number;
     x: number; y: number; z: number;
@@ -16,35 +19,30 @@ export interface AbilityExecutionSystemOptions {
     maxSpeed: number; minSpeed: number; pierceCount: number;
     despawnOnDamageableHit: boolean; despawnOnWorldHit: boolean;
   }) => void;
-  readonly applyMeleeHit: (playerNid: number, meleeProfile: NonNullable<AbilityDefinition["melee"]>) => void;
-}
-
-export interface AbilityUseContext {
-  nid: number;
-  x: number; y: number; z: number;
-  yaw: number; pitch: number;
-  hotbarAbilityIds: number[];
-  unlockedAbilityIds: Set<number>;
-  lastPrimaryFireAtSeconds: number;
-  primaryMouseSlot: number;
-  secondaryMouseSlot: number;
+  readonly applyMeleeHit: (playerEid: number, meleeProfile: NonNullable<AbilityDefinition["melee"]>) => void;
 }
 
 export class AbilityExecutionSystem {
   public constructor(private readonly options: AbilityExecutionSystemOptions) {}
 
-  public tryUsePrimaryMouseAbility(ctx: AbilityUseContext): void {
-    this.tryUseAbilityBySlot(ctx, ctx.primaryMouseSlot);
+  public tryUsePrimaryMouseAbilityByEid(eid: number): void {
+    const c = this.options.ecsComponents;
+    const slot = c.PrimaryMouseSlot.value[eid] ?? 0;
+    this.tryUseAbilityBySlotByEid(eid, slot);
   }
 
-  public tryUseSecondaryMouseAbility(ctx: AbilityUseContext): void {
-    this.tryUseAbilityBySlot(ctx, ctx.secondaryMouseSlot);
+  public tryUseSecondaryMouseAbilityByEid(eid: number): void {
+    const c = this.options.ecsComponents;
+    const slot = c.SecondaryMouseSlot.value[eid] ?? 1;
+    this.tryUseAbilityBySlotByEid(eid, slot);
   }
 
-  public tryUseAbilityBySlot(ctx: AbilityUseContext, rawSlot: number): void {
+  public tryUseAbilityBySlotByEid(eid: number, rawSlot: number): void {
+    const c = this.options.ecsComponents;
     const slot = clampHotbarSlotIndex(rawSlot);
-    const abilityId = ctx.hotbarAbilityIds[slot] ?? 0;
-    const ability = this.options.resolveAbilityById(ctx.unlockedAbilityIds, abilityId);
+    const abilityId = getHotbarSlot(c, eid, slot);
+    const unlocked = c.UnlockedAbilityIds.value[eid] ?? [];
+    const ability = this.options.resolveAbilityById(unlocked, abilityId);
     if (!ability) return;
 
     const pp = ability.projectile;
@@ -53,31 +51,43 @@ export class AbilityExecutionSystem {
     if (cooldown === undefined) return;
 
     const elapsed = this.options.getElapsedSeconds();
-    if (elapsed - ctx.lastPrimaryFireAtSeconds < cooldown) return;
+    const lastFired = c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY;
+    if (elapsed - lastFired < cooldown) return;
 
-    ctx.lastPrimaryFireAtSeconds = elapsed;
-    this.options.broadcastAbilityUse(ctx.nid, ability, ctx.x, ctx.y, ctx.z);
+    c.LastPrimaryFireAtSeconds.value[eid] = elapsed;
+    const ownerNid = c.NetworkId.value[eid] ?? 0;
+    const x = c.Position.x[eid] ?? 0;
+    const y = c.Position.y[eid] ?? 0;
+    const z = c.Position.z[eid] ?? 0;
+    this.options.broadcastAbilityUse(ownerNid, ability, x, y, z);
 
     if (pp) {
-      this.spawnProjectileFromContext(ctx, pp);
+      const yaw = c.Yaw.value[eid] ?? 0;
+      const pitch = c.Pitch.value[eid] ?? 0;
+      this.spawnProjectileFromEid(ownerNid, x, y, z, yaw, pitch, pp);
       return;
     }
     if (mp) {
-      this.options.applyMeleeHit(ctx.nid, mp);
+      this.options.applyMeleeHit(eid, mp);
     }
   }
 
-  private spawnProjectileFromContext(
-    ctx: { nid: number; x: number; y: number; z: number; yaw: number; pitch: number },
+  private spawnProjectileFromEid(
+    ownerNid: number,
+    x: number,
+    y: number,
+    z: number,
+    yaw: number,
+    pitch: number,
     pp: NonNullable<AbilityDefinition["projectile"]>
   ): void {
     const resolved = resolveProjectileProfile(pp);
-    const d = this.computeViewDirection(ctx.yaw, ctx.pitch);
-    const sx = ctx.x + d.x * resolved.spawnForwardOffset;
-    const sy = ctx.y + resolved.spawnVerticalOffset + d.y * resolved.spawnForwardOffset;
-    const sz = ctx.z + d.z * resolved.spawnForwardOffset;
+    const d = this.computeViewDirection(yaw, pitch);
+    const sx = x + d.x * resolved.spawnForwardOffset;
+    const sy = y + resolved.spawnVerticalOffset + d.y * resolved.spawnForwardOffset;
+    const sz = z + d.z * resolved.spawnForwardOffset;
     this.options.spawnProjectile({
-      ownerNid: ctx.nid,
+      ownerNid,
       kind: resolved.kind,
       x: sx, y: sy, z: sz,
       vx: d.x * resolved.speed, vy: d.y * resolved.speed, vz: d.z * resolved.speed,

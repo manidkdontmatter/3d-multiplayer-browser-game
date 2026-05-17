@@ -2,14 +2,13 @@
 // Entity creation is delegated to EntityFactory; the store provides
 // low-level component accessors and hotbar/abilities helpers.
 import { addEntity, createWorld, query, removeEntity } from "bitecs";
-import {
-  HOTBAR_SLOT_COUNT,
-  clampHotbarSlotIndex
-} from "../../shared/index";
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 import { ComponentRegistry } from "./ComponentRegistry";
+import type { EntityPresetId } from "./ComponentRegistry";
 import { EntityFactory } from "./EntityFactory";
 import type { EntityFactoryOverrides } from "./EntityFactory";
+import { getHotbarSlot, setHotbarSlot } from "./HotbarComponents";
+import { normalizeSortedUniqueUInt, sortedUniqueEquals } from "../../shared/sortedNumberList";
 
 export class SimulationEcsStore {
   public readonly world = createWorld({
@@ -68,7 +67,7 @@ export class SimulationEcsStore {
         slot8: [] as number[],
         slot9: [] as number[]
       },
-      UnlockedAbilityCsv: { value: [] as string[] },
+      UnlockedAbilityIds: { value: [] as number[][] },
       ReplicatedTag: [] as number[],
       PlayerTag: [] as number[],
       PlatformTag: [] as number[],
@@ -94,8 +93,8 @@ export class SimulationEcsStore {
     removeEntity(this.world, eid);
   }
 
-  public createEntityByKind(kind: string, overrides?: EntityFactoryOverrides): number {
-    return this.factory.createEntityByKind(kind, overrides);
+  public createEntityFromPreset(presetId: EntityPresetId, overrides?: EntityFactoryOverrides): number {
+    return this.factory.createEntityFromPreset(presetId, overrides);
   }
 
   // ── Component value helpers ───────────────────────────────────────────────
@@ -159,73 +158,27 @@ export class SimulationEcsStore {
   // ── Hotbar ────────────────────────────────────────────────────────────────
 
   public getHotbarSlot(eid: number, slot: number): number {
-    const normalizedSlot = clampHotbarSlotIndex(slot);
-    const h = this.world.components.Hotbar;
-    switch (normalizedSlot) {
-      case 0: return h.slot0[eid] ?? 0;
-      case 1: return h.slot1[eid] ?? 0;
-      case 2: return h.slot2[eid] ?? 0;
-      case 3: return h.slot3[eid] ?? 0;
-      case 4: return h.slot4[eid] ?? 0;
-      case 5: return h.slot5[eid] ?? 0;
-      case 6: return h.slot6[eid] ?? 0;
-      case 7: return h.slot7[eid] ?? 0;
-      case 8: return h.slot8[eid] ?? 0;
-      default: return h.slot9[eid] ?? 0;
-    }
+    return getHotbarSlot(this.world.components, eid, slot);
   }
 
   public setHotbarAbilityBySlot(eid: number, slot: number, abilityId: number): boolean {
-    const normalizedAbilityId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
-    const normalizedSlot = clampHotbarSlotIndex(slot);
-    const h = this.world.components.Hotbar;
-    let previous: number;
-    switch (normalizedSlot) {
-      case 0: previous = h.slot0[eid] ?? 0; h.slot0[eid] = normalizedAbilityId; break;
-      case 1: previous = h.slot1[eid] ?? 0; h.slot1[eid] = normalizedAbilityId; break;
-      case 2: previous = h.slot2[eid] ?? 0; h.slot2[eid] = normalizedAbilityId; break;
-      case 3: previous = h.slot3[eid] ?? 0; h.slot3[eid] = normalizedAbilityId; break;
-      case 4: previous = h.slot4[eid] ?? 0; h.slot4[eid] = normalizedAbilityId; break;
-      case 5: previous = h.slot5[eid] ?? 0; h.slot5[eid] = normalizedAbilityId; break;
-      case 6: previous = h.slot6[eid] ?? 0; h.slot6[eid] = normalizedAbilityId; break;
-      case 7: previous = h.slot7[eid] ?? 0; h.slot7[eid] = normalizedAbilityId; break;
-      case 8: previous = h.slot8[eid] ?? 0; h.slot8[eid] = normalizedAbilityId; break;
-      default: previous = h.slot9[eid] ?? 0; h.slot9[eid] = normalizedAbilityId; break;
-    }
-    return previous !== normalizedAbilityId;
+    return setHotbarSlot(this.world.components, eid, slot, abilityId);
   }
 
   // ── Unlocked abilities ────────────────────────────────────────────────────
 
-  public getUnlockedAbilities(eid: number): Set<number> {
-    const unlocked = new Set<number>();
-    const csv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
-    if (!csv) return unlocked;
-    for (const part of csv.split(",")) {
-      const value = Number.parseInt(part, 10);
-      if (Number.isFinite(value)) {
-        unlocked.add(Math.max(0, Math.floor(value)));
-      }
+  public getUnlockedAbilityIds(eid: number): readonly number[] {
+    return this.world.components.UnlockedAbilityIds.value[eid] ?? [];
+  }
+
+  public setUnlockedAbilityIdsFromList(eid: number, unlocked: ReadonlyArray<number>): boolean {
+    const next = normalizeSortedUniqueUInt(unlocked, { maxInclusive: 0xffff, includeZero: false });
+    const previous = this.world.components.UnlockedAbilityIds.value[eid] ?? [];
+    if (sortedUniqueEquals(previous, next)) {
+      return false;
     }
-    return unlocked;
-  }
-
-  public getUnlockedAbilitiesArray(eid: number): number[] {
-    return Array.from(this.getUnlockedAbilities(eid));
-  }
-
-  public setUnlockedAbilitiesFromList(eid: number, unlocked: ReadonlyArray<number>): boolean {
-    const ids = Array.from(
-      new Set(unlocked.map(id => Math.max(0, Math.floor(Number.isFinite(id) ? id : 0))))
-    ).sort((a, b) => a - b);
-    const nextCsv = ids.join(",");
-    const previousCsv = this.world.components.UnlockedAbilityCsv.value[eid] ?? "";
-    this.world.components.UnlockedAbilityCsv.value[eid] = nextCsv;
-    return previousCsv !== nextCsv;
-  }
-
-  public setUnlockedAbilities(eid: number, unlocked: Set<number>): boolean {
-    return this.setUnlockedAbilitiesFromList(eid, Array.from(unlocked));
+    this.world.components.UnlockedAbilityIds.value[eid] = next;
+    return true;
   }
 
   // ── Tag queries ───────────────────────────────────────────────────────────

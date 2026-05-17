@@ -11,10 +11,12 @@ import {
   PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS,
   encodeInventoryStateSnapshot, getAbilityDefinitionById,
   quaternionFromYawPitchRoll,
+  sanitizeMovementMode,
   type BlueprintAccessTag,
   type InventoryStateSnapshot, type MovementMode, SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
+import { sortedUniqueContains } from "../shared/sortedNumberList";
 import {
   NType,
   type AbilityCommand as AbilityWireCommand,
@@ -25,7 +27,7 @@ import { PersistenceService, type PlayerSnapshot } from "./persistence/Persisten
 import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
 import { PersistenceSyncSystem } from "./persistence/PersistenceSyncSystem";
 import { DamageSystem } from "./combat/damage/DamageSystem";
-import { AbilityExecutionSystem, type AbilityUseContext } from "./combat/abilities/AbilityExecutionSystem";
+import { AbilityExecutionSystem } from "./combat/abilities/AbilityExecutionSystem";
 import { MeleeCombatSystem } from "./combat/melee/MeleeCombatSystem";
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 import { InputSystem } from "./input/InputSystem";
@@ -34,12 +36,13 @@ import { LocationRootSystem, type LocationFrameActor } from "./location/Location
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { AbilityCommandHandler } from "./net/AbilityCommandHandler";
 import { CreatorSystem } from "./creator/CreatorSystem";
-import { ItemInventorySystem, type WorldItemObject } from "./items/ItemInventorySystem";
+import { ItemInventorySystem } from "./items/ItemInventorySystem";
 import { ServerReplicationCoordinator } from "./net/ServerReplicationCoordinator";
 import { PlatformSystem, type PlatformCarryActor } from "./platform/PlatformSystem";
-import { NpcAiSystem, type NpcCharacter } from "./ai/NpcAiSystem";
+import { NpcAiSystem } from "./ai/NpcAiSystem";
 import { WorldContentCoordinator } from "./world/WorldContentCoordinator";
 import { SimulationEcs } from "./ecs/SimulationEcs";
+import { getHotbarArray, getHotbarSlot, setHotbarSlot } from "./ecs/HotbarComponents";
 import { loadServerArchetypeCatalog, type ServerArchetypeCatalog } from "./content/ArchetypeCatalog";
 import { CONTROLLER_KIND_AI, ControllerSystem } from "./controllers/ControllerSystem";
 import { CharacterMovementSystem } from "./movement/CharacterMovementSystem";
@@ -107,6 +110,9 @@ export class GameSimulation {
     eid: number; nid: number; x: number; y: number; z: number;
     movementMode: MovementMode; carriedFramePid: number | null; groundedPlatformPid: number | null;
   }>();
+  private readonly platformEidByPid = new Map<number, number>();
+  private readonly locationEidByPid = new Map<number, number>();
+  private readonly dummyEidByObject = new WeakMap<object, number>();
   private nextNpcPlayerAlertAtSeconds = 0; private elapsedSeconds = 0; private tickNumber = 0;
 
   public constructor(
@@ -118,8 +124,6 @@ export class GameSimulation {
     private readonly ipcChannel: MapProcessIpcChannel | null = null
   ) {
     const c = this.simulationEcs.world.components;
-    const indexes = this.simulationEcs as unknown as { getPlayerBody(eid: number): RAPIER.RigidBody | undefined; getPlayerCollider(eid: number): RAPIER.Collider | undefined; getCharacterBody(eid: number): RAPIER.RigidBody | undefined; getCharacterCollider(eid: number): RAPIER.Collider | undefined; getUnlockedAbilities(eid: number): Set<number> };
-
     this.archetypes = loadServerArchetypeCatalog();
     this.loadTestSpawnMode = this.resolveLoadTestSpawnMode();
     this.loadTestGridSpacing = this.resolveLoadTestGridSpacing();
@@ -143,15 +147,12 @@ export class GameSimulation {
 
     // ── Item inventory ────────────────────────────────────────────────────
     this.itemInventorySystem = new ItemInventorySystem<UserLike>({
-      world: this.world, persistence: this.persistence,
+      world: this.world,
+      ecs: this.simulationEcs,
+      replication: this.replication,
+      persistence: this.persistence,
       getUserById: (userId) => this.usersById.get(userId),
-      getPlayerStateByUserId: (userId) => this.simulationEcs.getPlayerRuntimeStateByUserId(userId) as any,
-      setPlayerHealthByUserId: (userId, health) => this.simulationEcs.setPlayerHealthByUserId(userId, health),
       markPlayerCharacterDirty: (accountId) => this.persistenceSyncSystem.markAccountDirty(accountId, { dirtyCharacter: true, dirtyAbilityState: false }),
-      addWorldItem: (item) => this.addWorldItem(item),
-      syncWorldItem: (item) => this.syncWorldItem(item),
-      removeWorldItem: (item) => this.removeWorldItem(item),
-      queueInventoryState: (user, snapshot) => this.queueInventoryStateMessage(user, snapshot),
       persistInventoryMutation: (accountId, snapshot, action, eventId, eventAtMs) => {
         if (!this.ipcChannel?.isAvailable()) {
           this.persistence.saveInventoryState(accountId, snapshot);
@@ -198,9 +199,9 @@ export class GameSimulation {
       getSpawnPosition: () => this.getSpawnPosition(),
       getSpawnBodyY: (x, z) => this.getSpawnBodyY(x, z),
       markCharacterDirtyByAccountId: (accountId, options) => this.persistenceSyncSystem.markAccountDirty(accountId, options),
-      getCharacterStateByEid: (eid) => this.simulationEcs.getCharacterDamageStateByEid(eid) as any,
+      getCharacterStateByEid: (eid) => this.simulationEcs.getCharacterDamageStateByEid(eid),
       applyCharacterStateByEid: (eid, state) => this.simulationEcs.applyCharacterDamageStateByEid(eid, state),
-      getDummyStateByEid: (eid) => this.simulationEcs.getDummyDamageStateByEid(eid) as any,
+      getDummyStateByEid: (eid) => this.simulationEcs.getDummyDamageStateByEid(eid),
       applyDummyStateByEid: (eid, state) => this.simulationEcs.applyDummyDamageStateByEid(eid, state),
       events: this.events
     });
@@ -209,11 +210,12 @@ export class GameSimulation {
     this.worldContentCoordinator = new WorldContentCoordinator({
       world: this.world,
       onDummyAdded: (dummy) => {
-        const eid = this.simulationEcs.factory.createEntityByKind("dummy", {
+        const eid = this.simulationEcs.createEntityFromPreset("dummy", {
           position: dummy.position, rotation: dummy.rotation,
           health: dummy.maxHealth, maxHealth: dummy.maxHealth,
           modelId: dummy.modelId
         });
+        this.dummyEidByObject.set(dummy, eid);
         this.simulationEcs.registerDummyPhysicsRefs(eid, dummy.body, dummy.collider);
         const nid = this.replication.spawnEntity(eid);
         dummy.nid = nid;
@@ -224,33 +226,11 @@ export class GameSimulation {
     // ── Projectiles ───────────────────────────────────────────────────────
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
-      getOwnerCollider: (ownerNid) => this.simulationEcs.getCharacterColliderByNid(ownerNid),
+      ecsWorld: this.simulationEcs.world,
+      getOwnerColliderByNid: (ownerNid) => this.simulationEcs.getCharacterColliderByNid(ownerNid),
       resolveTargetByColliderHandle: (h) => this.damageSystem.resolveTargetByColliderHandle(h),
       applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
-      createProjectile: (req) => {
-        const eid = this.simulationEcs.factory.createEntityByKind("projectile", {
-          modelId: this.resolveProjectileModelId(req.kind),
-          position: { x: req.x, y: req.y, z: req.z },
-          velocity: { x: req.vx, y: req.vy, z: req.vz },
-          projectileOwnerNid: req.ownerNid, projectileKind: req.kind,
-          projectileRadius: req.radius, projectileDamage: req.damage,
-          projectileTtl: req.lifetimeSeconds,
-          projectileRemainingRange: ProjectileSystem.resolveMaxRange(req.maxRange),
-          projectileGravity: ProjectileSystem.resolveOptionalNumber(req.gravity, 0),
-          projectileDrag: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.drag, 0)),
-          projectileMaxSpeed: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.maxSpeed, Number.POSITIVE_INFINITY)),
-          projectileMinSpeed: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.minSpeed, 0)),
-          projectileRemainingPierces: Math.max(0, Math.floor(ProjectileSystem.resolveOptionalNumber(req.pierceCount, 0))),
-          projectileDespawnOnDamageableHit: typeof req.despawnOnDamageableHit === "boolean" ? req.despawnOnDamageableHit : true,
-          projectileDespawnOnWorldHit: typeof req.despawnOnWorldHit === "boolean" ? req.despawnOnWorldHit : true
-        });
-        const nid = this.replication.spawnEntity(eid);
-        this.simulationEcs.setEntityNidByEid(eid, nid);
-        return eid;
-      },
-      getProjectileState: (eid) => this.simulationEcs.getProjectileRuntimeStateByEid(eid),
-      applyProjectileState: (eid, state) => this.simulationEcs.applyProjectileRuntimeStateByEid(eid, state),
-      removeProjectile: (eid) => { this.replication.despawnEntity(eid); this.simulationEcs.destroyEid(eid); }
+      despawnProjectile: (eid) => { this.replication.despawnEntity(eid); this.simulationEcs.destroyEid(eid); }
     });
 
     // ── Melee ─────────────────────────────────────────────────────────────
@@ -268,7 +248,7 @@ export class GameSimulation {
     const simEcs = this.simulationEcs;
     this.abilityExecutionSystem = new AbilityExecutionSystem({
       getElapsedSeconds: () => this.elapsedSeconds,
-      resolveAbilityById: (unlockedAbilityIds, abilityId) => this.getAbilityDefinitionForUnlockedSet(unlockedAbilityIds, abilityId),
+      resolveAbilityById: (unlockedAbilityIds, abilityId) => this.getAbilityDefinitionForUnlockedList(unlockedAbilityIds, abilityId),
       broadcastAbilityUse: (playerNid, ability, x, y, z) => {
         this.replication.broadcastAbilityUseMessage(playerNid, ability, x, y, z);
         this.events.emit<AbilityUsedPayload>(GameEvent.ABILITY_USED, {
@@ -277,18 +257,16 @@ export class GameSimulation {
           x, y, z
         });
       },
-      spawnProjectile: (req) => this.projectileSystem.spawn(req),
-      applyMeleeHit: (playerNid, mp) => {
-        const eid = this.simulationEcs.getPlayerEidByNid(playerNid);
-        if (typeof eid !== "number") return;
-        const body = this.simulationEcs.getPlayerBody(eid);
-        const collider = this.simulationEcs.getPlayerCollider(eid);
+      ecsComponents: c,
+      spawnProjectile: (req) => this.spawnProjectile(req),
+      applyMeleeHit: (playerEid, mp) => {
+        const body = this.simulationEcs.getPlayerBody(playerEid);
+        const collider = this.simulationEcs.getPlayerCollider(playerEid);
         if (!body || !collider) return;
-        const c = this.simulationEcs.world.components;
         this.meleeCombatSystem.tryApplyMeleeHit({
-          nid: playerNid,
-          yaw: c.Yaw.value[eid] ?? 0,
-          pitch: c.Pitch.value[eid] ?? 0,
+          nid: c.NetworkId.value[playerEid] ?? 0,
+          yaw: c.Yaw.value[playerEid] ?? 0,
+          pitch: c.Pitch.value[playerEid] ?? 0,
           body, collider
         }, mp);
       }
@@ -296,25 +274,23 @@ export class GameSimulation {
 
     // ── Input ─────────────────────────────────────────────────────────────
     this.inputSystem = new InputSystem({
-      onPrimaryPressed: (unlocked, primarySlot, hotbar) =>
-        this.abilityExecutionSystem.tryUsePrimaryMouseAbility({ nid: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbarAbilityIds: hotbar, unlockedAbilityIds: unlocked, lastPrimaryFireAtSeconds: 0, primaryMouseSlot: primarySlot, secondaryMouseSlot: 0 }),
-      onSecondaryPressed: (unlocked, secondarySlot, hotbar) =>
-        this.abilityExecutionSystem.tryUseSecondaryMouseAbility({ nid: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbarAbilityIds: hotbar, unlockedAbilityIds: unlocked, lastPrimaryFireAtSeconds: 0, primaryMouseSlot: 0, secondaryMouseSlot: secondarySlot }),
-      onCastSlotPressed: (unlocked, slot, hotbar) =>
-        this.abilityExecutionSystem.tryUseAbilityBySlot({ nid: 0, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbarAbilityIds: hotbar, unlockedAbilityIds: unlocked, lastPrimaryFireAtSeconds: 0, primaryMouseSlot: 0, secondaryMouseSlot: 0 }, slot)
+      ecsComponents: c,
+      onPrimaryPressed: (eid) => this.abilityExecutionSystem.tryUsePrimaryMouseAbilityByEid(eid),
+      onSecondaryPressed: (eid) => this.abilityExecutionSystem.tryUseSecondaryMouseAbilityByEid(eid),
+      onCastSlotPressed: (eid, slot) => this.abilityExecutionSystem.tryUseAbilityBySlotByEid(eid, slot)
     });
 
     // ── Platforms ─────────────────────────────────────────────────────────
     this.platformSystem = new PlatformSystem({
       world: this.world, definitions: this.archetypes.platforms,
       onPlatformAdded: (platform) => {
-        const eid = this.simulationEcs.factory.createEntityByKind("platform", {
+        const eid = this.simulationEcs.createEntityFromPreset("platform", {
           position: platform.position, rotation: platform.rotation, modelId: platform.modelId
         });
-        (platform as any)._ecsEid = eid;
+        this.platformEidByPid.set(platform.pid, eid);
       },
       onPlatformUpdated: (platform) => {
-        const eid = (platform as any)._ecsEid;
+        const eid = this.platformEidByPid.get(platform.pid);
         if (typeof eid === "number") {
           c.Position.x[eid] = platform.position.x; c.Position.y[eid] = platform.position.y; c.Position.z[eid] = platform.position.z;
           c.Rotation.x[eid] = platform.rotation.x; c.Rotation.y[eid] = platform.rotation.y; c.Rotation.z[eid] = platform.rotation.z; c.Rotation.w[eid] = platform.rotation.w;
@@ -326,19 +302,19 @@ export class GameSimulation {
     this.locationRootSystem = new LocationRootSystem({
       world: this.world,
       onLocationAdded: (location) => {
-        const eid = this.simulationEcs.factory.createEntityByKind("location", {
+        const eid = this.simulationEcs.createEntityFromPreset("location", {
           position: location.position, rotation: location.rotation, modelId: location.modelId,
           locationKind: location.locationKind, locationArchetypeId: location.locationArchetypeId,
           locationSeed: location.locationSeed, locationEnvironmentId: location.locationEnvironmentId,
           locationStreamingRadius: location.locationStreamingRadius, locationInfluenceRadius: location.locationInfluenceRadius
         });
-        (location as any)._ecsEid = eid;
+        this.locationEidByPid.set(location.pid, eid);
         const nid = this.replication.spawnEntity(eid);
         location.nid = nid;
         this.simulationEcs.setEntityNidByEid(eid, nid);
       },
       onLocationUpdated: (location) => {
-        const eid = (location as any)._ecsEid;
+        const eid = this.locationEidByPid.get(location.pid);
         if (typeof eid !== "number") return;
         c.Position.x[eid] = location.position.x; c.Position.y[eid] = location.position.y; c.Position.z[eid] = location.position.z;
         c.Rotation.x[eid] = location.rotation.x; c.Rotation.y[eid] = location.rotation.y; c.Rotation.z[eid] = location.rotation.z; c.Rotation.w[eid] = location.rotation.w;
@@ -379,23 +355,6 @@ export class GameSimulation {
       ecsComponents: c,
       getBody: (eid) => this.simulationEcs.getPlayerBody(eid),
       getCollider: (eid) => this.simulationEcs.getPlayerCollider(eid),
-      getUnlockedAbilityIds: (eid) => this.simulationEcs.world.components.UnlockedAbilityCsv.value[eid] ? new Set((this.simulationEcs.world.components.UnlockedAbilityCsv.value[eid] ?? "").split(",").map(n => Math.max(0, Math.floor(Number(n) || 0)))) : new Set<number>(),
-      getHotbar: (eid) => {
-        const hotbar: number[] = [];
-        for (let s = 0; s < HOTBAR_SLOT_COUNT; s++) {
-          const h = c.Hotbar;
-          hotbar.push(s === 0 ? (h.slot0[eid] ?? 0) : s === 1 ? (h.slot1[eid] ?? 0) : s === 2 ? (h.slot2[eid] ?? 0) : s === 3 ? (h.slot3[eid] ?? 0) : s === 4 ? (h.slot4[eid] ?? 0) : s === 5 ? (h.slot5[eid] ?? 0) : s === 6 ? (h.slot6[eid] ?? 0) : s === 7 ? (h.slot7[eid] ?? 0) : s === 8 ? (h.slot8[eid] ?? 0) : (h.slot9[eid] ?? 0));
-        }
-        return hotbar;
-      },
-      beforePlayerMove: (eid, unlocked, primarySlot, secondarySlot, hotbar) => {
-        if (c.PrimaryHeld.value[eid]) {
-          this.abilityExecutionSystem.tryUsePrimaryMouseAbility({ nid: 0, x: c.Position.x[eid] ?? 0, y: c.Position.y[eid] ?? 0, z: c.Position.z[eid] ?? 0, yaw: c.Yaw.value[eid] ?? 0, pitch: c.Pitch.value[eid] ?? 0, hotbarAbilityIds: hotbar, unlockedAbilityIds: unlocked, lastPrimaryFireAtSeconds: c.LastPrimaryFireAtSeconds.value[eid] ?? 0, primaryMouseSlot: primarySlot, secondaryMouseSlot: secondarySlot });
-        }
-        if (c.SecondaryHeld.value[eid]) {
-          this.abilityExecutionSystem.tryUseSecondaryMouseAbility({ nid: 0, x: c.Position.x[eid] ?? 0, y: c.Position.y[eid] ?? 0, z: c.Position.z[eid] ?? 0, yaw: c.Yaw.value[eid] ?? 0, pitch: c.Pitch.value[eid] ?? 0, hotbarAbilityIds: hotbar, unlockedAbilityIds: unlocked, lastPrimaryFireAtSeconds: c.LastPrimaryFireAtSeconds.value[eid] ?? 0, primaryMouseSlot: primarySlot, secondaryMouseSlot: secondarySlot });
-        }
-      },
       samplePlayerPlatformCarry: (eid) => {
         const body = this.simulationEcs.getPlayerBody(eid);
         if (!body) return { x: 0, y: 0, z: 0, yaw: 0, carriedFramePid: null };
@@ -513,25 +472,21 @@ export class GameSimulation {
 
     // ── NPC AI ────────────────────────────────────────────────────────────
     this.npcAiSystem = new NpcAiSystem({
-      world: this.world, navigation: this.navigationPlanner,
-      characterArchetypes: this.archetypes.characterArchetypes, spawns: this.archetypes.npcSpawns,
+      world: this.world,
+      ecs: this.simulationEcs,
+      ecsComponents: c,
+      replication: this.replication,
+      navigation: this.navigationPlanner,
+      characterArchetypes: this.archetypes.characterArchetypes,
+      spawns: this.archetypes.npcSpawns,
       controllerKindAi: CONTROLLER_KIND_AI,
-      onCharacterCreated: (character) => this.addNpcCharacter(character),
-      onCharacterUpdated: (_character) => { /* no-op: ECS is written directly by movement system */ },
+      onNpcSpawned: (eid, colliderHandle) => {
+        this.controllerSystem.attachAiController(eid);
+        this.damageSystem.registerCharacterCollider(colliderHandle, eid);
+      },
       hasPerceptionTargets: () => this.aiPerceptionTargetByColliderHandle.size > 0,
       resolvePerceptionTargetByColliderHandle: (h) => this.aiPerceptionTargetByColliderHandle.get(h) ?? null,
-      usePrimaryAbility: (character) => {
-        const ctx: AbilityUseContext = {
-          nid: character.nid, x: character.x, y: character.y, z: character.z,
-          yaw: character.yaw, pitch: character.pitch,
-          hotbarAbilityIds: character.hotbarAbilityIds,
-          unlockedAbilityIds: character.unlockedAbilityIds,
-          lastPrimaryFireAtSeconds: character.lastPrimaryFireAtSeconds,
-          primaryMouseSlot: character.primaryMouseSlot,
-          secondaryMouseSlot: character.secondaryMouseSlot
-        };
-        this.abilityExecutionSystem.tryUsePrimaryMouseAbility(ctx);
-      },
+      usePrimaryAbilityByEid: (eid) => this.abilityExecutionSystem.tryUsePrimaryMouseAbilityByEid(eid),
       aiTickIntervalSeconds: this.resolvePositiveEnvNumber("NPC_AI_TICK_INTERVAL", 0.2),
       perceptionTickIntervalSeconds: this.resolvePositiveEnvNumber("NPC_PERCEPTION_TICK_INTERVAL", 0.25),
       pathReplanIntervalSeconds: this.resolvePositiveEnvNumber("NPC_PATH_REPLAN_INTERVAL", 0.75),
@@ -558,7 +513,7 @@ export class GameSimulation {
         maxHealth: this.archetypes.trainingDummy.maxHealth,
         modelId: this.archetypes.trainingDummy.modelId
       },
-      resolveDummyEid: (dummy) => (dummy as any)._ecsEid ?? -1,
+      resolveDummyEid: (dummy) => this.dummyEidByObject.get(dummy) ?? -1,
       registerDummyCollider: (ch, eid) => this.damageSystem.registerDummyCollider(ch, eid)
     });
     this.locationRootSystem.initializeLocations();
@@ -572,24 +527,13 @@ export class GameSimulation {
 
   // ── Command handlers ──────────────────────────────────────────────────────
   public applyInputCommands(userId: number, commands: Partial<InputWireCommand>[]): void {
-    const player = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
-    if (!player) return;
-    this.inputSystem.applyCommands(player, commands);
-    this.simulationEcs.applyPlayerMovementState(player.eid, {
-      x: player.x, y: player.y, z: player.z, yaw: player.yaw, pitch: player.pitch,
-      vx: player.vx, vy: player.vy, vz: player.vz,
-      grounded: player.grounded, movementMode: player.movementMode,
-      groundedPlatformPid: player.groundedPlatformPid, carriedFramePid: player.carriedFramePid,
-      lastProcessedSequence: player.lastProcessedSequence,
-      lastPrimaryFireAtSeconds: player.lastPrimaryFireAtSeconds,
-      primaryHeld: player.primaryHeld, secondaryHeld: player.secondaryHeld,
-      primaryMouseSlot: player.primaryMouseSlot, secondaryMouseSlot: player.secondaryMouseSlot,
-      rotation: player.rotation
-    });
+    const eid = this.simulationEcs.getPlayerEidByUserId(userId);
+    if (typeof eid !== "number") return;
+    this.inputSystem.applyCommands(eid, commands);
   }
 
   public applyAbilityCommand(user: UserLike, command: Partial<AbilityWireCommand>): void {
-    if (!this.simulationEcs.getPlayerRuntimeStateByUserId(user.id)) return;
+    if (typeof this.simulationEcs.getPlayerEidByUserId(user.id) !== "number") return;
     this.applyForgetAbilityIntent(user, command);
     this.abilityCommandHandler.apply(user, command);
   }
@@ -646,7 +590,7 @@ export class GameSimulation {
   }
 
   public applyItemCommand(user: UserLike, command: Partial<ItemWireCommand>): void {
-    if (!this.simulationEcs.getPlayerRuntimeStateByUserId(user.id)) return;
+    if (typeof this.simulationEcs.getPlayerEidByUserId(user.id) !== "number") return;
     this.itemInventorySystem.applyCommand(user.id, command);
   }
 
@@ -686,27 +630,65 @@ export class GameSimulation {
     const prevElapsed = this.elapsedSeconds;
     this.elapsedSeconds += delta;
     this.world.integrationParameters.dt = delta;
+    this.tickKinematicWorldFrames(prevElapsed);
+    this.tickAiIntentPhase();
+    this.tickAbilityIntentPhase();
+    this.tickMovementPhase(delta);
+    this.tickCombatPhase(delta);
+    this.tickReplicationPhase();
+    this.tickPhysicsFinalizePhase();
+  }
+
+  private tickKinematicWorldFrames(prevElapsed: number): void {
     this.platformSystem.updatePlatforms(prevElapsed, this.elapsedSeconds);
     this.locationRootSystem.updateLocations(prevElapsed, this.elapsedSeconds);
+  }
+
+  private tickAiIntentPhase(): void {
     this.refreshAiPerceptionTargets();
     this.emitPlayerPresenceStimuli();
     this.npcAiSystem.step(this.elapsedSeconds);
+  }
+
+  private tickAbilityIntentPhase(): void {
+    const c = this.simulationEcs.world.components;
+    for (const uid of this.simulationEcs.getOnlinePlayerUserIds()) {
+      const eid = this.simulationEcs.getPlayerEidByUserId(uid);
+      if (typeof eid !== "number") continue;
+      if ((c.PrimaryHeld.value[eid] ?? 0) !== 0) {
+        this.abilityExecutionSystem.tryUsePrimaryMouseAbilityByEid(eid);
+      }
+      if ((c.SecondaryHeld.value[eid] ?? 0) !== 0) {
+        this.abilityExecutionSystem.tryUseSecondaryMouseAbilityByEid(eid);
+      }
+    }
+  }
+
+  private tickMovementPhase(delta: number): void {
     this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta, this.elapsedSeconds);
-    this.npcMovementSystem.stepCharacters(this.getNpcMovementEntries(), delta, this.elapsedSeconds);
+    this.npcMovementSystem.stepCharacters(this.npcAiSystem.getNpcEids() as number[], delta, this.elapsedSeconds);
+  }
+
+  private tickCombatPhase(delta: number): void {
     this.projectileSystem.step(delta);
     this.statusEffects.step(this.elapsedSeconds * 1000);
+  }
 
+  private tickReplicationPhase(): void {
     const replicatedEids = this.simulationEcs.getReplicatedEids();
     for (const eid of replicatedEids) {
       this.replication.syncEntityFromEcs(eid);
     }
+  }
+
+  private tickPhysicsFinalizePhase(): void {
     this.world.step();
     this.maybeBroadcastServerPopulation();
   }
 
   public flushDirtyPlayerState(overrides?: { saveCharacterSnapshot?: (s: PlayerSnapshot) => void; saveAbilityStateSnapshot?: (s: PlayerSnapshot) => void }): void {
     this.persistenceSyncSystem.flushDirtyPlayerState(
-      (accountId) => this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId) as any,
+      (accountId) => this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId),
       (snap) => { if (overrides?.saveCharacterSnapshot) overrides.saveCharacterSnapshot(snap); else this.persistence.saveCharacterSnapshot(snap); },
       (snap) => { if (overrides?.saveAbilityStateSnapshot) overrides.saveAbilityStateSnapshot(snap); else this.persistence.saveAbilityStateSnapshot(snap); }
     );
@@ -719,7 +701,7 @@ export class GameSimulation {
   public getPlayerSnapshotByUserId(userId: number): PlayerSnapshot | null {
     const aid = this.simulationEcs.getPlayerAccountIdByUserId(userId);
     if (aid === null) return null;
-    return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(aid) as any;
+    return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(aid);
   }
   public getInventorySnapshotByAccountId(accountId: number): InventoryStateSnapshot {
     return this.itemInventorySystem.ensureInventoryLoaded(accountId);
@@ -766,6 +748,31 @@ export class GameSimulation {
     return this.resolveAbilityDefinitionById(abilityId);
   }
 
+  private getAbilityDefinitionForUnlockedList(unlocked: readonly number[], abilityId: number): AbilityDefinition | null {
+    // unlocked is kept normalized (sorted/unique) by ECS helpers.
+    // Binary search is much cheaper than allocating Sets repeatedly.
+    if (!unlocked || unlocked.length === 0) return null;
+    // Fast-path for tiny lists.
+    if (unlocked.length <= 8) {
+      for (let i = 0; i < unlocked.length; i += 1) {
+        if (unlocked[i] === abilityId) return this.resolveAbilityDefinitionById(abilityId);
+      }
+      return null;
+    }
+    // Larger lists: binary search
+    let lo = 0;
+    let hi = unlocked.length - 1;
+    const target = Math.max(0, Math.floor(abilityId));
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      const v = unlocked[mid] ?? 0;
+      if (v === target) return this.resolveAbilityDefinitionById(abilityId);
+      if (v < target) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return null;
+  }
+
   private sanitizeHotbarSlot(raw: unknown, fallback: number): number {
     return (typeof raw === "number" && Number.isFinite(raw)) ? clampHotbarSlotIndex(raw) : fallback;
   }
@@ -774,12 +781,12 @@ export class GameSimulation {
     return (typeof raw === "number" && Number.isFinite(raw)) ? Math.max(ABILITY_ID_NONE, Math.min(0xffff, Math.floor(raw))) : ABILITY_ID_NONE;
   }
 
-  private sanitizeSelectedAbilityId(raw: unknown, fallback: number, unlocked: Set<number>): number {
+  private sanitizeSelectedAbilityId(raw: unknown, fallback: number, unlocked: readonly number[]): number {
     if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
     const n = Math.max(0, Math.floor(raw));
     if (n === ABILITY_ID_NONE) return ABILITY_ID_NONE;
-    if (!unlocked.has(n)) return fallback;
-    return this.resolveAbilityDefinitionById(n) ? n : fallback;
+    const resolved = this.getAbilityDefinitionForUnlockedList(unlocked, n);
+    return resolved ? n : fallback;
   }
 
   private resolveAbilityDefinitionById(id: number): AbilityDefinition | null {
@@ -798,84 +805,48 @@ export class GameSimulation {
   }
 
   private ensurePunchAssigned(eid: number): void {
-    const csv = this.simulationEcs.world.components.UnlockedAbilityCsv.value[eid] ?? "";
-    const ids = csv ? csv.split(",").map(n => Math.max(0, Math.floor(Number(n) || 0))) : [];
-    if (!ids.includes(ABILITY_ID_PUNCH)) return;
-    const h = this.simulationEcs.world.components.Hotbar;
+    const unlocked = this.simulationEcs.world.components.UnlockedAbilityIds.value[eid] ?? [];
+    if (!sortedUniqueContains(unlocked, ABILITY_ID_PUNCH)) return;
+    const c = this.simulationEcs.world.components;
     for (let s = 0; s < HOTBAR_SLOT_COUNT; s++) {
-      const v = s === 0 ? (h.slot0[eid] ?? 0) : s === 1 ? (h.slot1[eid] ?? 0) : s === 2 ? (h.slot2[eid] ?? 0) : s === 3 ? (h.slot3[eid] ?? 0) : s === 4 ? (h.slot4[eid] ?? 0) : s === 5 ? (h.slot5[eid] ?? 0) : s === 6 ? (h.slot6[eid] ?? 0) : s === 7 ? (h.slot7[eid] ?? 0) : s === 8 ? (h.slot8[eid] ?? 0) : (h.slot9[eid] ?? 0);
-      if (v === ABILITY_ID_PUNCH) return;
+      if (getHotbarSlot(c, eid, s) === ABILITY_ID_PUNCH) return;
     }
     for (let s = 0; s < HOTBAR_SLOT_COUNT; s++) {
-      const v = s === 0 ? (h.slot0[eid] ?? 0) : s === 1 ? (h.slot1[eid] ?? 0) : s === 2 ? (h.slot2[eid] ?? 0) : s === 3 ? (h.slot3[eid] ?? 0) : s === 4 ? (h.slot4[eid] ?? 0) : s === 5 ? (h.slot5[eid] ?? 0) : s === 6 ? (h.slot6[eid] ?? 0) : s === 7 ? (h.slot7[eid] ?? 0) : s === 8 ? (h.slot8[eid] ?? 0) : (h.slot9[eid] ?? 0);
-      if (v === ABILITY_ID_NONE) {
-        if (s === 0) h.slot0[eid] = ABILITY_ID_PUNCH; else if (s === 1) h.slot1[eid] = ABILITY_ID_PUNCH; else if (s === 2) h.slot2[eid] = ABILITY_ID_PUNCH; else if (s === 3) h.slot3[eid] = ABILITY_ID_PUNCH; else if (s === 4) h.slot4[eid] = ABILITY_ID_PUNCH; else if (s === 5) h.slot5[eid] = ABILITY_ID_PUNCH; else if (s === 6) h.slot6[eid] = ABILITY_ID_PUNCH; else if (s === 7) h.slot7[eid] = ABILITY_ID_PUNCH; else if (s === 8) h.slot8[eid] = ABILITY_ID_PUNCH; else h.slot9[eid] = ABILITY_ID_PUNCH;
+      if (getHotbarSlot(c, eid, s) === ABILITY_ID_NONE) {
+        setHotbarSlot(c, eid, s, ABILITY_ID_PUNCH);
         return;
       }
     }
-    h.slot0[eid] = ABILITY_ID_PUNCH;
+    setHotbarSlot(c, eid, 0, ABILITY_ID_PUNCH);
   }
 
   private clampHealth(v: number): number { return Number.isFinite(v) ? Math.max(0, Math.min(this.archetypes.player.maxHealth, Math.floor(v))) : this.archetypes.player.maxHealth; }
 
-  private addWorldItem(item: WorldItemObject): void {
-    const eid = this.simulationEcs.factory.createEntityByKind("item", {
-      position: item.position, rotation: item.rotation, modelId: item.modelId,
-      itemArchetypeId: item.itemArchetypeId, itemQuantity: item.itemQuantity
-    });
-    (item as any)._ecsEid = eid;
-    const nid = this.replication.spawnEntity(eid);
-    item.nid = nid;
-    this.simulationEcs.setEntityNidByEid(eid, nid);
-  }
-
-  private syncWorldItem(item: WorldItemObject): void {
-    const eid = (item as any)._ecsEid;
-    if (typeof eid !== "number") return;
-    const c = this.simulationEcs.world.components;
-    c.Position.x[eid] = item.position.x; c.Position.y[eid] = item.position.y; c.Position.z[eid] = item.position.z;
-  }
-
-  private removeWorldItem(item: WorldItemObject): void {
-    const eid = (item as any)._ecsEid;
-    if (typeof eid !== "number") return;
-    this.replication.despawnEntity(eid);
-    this.simulationEcs.destroyEid(eid);
-  }
-
-  private queueInventoryStateMessage(user: UserLike, snap: InventoryStateSnapshot): void {
-    user.queueMessage({ ntype: NType.InventoryStateMessage, inventoryJson: encodeInventoryStateSnapshot(snap) });
-  }
-
-  private addNpcCharacter(character: NpcCharacter): void {
-    const eid = this.simulationEcs.factory.createEntityByKind("npc", {
-      position: { x: character.x, y: character.y, z: character.z },
-      yaw: character.yaw, characterArchetypeId: character.characterArchetypeId,
-      controllerKind: character.controllerKind, modelId: character.modelId,
-      health: character.health, maxHealth: character.maxHealth
-    });
-    this.simulationEcs.registerCharacterPhysicsRefs(eid, character.body, character.collider);
-    character._ecsEid = eid;
-    this.controllerSystem.attachAiController(eid);
-    const nid = this.replication.spawnEntity(eid);
-    character.nid = nid;
-    this.simulationEcs.setEntityNidByEid(eid, nid);
-    this.damageSystem.registerCharacterCollider(character.collider.handle, eid);
-  }
-
   private refreshAiPerceptionTargets(): void {
     this.aiPerceptionTargetByColliderHandle.clear();
+    const c = this.simulationEcs.world.components;
     for (const uid of this.simulationEcs.getOnlinePlayerUserIds()) {
-      const p = this.simulationEcs.getPlayerRuntimeStateByUserId(uid);
-      if (!p) continue;
       const peid = this.controllerSystem.getControlledCharacterEidByUserId(uid);
       if (peid === null) continue;
-      this.aiPerceptionTargetByColliderHandle.set(p.collider.handle, {
-        eid: peid, nid: p.nid, x: p.x, y: p.y, z: p.z,
-        movementMode: p.movementMode, carriedFramePid: p.carriedFramePid, groundedPlatformPid: p.groundedPlatformPid
+      const eid = this.simulationEcs.getPlayerEidByUserId(uid);
+      if (typeof eid !== "number") continue;
+      const collider = this.simulationEcs.getPlayerCollider(eid);
+      if (!collider) continue;
+      const gp = c.GroundedPlatformPid.value[eid] ?? -1;
+      const cf = c.CarriedFramePid.value[eid] ?? -1;
+      this.aiPerceptionTargetByColliderHandle.set(collider.handle, {
+        eid: peid,
+        nid: c.NetworkId.value[eid] ?? 0,
+        x: c.Position.x[eid] ?? 0,
+        y: c.Position.y[eid] ?? 0,
+        z: c.Position.z[eid] ?? 0,
+        movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
+        carriedFramePid: cf < 0 ? null : cf,
+        groundedPlatformPid: gp < 0 ? null : gp
       });
     }
   }
+
 
   private emitPlayerPresenceStimuli(): void {
     if (this.elapsedSeconds < this.nextNpcPlayerAlertAtSeconds) return;
@@ -922,13 +893,11 @@ export class GameSimulation {
   private getMovementPlayerEntries(): Array<readonly [number, number]> {
     const entries: Array<readonly [number, number]> = [];
     for (const uid of this.simulationEcs.getOnlinePlayerUserIds()) {
-      const p = this.simulationEcs.getPlayerRuntimeStateByUserId(uid);
-      if (p) entries.push([uid, p.eid] as const);
+      const eid = this.simulationEcs.getPlayerEidByUserId(uid);
+      if (typeof eid === "number") entries.push([uid, eid] as const);
     }
     return entries;
   }
-
-  private getNpcMovementEntries(): number[] { return this.npcAiSystem.getCharacterEids(); }
 
   private resolvePositiveEnvNumber(name: string, fallback: number): number {
     const p = Number(process.env[name] ?? fallback); return Number.isFinite(p) && p > 0 ? p : fallback;
@@ -955,6 +924,37 @@ export class GameSimulation {
   }
   private resolveProjectileModelId(kind: number): number {
     const rk = Math.max(0, Math.floor(kind)); return this.archetypes.projectiles.get(rk)?.modelId ?? this.archetypes.projectiles.get(1)?.modelId ?? 0;
+  }
+
+  private spawnProjectile(req: {
+    ownerNid: number; kind: number;
+    x: number; y: number; z: number;
+    vx: number; vy: number; vz: number;
+    radius: number; damage: number; lifetimeSeconds: number;
+    maxRange: number; gravity: number; drag: number;
+    maxSpeed: number; minSpeed: number; pierceCount: number;
+    despawnOnDamageableHit: boolean; despawnOnWorldHit: boolean;
+  }): void {
+    const eid = this.simulationEcs.createEntityFromPreset("projectile", {
+      modelId: this.resolveProjectileModelId(req.kind),
+      position: { x: req.x, y: req.y, z: req.z },
+      velocity: { x: req.vx, y: req.vy, z: req.vz },
+      projectileOwnerNid: req.ownerNid,
+      projectileKind: req.kind,
+      projectileRadius: req.radius,
+      projectileDamage: req.damage,
+      projectileTtl: req.lifetimeSeconds,
+      projectileRemainingRange: ProjectileSystem.resolveMaxRange(req.maxRange),
+      projectileGravity: ProjectileSystem.resolveOptionalNumber(req.gravity, 0),
+      projectileDrag: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.drag, 0)),
+      projectileMaxSpeed: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.maxSpeed, Number.POSITIVE_INFINITY)),
+      projectileMinSpeed: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.minSpeed, 0)),
+      projectileRemainingPierces: Math.max(0, Math.floor(ProjectileSystem.resolveOptionalNumber(req.pierceCount, 0))),
+      projectileDespawnOnDamageableHit: Boolean(req.despawnOnDamageableHit),
+      projectileDespawnOnWorldHit: Boolean(req.despawnOnWorldHit)
+    });
+    const nid = this.replication.spawnEntity(eid);
+    this.simulationEcs.setEntityNidByEid(eid, nid);
   }
   private maybeBroadcastServerPopulation(): void {
     const playerCount = this.simulationEcs.getOnlinePlayerCount();
@@ -986,7 +986,7 @@ export class GameSimulation {
       createInitialHotbar: (saved) => this.createInitialHotbar(saved),
       clampHealth: (v) => this.clampHealth(v),
       spawnPlayer: (user, ctx) => {
-        const eid = this.simulationEcs.factory.createEntityByKind("character", {
+        const eid = this.simulationEcs.createEntityFromPreset("character", {
           accountId: ctx.accountId,
           position: { x: ctx.spawnX, y: ctx.initialCameraY, z: ctx.spawnZ },
           yaw: ctx.yaw, pitch: ctx.pitch,
@@ -1035,13 +1035,13 @@ export class GameSimulation {
           "ability_creator"
         );
         this.replication.queueCreatorStateMessage(user, creatorState);
-        this.queueInventoryStateMessage(user, this.itemInventorySystem.ensureInventoryLoaded(accountId));
+        this.itemInventorySystem.queueInventoryStateForUser(user.id);
       },
       resolvePlayerEidByUserId: (uid) => this.simulationEcs.getPlayerEidByUserId(uid),
       takePendingSnapshotForLogin: (aid) => this.persistenceSyncSystem.takePendingSnapshotForLogin(aid),
       loadPlayerState: (aid) => this.persistence.loadPlayerState(aid),
       queueOfflineSnapshot: (aid, snap) => this.persistenceSyncSystem.queueOfflineSnapshot(aid, snap),
-      resolveOfflineSnapshotByAccountId: (aid) => this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(aid) as any,
+      resolveOfflineSnapshotByAccountId: (aid) => this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(aid),
       markPlayerDirty: (aid, opts) => this.persistenceSyncSystem.markAccountDirty(aid, opts),
       unregisterPlayerCollider: (h) => this.damageSystem.unregisterCollider(h),
       removeProjectilesByOwner: (nid) => this.projectileSystem.removeByOwner(nid),

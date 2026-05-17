@@ -20,7 +20,9 @@ import {
   type StarterWorldItemDefinition
 } from "../../shared/index";
 import type { ItemCommand as ItemWireCommand } from "../../shared/netcode";
+import { NType } from "../../shared/netcode";
 import { GUEST_ACCOUNT_ID_BASE, type PersistenceService } from "../persistence/PersistenceService";
+import type { SimulationEcs } from "../ecs/SimulationEcs";
 
 const INTERACTION_MAX_DISTANCE = 3.35;
 const INTERACTION_MAX_DISTANCE_SQ = INTERACTION_MAX_DISTANCE * INTERACTION_MAX_DISTANCE;
@@ -28,18 +30,7 @@ const INTERACTION_MIN_DOT = 0.42;
 const DROP_FORWARD_DISTANCE = 1.35;
 const DROP_VERTICAL_OFFSET = -1.0;
 const WORLD_ITEM_INTERACTION_TARGET_Y_OFFSET = 0.85;
-
-export interface WorldItemObject {
-  nid: number;
-  modelId: number;
-  itemArchetypeId: number;
-  itemQuantity: number;
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  grounded: boolean;
-  health: number;
-  maxHealth: number;
-}
+const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 
 export interface ItemInventoryPlayerState {
   accountId: number;
@@ -55,15 +46,15 @@ export interface ItemInventoryPlayerState {
 
 export interface ItemInventorySystemOptions<TUser> {
   readonly world: RAPIER.World;
+  readonly ecs: SimulationEcs;
+  readonly replication: {
+    spawnEntity: (simEid: number) => number;
+    despawnEntity: (simEid: number) => void;
+    syncEntityFromEcs: (simEid: number) => void;
+  };
   readonly persistence: PersistenceService;
   readonly getUserById: (userId: number) => TUser | undefined;
-  readonly getPlayerStateByUserId: (userId: number) => ItemInventoryPlayerState | null;
-  readonly setPlayerHealthByUserId: (userId: number, health: number) => boolean;
   readonly markPlayerCharacterDirty: (accountId: number) => void;
-  readonly addWorldItem: (item: WorldItemObject) => void;
-  readonly syncWorldItem: (item: WorldItemObject) => void;
-  readonly removeWorldItem: (item: WorldItemObject) => void;
-  readonly queueInventoryState: (user: TUser, snapshot: InventoryStateSnapshot) => void;
   readonly persistInventoryMutation: (
     accountId: number,
     snapshot: InventoryStateSnapshot,
@@ -79,9 +70,8 @@ interface MutableInventoryState {
   equipment: Partial<Record<EquipmentSlot, number>>;
 }
 
-export class ItemInventorySystem<TUser> {
+export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown) => void }> {
   private readonly inventoriesByAccountId = new Map<number, MutableInventoryState>();
-  private readonly worldItemsByNid = new Map<number, WorldItemObject>();
   private readonly pendingInventoryByAccountId = new Map<number, InventoryStateSnapshot>();
   private nextInventoryItemInstanceId: number;
   private criticalEventSequence = 1;
@@ -116,12 +106,16 @@ export class ItemInventorySystem<TUser> {
   }
 
   public queueInventoryStateForUser(userId: number): void {
-    const player = this.options.getPlayerStateByUserId(userId);
     const user = this.options.getUserById(userId);
-    if (!player || !user) {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!user || !player) {
       return;
     }
-    this.options.queueInventoryState(user, this.ensureInventoryLoaded(player.accountId));
+    const snapshot = this.ensureInventoryLoaded(player.accountId);
+    user.queueMessage({
+      ntype: NType.InventoryStateMessage,
+      inventoryJson: encodeInventoryStateSnapshot(snapshot)
+    });
   }
 
   public queuePendingInventorySnapshot(accountId: number, snapshot: InventoryStateSnapshot): void {
@@ -133,7 +127,7 @@ export class ItemInventorySystem<TUser> {
   }
 
   public applyCommand(userId: number, command: Partial<ItemWireCommand>): void {
-    const player = this.options.getPlayerStateByUserId(userId);
+    const player = this.getPlayerStateByUserId(userId);
     if (!player) {
       return;
     }
@@ -161,31 +155,57 @@ export class ItemInventorySystem<TUser> {
     this.queueInventoryStateForUser(userId);
   }
 
-  public resolveWorldItemByNid(nid: number): WorldItemObject | null {
-    return this.worldItemsByNid.get(Math.max(0, Math.floor(nid))) ?? null;
+  private getPlayerStateByUserId(userId: number): ItemInventoryPlayerState | null {
+    const state = this.options.ecs.getPlayerRuntimeStateByUserId(userId);
+    if (!state) return null;
+    return {
+      accountId: state.accountId,
+      x: state.x,
+      y: state.y,
+      z: state.z,
+      yaw: state.yaw,
+      pitch: state.pitch,
+      health: state.health,
+      maxHealth: state.maxHealth,
+      collider: state.collider
+    };
   }
 
   private tryPickupWorldItem(player: ItemInventoryPlayerState, rawWorldItemNid: unknown): boolean {
     const worldItemNid = this.normalizeUInt(rawWorldItemNid, 0xffff);
-    const item = this.worldItemsByNid.get(worldItemNid);
-    if (!item || item.itemQuantity <= 0 || !this.canPlayerInteractWithItem(player, item)) {
+    const eid = this.options.ecs.getAnyEidByNid(worldItemNid);
+    if (typeof eid !== "number") {
       return false;
     }
-    const definition = getItemDefinitionById(item.itemArchetypeId);
+
+    const c = this.options.ecs.world.components;
+    if ((c.WorldItemTag[eid] ?? 0) === 0) {
+      return false;
+    }
+
+    const quantity = Math.max(0, Math.floor(c.ItemQuantity.value[eid] ?? 0));
+    if (quantity <= 0 || !this.canPlayerInteractWithWorldItem(player, eid)) {
+      return false;
+    }
+
+    const archetypeId = Math.max(0, Math.floor(c.ItemArchetypeId.value[eid] ?? 0));
+    const definition = getItemDefinitionById(archetypeId);
     if (!definition) {
       return false;
     }
     const inventory = this.ensureMutableInventory(player.accountId);
-    const acceptedQuantity = this.addItemToInventory(inventory, definition, item.itemQuantity);
+    const acceptedQuantity = this.addItemToInventory(inventory, definition, quantity);
     if (acceptedQuantity <= 0) {
       return false;
     }
-    item.itemQuantity -= acceptedQuantity;
-    if (item.itemQuantity <= 0) {
-      this.worldItemsByNid.delete(item.nid);
-      this.options.removeWorldItem(item);
+
+    const nextQuantity = quantity - acceptedQuantity;
+    c.ItemQuantity.value[eid] = nextQuantity;
+    if (nextQuantity <= 0) {
+      this.options.replication.despawnEntity(eid);
+      this.options.ecs.destroyEid(eid);
     } else {
-      this.options.syncWorldItem(item);
+      this.options.replication.syncEntityFromEcs(eid);
     }
     return true;
   }
@@ -237,7 +257,7 @@ export class ItemInventorySystem<TUser> {
     }
     if (restoreHealth > 0) {
       const nextHealth = Math.min(player.maxHealth, player.health + restoreHealth);
-      if (this.options.setPlayerHealthByUserId(userId, nextHealth)) {
+      if (this.options.ecs.setPlayerHealthByUserId(userId, nextHealth)) {
         this.options.markPlayerCharacterDirty(player.accountId);
       }
     }
@@ -284,28 +304,25 @@ export class ItemInventorySystem<TUser> {
     definition: ItemArchetypeDefinition,
     rawQuantity: number,
     position: { x: number; y: number; z: number }
-  ): WorldItemObject {
+  ): void {
     const quantity = Math.max(1, Math.min(definition.stackMax, Math.floor(rawQuantity)));
-    const item: WorldItemObject = {
-      nid: 0,
+
+    const eid = this.options.ecs.createEntityFromPreset("item", {
       modelId: definition.modelId,
-      itemArchetypeId: definition.id,
-      itemQuantity: quantity,
-      position: { ...position },
-      rotation: { x: 0, y: 0, z: 0, w: 1 },
+      position: { x: position.x, y: position.y, z: position.z },
+      rotation: IDENTITY_ROTATION,
       grounded: true,
       health: 0,
-      maxHealth: 0
-    };
-    this.options.addWorldItem(item);
-    if (item.nid > 0) {
-      this.worldItemsByNid.set(item.nid, item);
-    }
-    return item;
+      maxHealth: 0,
+      itemArchetypeId: definition.id,
+      itemQuantity: quantity
+    });
+    const nid = this.options.replication.spawnEntity(eid);
+    this.options.ecs.setEntityNidByEid(eid, nid);
   }
 
-  private canPlayerInteractWithItem(player: ItemInventoryPlayerState, item: WorldItemObject): boolean {
-    const target = this.getWorldItemInteractionPoint(item);
+  private canPlayerInteractWithWorldItem(player: ItemInventoryPlayerState, eid: number): boolean {
+    const target = this.getWorldItemInteractionPoint(eid);
     const dx = target.x - player.x;
     const dy = target.y - player.y;
     const dz = target.z - player.z;
@@ -347,11 +364,12 @@ export class ItemInventorySystem<TUser> {
     return !hit || hit.timeOfImpact >= distance - 0.3;
   }
 
-  private getWorldItemInteractionPoint(item: WorldItemObject): { x: number; y: number; z: number } {
+  private getWorldItemInteractionPoint(eid: number): { x: number; y: number; z: number } {
+    const c = this.options.ecs.world.components;
     return {
-      x: item.position.x,
-      y: item.position.y + WORLD_ITEM_INTERACTION_TARGET_Y_OFFSET,
-      z: item.position.z
+      x: c.Position.x[eid] ?? 0,
+      y: (c.Position.y[eid] ?? 0) + WORLD_ITEM_INTERACTION_TARGET_Y_OFFSET,
+      z: c.Position.z[eid] ?? 0
     };
   }
 

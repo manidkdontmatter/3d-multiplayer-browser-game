@@ -1,11 +1,17 @@
 // Data-oriented ECS entity construction from fixed runtime component sets.
 import { addComponent, addEntity } from "bitecs";
 import {
-  HOTBAR_SLOT_COUNT,
   MOVEMENT_MODE_GROUNDED,
   clampHotbarSlotIndex
 } from "../../shared/index";
-import { ComponentRegistry, KIND_TO_COMPONENT_SET, KIND_COMPONENT_SETS } from "./ComponentRegistry";
+import { normalizeSortedUniqueUInt } from "../../shared/sortedNumberList";
+import {
+  ComponentRegistry,
+  ENTITY_PRESET_COMPONENT_SETS,
+  KIND_COMPONENT_SETS,
+  type EntityPresetId
+} from "./ComponentRegistry";
+import { setHotbarArray } from "./HotbarComponents";
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 
 export interface EntityFactoryOverrides {
@@ -70,9 +76,9 @@ export class EntityFactory {
     return addEntity(this.world);
   }
 
-  public createEntityByKind(kind: string, overrides?: EntityFactoryOverrides): number {
+  public createEntityFromPreset(presetId: EntityPresetId, overrides?: EntityFactoryOverrides): number {
     const eid = this.createEid();
-    const setKeys = KIND_TO_COMPONENT_SET[kind] ?? ["base"];
+    const setKeys = ENTITY_PRESET_COMPONENT_SETS[presetId];
     this.addComponents(eid, setKeys);
     this.applyOverrides(eid, overrides);
     return eid;
@@ -81,12 +87,15 @@ export class EntityFactory {
   private addComponents(eid: number, setKeys: readonly string[]): void {
     for (const setKey of setKeys) {
       const componentNames = KIND_COMPONENT_SETS[setKey];
-      if (!componentNames) continue;
+      if (!componentNames) {
+        throw new Error(`Unknown ECS component set "${setKey}".`);
+      }
       for (const compName of componentNames) {
         const comp = this.registry.resolve(compName);
-        if (comp) {
-          addComponent(this.world, eid, comp);
+        if (!comp) {
+          throw new Error(`ECS component set "${setKey}" references missing component "${compName}".`);
         }
+        addComponent(this.world, eid, comp);
       }
     }
   }
@@ -143,28 +152,15 @@ export class EntityFactory {
 
     // Hotbar
     if (overrides?.hotbarAbilityIds) {
-      const h = c.Hotbar;
-      for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot++) {
-        const val = overrides.hotbarAbilityIds[slot] ?? 0;
-        if (slot === 0) h.slot0[eid] = val;
-        else if (slot === 1) h.slot1[eid] = val;
-        else if (slot === 2) h.slot2[eid] = val;
-        else if (slot === 3) h.slot3[eid] = val;
-        else if (slot === 4) h.slot4[eid] = val;
-        else if (slot === 5) h.slot5[eid] = val;
-        else if (slot === 6) h.slot6[eid] = val;
-        else if (slot === 7) h.slot7[eid] = val;
-        else if (slot === 8) h.slot8[eid] = val;
-        else if (slot === 9) h.slot9[eid] = val;
-      }
+      setHotbarArray(c, eid, overrides.hotbarAbilityIds);
     }
 
     // Unlocked abilities
     if (overrides?.unlockedAbilityIds !== undefined) {
-      const ids = Array.from(new Set(
-        overrides.unlockedAbilityIds.map(id => Math.max(0, Math.floor(Number.isFinite(id) ? id : 0)))
-      )).sort((a, b) => a - b);
-      c.UnlockedAbilityCsv.value[eid] = ids.join(",");
+      c.UnlockedAbilityIds.value[eid] = normalizeSortedUniqueUInt(overrides.unlockedAbilityIds, {
+        maxInclusive: 0xffff,
+        includeZero: false
+      });
     }
 
     // Projectile overrides

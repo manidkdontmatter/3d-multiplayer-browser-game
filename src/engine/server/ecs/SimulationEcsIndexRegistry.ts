@@ -2,6 +2,9 @@
 import type RAPIER from "@dimforge/rapier3d-compat";
 
 export class SimulationEcsIndexRegistry {
+  // Global nid -> eid index for any replicated entity (players, npcs, items, projectiles, etc.).
+  private readonly eidByNid = new Map<number, number>();
+
   // Player lookup indexes
   private readonly playerEidByUserId = new Map<number, number>();
   private readonly playerEidByNid = new Map<number, number>();
@@ -65,6 +68,30 @@ export class SimulationEcsIndexRegistry {
       this.playerEidByNid.delete(Math.max(0, Math.floor(previousNid)));
     }
     this.playerEidByNid.set(Math.max(0, Math.floor(nextNid)), eid);
+  }
+
+  public updateGlobalNidIndex(eid: number, previousNid: number, nextNid: number): void {
+    const prev = Math.max(0, Math.floor(previousNid));
+    const next = Math.max(0, Math.floor(nextNid));
+    if (prev > 0 && prev !== next) {
+      const indexed = this.eidByNid.get(prev);
+      if (indexed === eid) {
+        this.eidByNid.delete(prev);
+      }
+    }
+    if (next > 0) {
+      this.eidByNid.set(next, eid);
+    }
+  }
+
+  public removeGlobalNidIndex(previousNid: number): void {
+    const prev = Math.max(0, Math.floor(previousNid));
+    if (prev <= 0) return;
+    this.eidByNid.delete(prev);
+  }
+
+  public getEidByNid(nid: number): number | undefined {
+    return this.eidByNid.get(Math.max(0, Math.floor(nid)));
   }
 
   // ── Character (NPC) indexes ───────────────────────────────────────────────

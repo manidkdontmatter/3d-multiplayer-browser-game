@@ -25,7 +25,7 @@ export interface AbilityCommandHandlerOptions<TUser extends AbilityCommandUser> 
   readonly sanitizeSelectedAbilityId: (
     rawAbilityId: unknown,
     fallbackAbilityId: number,
-    unlockedAbilityIds: Set<number>
+    unlockedAbilityIds: readonly number[]
   ) => number;
 }
 
@@ -47,7 +47,7 @@ export class AbilityCommandHandler<TUser extends AbilityCommandUser> {
 
     let stateChanged = false;
     let requiresResync = false;
-    const unlockedAbilityIds = new Set<number>(state.unlockedAbilityIds);
+    const unlockedAbilityIds = state.unlockedAbilityIds;
 
     if (applyAssignment) {
       const targetSlot = this.options.sanitizeHotbarSlot(command.assignTargetSlot, 0);

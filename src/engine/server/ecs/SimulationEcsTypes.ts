@@ -57,7 +57,7 @@ export type WorldWithComponents = {
       slot8: number[];
       slot9: number[];
     };
-    UnlockedAbilityCsv: { value: string[] };
+    UnlockedAbilityIds: { value: number[][] };
     ReplicatedTag: number[];
     PlayerTag: number[];
     PlatformTag: number[];
@@ -95,31 +95,12 @@ export interface PlayerStateSnapshot {
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
   hotbarAbilityIds: number[];
-  unlockedAbilityIds: Set<number>;
+  unlockedAbilityIds: readonly number[];
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
 }
-
-// Inline component value types used by replication and systems.
-export type ProjectileState = {
-  ownerNid: number;
-  kind: number;
-  x: number; y: number; z: number;
-  vx: number; vy: number; vz: number;
-  radius: number;
-  damage: number;
-  ttlSeconds: number;
-  remainingRange: number;
-  gravity: number;
-  drag: number;
-  maxSpeed: number;
-  minSpeed: number;
-  remainingPierces: number;
-  despawnOnDamageableHit: boolean;
-  despawnOnWorldHit: boolean;
-};
 
 export type DamageState = {
   accountId: number;
@@ -132,6 +113,7 @@ export type DamageState = {
   movementMode: MovementMode;
   groundedPlatformPid: number | null;
   carriedFramePid: number | null;
+  body: RAPIER.RigidBody;
 };
 
 export type InputAckState = {

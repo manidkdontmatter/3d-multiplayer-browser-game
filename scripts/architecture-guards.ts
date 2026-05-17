@@ -253,6 +253,14 @@ function main(): void {
 
   const gameSimulation = read("src/engine/server/GameSimulation.ts");
   assert(
+    !gameSimulation.includes("createEntityByKind"),
+    "GameSimulation must create ECS entities through validated construction presets"
+  );
+  assert(
+    !gameSimulation.includes("_ecsEid"),
+    "GameSimulation must not attach hidden ECS ids to runtime objects"
+  );
+  assert(
     !gameSimulation.includes('from "./netcode/ReplicationMessagingSystem"'),
     "GameSimulation must not import ReplicationMessagingSystem directly"
   );
@@ -297,10 +305,32 @@ function main(): void {
     "Server archetype catalog must use shared PLATFORM_DEFINITIONS for platform content"
   );
 
+  const gameRegistration = read("src/game/shared/registration.ts");
+  assert(
+    gameRegistration.includes("projectBlueprintsToRuntimeCatalogs"),
+    "Game registration must inject runtime catalogs through the unified blueprint projection"
+  );
+  assert(
+    !gameRegistration.includes("buildAbilityCatalog(") &&
+      !gameRegistration.includes("buildItemCatalog(") &&
+      !gameRegistration.includes("buildPlatformCatalog("),
+    "Game registration must not keep ad hoc legacy catalog builders"
+  );
+
   const serverArchetypes = JSON.parse(read("src/game/server/archetypes/server-archetypes.json")) as Record<string, unknown>;
   assert(
     !Object.prototype.hasOwnProperty.call(serverArchetypes, "platforms"),
     "server-archetypes.json must not duplicate platform definitions; use platform-archetypes.json"
+  );
+
+  const entityFactory = read("src/engine/server/ecs/EntityFactory.ts");
+  assert(
+    entityFactory.includes("createEntityFromPreset"),
+    "EntityFactory must expose construction presets, not permanent entity kinds"
+  );
+  assert(
+    !entityFactory.includes('?? ["base"]'),
+    "EntityFactory must not silently fall back to base components for unknown presets"
   );
 
   console.log("architecture-guards passed");

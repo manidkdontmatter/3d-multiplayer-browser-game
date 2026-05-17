@@ -8,18 +8,15 @@ import {
   injectTraitDefinitions,
   injectBlueprintCatalog,
   getAllBlueprintDefinitions,
-  buildAbilityDefinitionFromBlueprint,
-  buildItemDefinitionFromBlueprint,
-  buildPlatformDefinitionFromBlueprint,
   type StatAllocationDefinition,
   type DerivedEffectDefinition,
   type TraitDefinition
 } from "../../engine/shared/index";
 
-// Legacy catalog injection functions (fed from unified data)
-import { injectAbilityCatalog, type AbilityArchetypeCatalogRaw } from "../../engine/shared/abilities";
-import { injectItemCatalog, type ItemCatalogRaw } from "../../engine/shared/items";
-import { injectPlatformCatalog, type PlatformArchetypeCatalog } from "../../engine/shared/platforms";
+import { injectAbilityCatalog } from "../../engine/shared/abilities";
+import { injectItemCatalog } from "../../engine/shared/items";
+import { injectPlatformCatalog } from "../../engine/shared/platforms";
+import { projectBlueprintsToRuntimeCatalogs } from "./blueprintContentProjection";
 
 import blueprintsRaw from "./blueprints.json";
 
@@ -167,74 +164,8 @@ export function registerGameContent(): void {
   injectTraitDefinitions(GAME_TRAIT_DEFINITIONS);
   injectBlueprintCatalog(blueprintsRaw as { version: unknown; blueprints: unknown });
 
-  // Build gameplay catalogs from unified blueprints
-  injectAbilityCatalog(buildAbilityCatalog());
-  injectItemCatalog(buildItemCatalog());
-  injectPlatformCatalog(buildPlatformCatalog());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CATALOG BUILDERS — derive from universal blueprints
-// ═══════════════════════════════════════════════════════════════════════════
-
-function buildAbilityCatalog(): AbilityArchetypeCatalogRaw {
-  const abilities = getAllBlueprintDefinitions()
-    .map((blueprint) => buildAbilityDefinitionFromBlueprint(blueprint))
-    .filter((ability): ability is NonNullable<typeof ability> => Boolean(ability));
-  return {
-    version: 1,
-    baseAbilities: abilities.map((ability) => ({
-      id: ability.id,
-      key: ability.key,
-      name: ability.name,
-      description: ability.description,
-      category: ability.category,
-      points: ability.points,
-      attributes: ability.attributes,
-      projectile: ability.projectile ?? undefined,
-      melee: ability.melee ?? undefined
-    })),
-    defaults: {
-      hotbarAbilityIds: [1, 2, 0, 0, 0, 0, 0, 0, 0, 0],
-      unlockedAbilityIds: [1, 2],
-      primaryMouseSlot: 0,
-      secondaryMouseSlot: 1
-    }
-  };
-}
-
-function buildItemCatalog(): ItemCatalogRaw {
-  const items = getAllBlueprintDefinitions()
-    .map((blueprint) => buildItemDefinitionFromBlueprint(blueprint))
-    .filter((item): item is NonNullable<typeof item> => Boolean(item));
-  return {
-    version: 1,
-    inventory: { maxSlots: 32 },
-    items: items.map((item) => ({
-      id: item.id,
-      key: item.key,
-      name: item.name,
-      description: item.description,
-      category: item.category,
-      modelId: item.modelId,
-      stackMax: item.stackMax,
-      equipSlot: item.equipSlot ?? null,
-      use: item.use ?? null
-    })),
-    starterWorldItems: [
-      { archetypeId: 200, quantity: 3, x: 2.35, y: 21.05, z: -2.4 },
-      { archetypeId: 201, quantity: 1, x: 2.15, y: 21.05, z: -2.65 },
-      { archetypeId: 202, quantity: 8, x: 3.55, y: 21.05, z: -2.95 }
-    ]
-  };
-}
-
-function buildPlatformCatalog(): PlatformArchetypeCatalog {
-  const platforms = getAllBlueprintDefinitions()
-    .map((blueprint) => buildPlatformDefinitionFromBlueprint(blueprint))
-    .filter((platform): platform is NonNullable<typeof platform> => Boolean(platform));
-  return {
-    version: 1,
-    platforms
-  };
+  const runtimeCatalogs = projectBlueprintsToRuntimeCatalogs(getAllBlueprintDefinitions());
+  injectAbilityCatalog(runtimeCatalogs.abilities);
+  injectItemCatalog(runtimeCatalogs.items);
+  injectPlatformCatalog(runtimeCatalogs.platforms);
 }

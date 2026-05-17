@@ -27,7 +27,7 @@ export class ComponentRegistry {
 }
 
 // Maps high-level runtime component groups to the bitecs components they expand to.
-// e.g. "CharacterController" → the set of components a character entity needs.
+// These are construction presets only; runtime behavior is still component-driven.
 export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
   // Base components shared by all replicated entities
   base: [
@@ -43,7 +43,7 @@ export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
     "Velocity", "GroundedPlatformPid", "CarriedFramePid",
     "Yaw", "Pitch", "LastProcessedSequence", "LastPrimaryFireAtSeconds",
     "PrimaryHeld", "SecondaryHeld", "PrimaryMouseSlot", "SecondaryMouseSlot",
-    "Hotbar", "UnlockedAbilityCsv", "CharacterTag"
+    "Hotbar", "UnlockedAbilityIds", "CharacterTag"
   ],
   // Player extras (added on top of character)
   player: ["PlayerTag", "ReplicatedTag", "AccountId"],
@@ -68,8 +68,8 @@ export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
   worldItem: ["WorldItemTag", "ReplicatedTag"]
 };
 
-// Map from runtime spawn kind to the component set keys to use.
-export const KIND_TO_COMPONENT_SET: Record<string, readonly string[]> = {
+// Map from runtime construction preset to the component set keys to use.
+export const ENTITY_PRESET_COMPONENT_SETS = {
   character: ["base", "character", "player"],
   npc: ["base", "character", "npc"],
   projectile: ["base", "projectile"],
@@ -77,4 +77,10 @@ export const KIND_TO_COMPONENT_SET: Record<string, readonly string[]> = {
   location: ["base", "locationRoot"],
   dummy: ["base", "dummy"],
   item: ["base", "worldItem"]
-};
+} as const;
+
+export type EntityPresetId = keyof typeof ENTITY_PRESET_COMPONENT_SETS;
+
+export function isEntityPresetId(value: string): value is EntityPresetId {
+  return Object.prototype.hasOwnProperty.call(ENTITY_PRESET_COMPONENT_SETS, value);
+}

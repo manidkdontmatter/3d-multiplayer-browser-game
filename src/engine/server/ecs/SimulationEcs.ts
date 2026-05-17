@@ -11,6 +11,8 @@ import {
 } from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
 import type { EntityFactoryOverrides } from "./EntityFactory";
+import type { EntityPresetId } from "./ComponentRegistry";
+import { getHotbarArray } from "./HotbarComponents";
 import { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
 import { SimulationEcsStore } from "./SimulationEcsStore";
 import type {
@@ -19,7 +21,6 @@ import type {
   InputAckState,
   PersistenceState,
   PlayerStateSnapshot,
-  ProjectileState
 } from "./SimulationEcsTypes";
 
 export class SimulationEcs {
@@ -32,11 +33,15 @@ export class SimulationEcs {
 
   // ── Entity lifecycle ──────────────────────────────────────────────────────
 
-  public createEntityByKind(kind: string, overrides?: EntityFactoryOverrides): number {
-    return this.store.createEntityByKind(kind, overrides);
+  public createEntityFromPreset(presetId: EntityPresetId, overrides?: EntityFactoryOverrides): number {
+    return this.store.createEntityFromPreset(presetId, overrides);
   }
 
   public destroyEid(eid: number): void {
+    const nid = this.store.getEntityNid(eid);
+    if (nid > 0) {
+      this.indexes.removeGlobalNidIndex(nid);
+    }
     this.indexes.removeAllIndexesForEid(eid);
     this.store.destroyEid(eid);
   }
@@ -44,7 +49,12 @@ export class SimulationEcs {
   public setEntityNidByEid(eid: number, nid: number): void {
     const prev = this.store.getEntityNid(eid);
     this.store.setEntityNid(eid, nid);
+    this.indexes.updateGlobalNidIndex(eid, prev, nid);
     this.indexes.updatePlayerNidIndex(eid, prev, nid);
+  }
+
+  public getAnyEidByNid(nid: number): number | undefined {
+    return this.indexes.getEidByNid(nid);
   }
 
   // ── Player index management ───────────────────────────────────────────────
@@ -186,8 +196,8 @@ export class SimulationEcs {
       maxHealth: c.Health.max[eid] ?? 0,
       primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
       secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
-      hotbarAbilityIds: this.getHotbarArray(eid),
-      unlockedAbilityIds: this.store.getUnlockedAbilities(eid),
+      hotbarAbilityIds: getHotbarArray(c, eid),
+      unlockedAbilityIds: this.store.getUnlockedAbilityIds(eid),
       position: { x, y, z },
       rotation: {
         x: c.Rotation.x[eid] ?? 0,
@@ -234,8 +244,8 @@ export class SimulationEcs {
     return {
       primaryMouseSlot: Math.max(0, Math.floor(this.world.components.PrimaryMouseSlot.value[eid] ?? 0)),
       secondaryMouseSlot: Math.max(0, Math.floor(this.world.components.SecondaryMouseSlot.value[eid] ?? 1)),
-      hotbarAbilityIds: this.getHotbarArray(eid),
-      unlockedAbilityIds: this.store.getUnlockedAbilitiesArray(eid)
+      hotbarAbilityIds: getHotbarArray(this.world.components, eid),
+      unlockedAbilityIds: [...this.store.getUnlockedAbilityIds(eid)]
     };
   }
 
@@ -268,7 +278,7 @@ export class SimulationEcs {
   public setPlayerUnlockedAbilityIdsByUserId(userId: number, ids: ReadonlyArray<number>): boolean {
     const eid = this.indexes.getPlayerEidByUserId(userId);
     if (typeof eid !== "number") return false;
-    return this.store.setUnlockedAbilitiesFromList(eid, ids);
+    return this.store.setUnlockedAbilityIdsFromList(eid, ids);
   }
 
   public replacePlayerAbilityOnHotbarByUserId(userId: number, oldId: number, newId: number): boolean {
@@ -335,7 +345,8 @@ export class SimulationEcs {
       grounded: (c.Grounded.value[eid] ?? 0) !== 0,
       movementMode: sanitizeMovementMode(c.MovementMode.value[eid], MOVEMENT_MODE_GROUNDED),
       groundedPlatformPid: gp < 0 ? null : gp,
-      carriedFramePid: cf < 0 ? null : cf
+      carriedFramePid: cf < 0 ? null : cf,
+      body
     };
   }
 
@@ -418,59 +429,6 @@ export class SimulationEcs {
     c.Rotation.w[eid] = state.rotation.w;
   }
 
-  // ── Projectile state ──────────────────────────────────────────────────────
-
-  public createProjectileEid(overrides: EntityFactoryOverrides): number {
-    return this.store.createEntityByKind("projectile", overrides);
-  }
-
-  public getProjectileRuntimeStateByEid(eid: number): ProjectileState | null {
-    const c = this.world.components;
-    if (typeof c.NetworkId.value[eid] !== "number") return null;
-    return {
-      ownerNid: c.ProjectileOwnerNid.value[eid] ?? 0,
-      kind: c.ProjectileKind.value[eid] ?? 0,
-      x: c.Position.x[eid] ?? 0,
-      y: c.Position.y[eid] ?? 0,
-      z: c.Position.z[eid] ?? 0,
-      vx: c.Velocity.x[eid] ?? 0,
-      vy: c.Velocity.y[eid] ?? 0,
-      vz: c.Velocity.z[eid] ?? 0,
-      radius: c.ProjectileRadius.value[eid] ?? 0,
-      damage: c.ProjectileDamage.value[eid] ?? 0,
-      ttlSeconds: c.ProjectileTtl.value[eid] ?? 0,
-      remainingRange: c.ProjectileRemainingRange.value[eid] ?? 0,
-      gravity: c.ProjectileGravity.value[eid] ?? 0,
-      drag: c.ProjectileDrag.value[eid] ?? 0,
-      maxSpeed: c.ProjectileMaxSpeed.value[eid] ?? 0,
-      minSpeed: c.ProjectileMinSpeed.value[eid] ?? 0,
-      remainingPierces: c.ProjectileRemainingPierces.value[eid] ?? 0,
-      despawnOnDamageableHit: (c.ProjectileDespawnOnDamageableHit.value[eid] ?? 0) !== 0,
-      despawnOnWorldHit: (c.ProjectileDespawnOnWorldHit.value[eid] ?? 0) !== 0
-    };
-  }
-
-  public applyProjectileRuntimeStateByEid(eid: number, state: {
-    x: number; y: number; z: number;
-    vx: number; vy: number; vz: number;
-    ttlSeconds: number; remainingRange: number; remainingPierces: number;
-  }): void {
-    const c = this.world.components;
-    c.Position.x[eid] = state.x;
-    c.Position.y[eid] = state.y;
-    c.Position.z[eid] = state.z;
-    c.Velocity.x[eid] = state.vx;
-    c.Velocity.y[eid] = state.vy;
-    c.Velocity.z[eid] = state.vz;
-    c.ProjectileTtl.value[eid] = state.ttlSeconds;
-    c.ProjectileRemainingRange.value[eid] = state.remainingRange;
-    c.ProjectileRemainingPierces.value[eid] = Math.max(0, Math.floor(state.remainingPierces));
-  }
-
-  public getActiveProjectileEids(): number[] {
-    return this.store.getProjectileTagEids();
-  }
-
   // ── Persistence ───────────────────────────────────────────────────────────
 
   public getPlayerPersistenceSnapshotByAccountId(accountId: number): PersistenceState | null {
@@ -490,7 +448,7 @@ export class SimulationEcs {
       health: Math.max(0, Math.floor(c.Health.value[eid] ?? 0)),
       primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
       secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
-      hotbarAbilityIds: this.getHotbarArray(eid)
+      hotbarAbilityIds: getHotbarArray(c, eid)
     };
   }
 
@@ -532,15 +490,5 @@ export class SimulationEcs {
       players, npcs, platforms, locationRoots, projectiles, worldItems, dummies,
       total: players + npcs + platforms + locationRoots + projectiles + worldItems + dummies
     };
-  }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  private getHotbarArray(eid: number): number[] {
-    const hotbar: number[] = new Array(HOTBAR_SLOT_COUNT);
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot++) {
-      hotbar[slot] = this.store.getHotbarSlot(eid, slot);
-    }
-    return hotbar;
   }
 }
