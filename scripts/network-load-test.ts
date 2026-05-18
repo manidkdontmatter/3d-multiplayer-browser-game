@@ -21,6 +21,8 @@ import {
   type InputCommand
 } from "../src/engine/shared/index";
 import { GameServer } from "../src/engine/server/GameServer";
+import { initializeSharedGameData } from "../src/game/shared/index";
+import { initServerArchetypes } from "../src/game/server/serverArchetypes";
 
 type Mode = "benchmark" | "hosted";
 
@@ -148,6 +150,8 @@ class LoadClient {
 }
 
 async function main(): Promise<void> {
+  initializeSharedGameData();
+  initServerArchetypes();
   ensureExperimentalWebSocketEnabled();
   const config = resolveConfig();
   const reportDir = path.join(process.cwd(), "profiling", "network-load");
@@ -254,6 +258,7 @@ async function main(): Promise<void> {
       heapUsedMb: round3(mem.heapUsed / (1024 * 1024)),
       pass: connectResult.connected === config.clients && achievedTps >= SERVER_TICK_RATE * 0.98
     };
+    enforceScenarioBudgets(result);
 
     const reportPath = path.join(
       reportDir,
@@ -293,7 +298,7 @@ async function main(): Promise<void> {
 }
 
 function resolveConfig(): ScenarioConfig {
-  const clients = Math.max(1, Math.floor(parsePositiveNumber(process.env.LOAD_CLIENTS, 10)));
+  const clients = Math.max(1, Math.floor(parsePositiveNumber(process.env.LOAD_CLIENTS, 100)));
   const mode = resolveMode(process.env.LOAD_MODE);
   const serverPort = Math.max(1025, Math.floor(parsePositiveNumber(process.env.LOAD_SERVER_PORT, 9300)));
   const warmupSeconds = parsePositiveNumber(process.env.LOAD_WARMUP_SECONDS, 5);
@@ -458,6 +463,44 @@ function makeValidAuthKey(seed: string, index: number): string {
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
+}
+
+function enforceScenarioBudgets(result: ScenarioResult): void {
+  if (process.env.LOAD_ENFORCE_PASS !== "1") {
+    return;
+  }
+  const minTpsRatio = parsePositiveNumber(process.env.LOAD_MIN_TPS_RATIO, 0.98);
+  const maxP95TickMs = parsePositiveNumber(process.env.LOAD_MAX_P95_TICK_MS, Number.POSITIVE_INFINITY);
+  const maxMeanTickMs = parsePositiveNumber(process.env.LOAD_MAX_MEAN_TICK_MS, Number.POSITIVE_INFINITY);
+  const minConnectedRatio = parsePositiveNumber(process.env.LOAD_MIN_CONNECTED_RATIO, 1);
+  const achievedRatio = result.targetTps > 0 ? result.achievedTps / result.targetTps : 0;
+  const connectedRatio = result.clients > 0 ? result.connected / result.clients : 0;
+
+  if (!result.pass) {
+    throw new Error(
+      `Load baseline failed: connected=${result.connected}/${result.clients} tps=${result.achievedTps.toFixed(2)}/${result.targetTps.toFixed(2)}`
+    );
+  }
+  if (achievedRatio < minTpsRatio) {
+    throw new Error(
+      `Achieved TPS ratio below budget: actual=${achievedRatio.toFixed(3)} min=${minTpsRatio.toFixed(3)}`
+    );
+  }
+  if (result.p95TickMs > maxP95TickMs) {
+    throw new Error(
+      `P95 tick ms above budget: actual=${result.p95TickMs.toFixed(3)} max=${maxP95TickMs.toFixed(3)}`
+    );
+  }
+  if (result.meanTickMs > maxMeanTickMs) {
+    throw new Error(
+      `Mean tick ms above budget: actual=${result.meanTickMs.toFixed(3)} max=${maxMeanTickMs.toFixed(3)}`
+    );
+  }
+  if (connectedRatio < minConnectedRatio) {
+    throw new Error(
+      `Connected ratio below budget: actual=${connectedRatio.toFixed(3)} min=${minConnectedRatio.toFixed(3)}`
+    );
+  }
 }
 
 void main()

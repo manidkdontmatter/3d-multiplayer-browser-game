@@ -1,0 +1,58 @@
+name: quality-gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: CI Gate
+        run: npm run test:ci
+
+  perf-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Performance Smoke Gate
+        env:
+          LOAD_CLIENTS: "100"
+          LOAD_WARMUP_SECONDS: "2"
+          LOAD_DURATION_SECONDS: "6"
+          LOAD_CONNECT_STAGGER_MS: "5"
+          LOAD_CONNECT_SETTLE_MS: "300"
+          LOAD_ENFORCE_PASS: "1"
+          LOAD_MIN_TPS_RATIO: "0.98"
+          LOAD_MAX_P95_TICK_MS: "30"
+          LOAD_MAX_MEAN_TICK_MS: "22"
+          LOAD_MIN_CONNECTED_RATIO: "1"
+        run: npm run perf:gate:load:smoke

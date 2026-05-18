@@ -96,7 +96,6 @@ This repository is a production quality first-person authoritative server multip
 ## General
 
 - do not use headless browser unless asked
-- do not run tests unless asked
 - do not create tests unless asked
 - running the server and checking for errors at the end of a task is something you can do if you want though
 - make sure to close terminals you opened when you are done with them. for example do not leave the game server running after you finished your task
@@ -106,6 +105,39 @@ This repository is a production quality first-person authoritative server multip
 - For multiplayer browser automation tests, run each client in a separate browser window/process (not separate tabs in one window) to avoid inactive-tab throttling artifacts.
 - In headless browser automation, do not rely on RAF cadence for gameplay/test progress; drive simulation deterministically through test hooks (for example `window.advanceTime`) whenever possible.
 - If you notice anything needs added to `.gitignore`, add it.
+
+## Guard Rails and CI
+
+- Required quality gate command is `npm run test:ci`.
+- `test:ci` is the authoritative pre-merge baseline and currently includes:
+  - `check:boundaries`
+  - `check:cycles`
+  - `typecheck:client`
+  - `typecheck:server`
+  - `test:tick`
+  - `test:network-client:regression`
+  - `test:procedural:determinism`
+  - `test:smoke:fast`
+- Architecture cycle detection is enforced by `npm run check:cycles` (madge).
+- Unused code/dependency audit is available via `npm run check:unused` (knip) and is currently audit-only, not blocking.
+- Performance smoke gate exists as `npm run perf:gate:load:smoke`; CI runs it as non-blocking initially.
+- When a test/gate fails, first verify whether assumptions are stale relative to current architecture/content injection paths before treating it as a product bug.
+- If a gate is stale/non-representative, either update it to current architecture or remove it from blocking status; do not keep meaningless red gates.
+
+## Guard Rail Reporting
+
+- At the end of each task, run relevant guard rails for the areas you changed when feasible.
+- Always report guard-rail outcomes in the final message, including:
+  - which gates were run
+  - pass/fail status for each gate
+  - concise failure cause and likely layer (test stale assumption, architecture regression, type/static regression, performance budget regression, infra/environment issue)
+  - whether failure appears pre-existing vs introduced by current changes
+- Treat failures in required quality gates as blockers unless the user explicitly overrides.
+- Treat performance gate/budget failures as blockers for performance-sensitive changes; otherwise report them prominently with measured values versus thresholds.
+- If a gate appears stale or non-representative, explicitly flag it as stale and propose either:
+  - updating it to match current architecture, or
+  - removing it from blocking status.
+- Do not silently ignore failing guard rails.
 
 ### Humanoid Conversion Playbook (Offline, Production Path)
 

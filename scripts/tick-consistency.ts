@@ -12,6 +12,8 @@ import { init as initNavigation } from "recast-navigation";
 import { ncontext } from "../src/engine/shared/netcode";
 import { GameServer } from "../src/engine/server/GameServer";
 import { SERVER_TICK_RATE } from "../src/engine/shared/config";
+import { initializeSharedGameData } from "../src/game/shared/index";
+import { initServerArchetypes } from "../src/game/server/serverArchetypes";
 
 const OUTPUT_DIR = path.join(process.cwd(), "output", "tick-consistency");
 const WARMUP_SECONDS = 5;
@@ -46,6 +48,8 @@ async function main(): Promise<void> {
   ensureDir(OUTPUT_DIR);
   process.env.NENGI_TRANSPORT = "ws";
   process.env.SERVER_TICK_LOG = "0";
+  initializeSharedGameData();
+  initServerArchetypes();
   await RAPIER.init();
   await initNavigation();
   const testPort = await getFreePort();

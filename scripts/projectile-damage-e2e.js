@@ -1,11 +1,21 @@
+// End-to-end projectile damage test that validates training dummy damage after projectile cast.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { spawn, execFile } from "node:child_process";
-import net from "node:net";
 import { chromium } from "playwright";
+import {
+  ensureDir,
+  delay,
+  isPortOpen,
+  waitForPortOpen,
+  startProcess,
+  stopProcessTree,
+  readStateFromRenderText,
+  waitForConnectedState,
+  hasFatalConsoleErrors,
+  ROOT
+} from "./e2e/harness.js";
 
-const ROOT = process.cwd();
 const OUTPUT_DIR = path.join(ROOT, "output", "projectile-damage");
 const CLIENT_URL = process.env.E2E_CLIENT_URL ?? "http://127.0.0.1:5173";
 const SERVER_URL = "ws://127.0.0.1:9001";
@@ -15,101 +25,10 @@ const CONNECT_TIMEOUT_MS = 12000;
 const APPROACH_TIMEOUT_MS = 18000;
 const DAMAGE_TIMEOUT_MS = 3200;
 
-function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isPortOpen(host, port, timeoutMs = 700) {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    const finish = (open) => {
-      socket.destroy();
-      resolve(open);
-    };
-    socket.setTimeout(timeoutMs);
-    socket.once("connect", () => finish(true));
-    socket.once("timeout", () => finish(false));
-    socket.once("error", () => finish(false));
-    socket.connect(port, host);
-  });
-}
-
-async function waitForPortOpen(host, port, timeoutMs, label) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await isPortOpen(host, port, 500)) {
-      return;
-    }
-    await delay(150);
-  }
-  throw new Error(`Timed out waiting for ${label} on ${host}:${port}`);
-}
-
-function startProcess(name, command, args) {
-  const spawnConfig = {
-    cwd: ROOT,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: false
-  };
-  const child =
-    process.platform === "win32"
-      ? spawn("cmd.exe", ["/d", "/s", "/c", `${command} ${args.join(" ")}`], spawnConfig)
-      : spawn(command, args, spawnConfig);
-  child.stdout.on("data", (chunk) => process.stdout.write(`[${name}] ${chunk}`));
-  child.stderr.on("data", (chunk) => process.stderr.write(`[${name}:err] ${chunk}`));
-  return child;
-}
-
-function stopProcessTree(child) {
-  return new Promise((resolve) => {
-    if (!child || child.killed) {
-      resolve();
-      return;
-    }
-    if (process.platform === "win32") {
-      execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => resolve());
-      return;
-    }
-    child.kill("SIGTERM");
-    resolve();
-  });
-}
-
-async function readState(page) {
-  return page.evaluate(() => {
-    const text = window.render_game_to_text?.();
-    if (!text) {
-      return null;
-    }
-    try {
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
-  });
-}
-
-async function waitForConnectedState(page, timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const state = await readState(page);
-    if (state?.mode === "connected") {
-      return state;
-    }
-    await delay(120);
-  }
-  throw new Error("Timed out waiting for connected state.");
-}
-
 async function approachTrainingDummy(page) {
   const start = Date.now();
   while (Date.now() - start < APPROACH_TIMEOUT_MS) {
-    const state = await readState(page);
+    const state = await readStateFromRenderText(page);
     const player = state?.player;
     const dummy = state?.trainingDummies?.[0];
     if (!player || !dummy) {
@@ -143,7 +62,7 @@ async function approachTrainingDummy(page) {
 async function waitForDummyHealthBelow(page, baselineHealth, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const state = await readState(page);
+    const state = await readStateFromRenderText(page);
     const dummy = state?.trainingDummies?.[0];
     if (dummy && typeof dummy.health === "number" && dummy.health < baselineHealth) {
       return dummy.health;
@@ -192,7 +111,7 @@ async function main() {
     await page.waitForTimeout(120);
 
     await approachTrainingDummy(page);
-    const preAttackState = await readState(page);
+    const preAttackState = await readStateFromRenderText(page);
     const dummyBefore = preAttackState?.trainingDummies?.[0];
     if (!dummyBefore || typeof dummyBefore.health !== "number") {
       throw new Error("Training dummy state unavailable.");
@@ -206,15 +125,9 @@ async function main() {
     await page.evaluate(() => {
       window.set_test_movement?.(null);
     });
-    finalState = await readState(page);
+    finalState = await readStateFromRenderText(page);
 
-    const hasFatalConsoleError = logs.some(
-      (entry) =>
-        entry.type === "error" &&
-        !entry.text.includes("ERR_CONNECTION_REFUSED") &&
-        !entry.text.includes("WebSocket connection")
-    );
-    if (hasFatalConsoleError) {
+    if (hasFatalConsoleErrors(logs)) {
       throw new Error("Console contained runtime errors.");
     }
 
@@ -226,7 +139,7 @@ async function main() {
     if (page) {
       try {
         if (!finalState) {
-          finalState = await readState(page);
+          finalState = await readStateFromRenderText(page);
         }
         await page.screenshot({ path: path.join(OUTPUT_DIR, "projectile-damage.png"), fullPage: true });
       } catch {

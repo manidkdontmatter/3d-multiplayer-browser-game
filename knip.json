@@ -1,0 +1,23 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": [
+    "src/game/client/main.ts",
+    "src/game/server/main.ts",
+    "src/orchestrator/main.ts"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "scripts/**/*.js"
+  ],
+  "ignore": [
+    "dist/**",
+    "docs/**",
+    "output/**",
+    "profiling/**"
+  ],
+  "ignoreDependencies": [
+    "@types/node",
+    "@types/three"
+  ]
+}

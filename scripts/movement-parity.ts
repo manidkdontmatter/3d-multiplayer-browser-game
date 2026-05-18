@@ -31,6 +31,7 @@ import {
   stepHorizontalMovement,
   type MovementMode
 } from "../src/engine/shared/index";
+import { initializeSharedGameData } from "../src/game/shared/index";
 
 type MovementFrame = {
   movement: MovementInput;
@@ -118,6 +119,7 @@ function assertClose(label: string, frameIndex: number, expected: number, actual
 }
 
 async function runParityTest(): Promise<void> {
+  initializeSharedGameData();
   await RAPIER.init();
 
   const local = await LocalPhysicsWorld.create();
@@ -145,9 +147,9 @@ async function runParityTest(): Promise<void> {
   });
   platformSystem.initializePlatforms();
 
-  const platformOne = PLATFORM_DEFINITIONS.find((definition) => definition.pid === 1);
+  const platformOne = PLATFORM_DEFINITIONS[0];
   if (!platformOne) {
-    throw new Error("Missing platform definition pid=1");
+    throw new Error("Missing platform definition for movement parity test.");
   }
   const platformOnePose = samplePlatformTransform(platformOne, 0);
   const bodyY = platformOnePose.y + platformOne.halfY + PLAYER_CAPSULE_HALF_HEIGHT + PLAYER_CAPSULE_RADIUS;
@@ -170,7 +172,7 @@ async function runParityTest(): Promise<void> {
     vz: 0,
     grounded: true,
     movementMode: MOVEMENT_MODE_GROUNDED,
-    groundedPlatformPid: 1,
+    groundedPlatformPid: platformOne.pid,
     carriedFramePid: null,
     x: platformOnePose.x,
     y: cameraY,
@@ -237,7 +239,7 @@ async function runParityTest(): Promise<void> {
     vy: 0,
     vz: 0,
     grounded: true,
-    groundedPlatformPid: 1,
+    groundedPlatformPid: platformOne.pid,
     carriedFramePid: -1,
     movementMode: MOVEMENT_MODE_GROUNDED,
     serverTimeSeconds: 0
