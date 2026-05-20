@@ -4,12 +4,20 @@
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
 import {
+  alertSeverityFromWireValue,
+  coercePlayerSettings,
   coerceRuntimeMapConfig,
-  ITEM_COMMAND_DROP,
-  ITEM_COMMAND_EQUIP,
-  ITEM_COMMAND_PICKUP,
-  ITEM_COMMAND_UNEQUIP,
-  ITEM_COMMAND_USE,
+  INVENTORY_OP_DROP,
+  INVENTORY_OP_DROP_HOTBAR_SLOT,
+  INVENTORY_OP_EQUIP,
+  INVENTORY_OP_EXECUTE_HOTBAR_SLOT,
+  INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
+  INVENTORY_OP_CLEAR_HOTBAR_SLOT,
+  INVENTORY_OP_MOVE_HOTBAR_SLOT,
+  INVENTORY_OP_PICKUP,
+  INVENTORY_OP_UNEQUIP,
+  INVENTORY_OP_USE,
+  hotbarPayloadKindToWireValue,
   equipmentSlotToWireValue,
   type RuntimeMapConfig,
   type AbilityDefinition,
@@ -18,9 +26,13 @@ import {
 import {
   NType,
   type AbilityCommand,
+  type CarrierVolumeEnteredMessage,
+  type CarrierVolumeExitedMessage,
   type CreatorCommandWire,
   type ItemCommand,
   type MapTransferCommand,
+  type PlayerSettingsCommand,
+  type ServerAlertMessage,
   type ServerNetDiagnosticsMessage,
   ncontext
 } from "../../shared/netcode";
@@ -46,7 +58,10 @@ import { SnapshotStore } from "./network/SnapshotStore";
 import type {
   AbilityEventBatch,
   AbilityState,
+  InventoryActionFeedback,
   InventoryState,
+  SettingsState,
+  ServerAlertState,
   NetSimulationConfig,
   QueuedAbilityCommand,
   ReconciliationFrame,
@@ -71,11 +86,13 @@ export class NetworkClient {
   private serverPlayerCount: number | null = null;
   private serverNetDiagnostics: ServerNetDiagnosticsMessage | null = null;
   private pendingMapTransferInstruction: MapTransferInstruction | null = null;
+  private readonly pendingInventoryActionFeedback: InventoryActionFeedback[] = [];
+  private readonly pendingSettingsState: SettingsState[] = [];
+  private readonly pendingServerAlerts: ServerAlertState[] = [];
+  private readonly activeCarrierVolumeMembershipKeys = new Set<string>();
 
   public constructor() {
-    this.ackBuffer = new AckReconciliationBuffer((acceptedAtMs, _serverTick) => {
-      this.interpolation.observeAckArrival(acceptedAtMs);
-    });
+    this.ackBuffer = new AckReconciliationBuffer((_acceptedAtMs, _serverTick) => {});
 
     this.transport = new NetTransportClient(
       ncontext,
@@ -91,6 +108,10 @@ export class NetworkClient {
         this.serverPlayerCount = null;
         this.serverNetDiagnostics = null;
         this.pendingMapTransferInstruction = null;
+        this.pendingInventoryActionFeedback.length = 0;
+        this.pendingSettingsState.length = 0;
+        this.pendingServerAlerts.length = 0;
+        this.activeCarrierVolumeMembershipKeys.clear();
       },
       () => {
         // Errors are expected when server is unavailable during local-only workflows.
@@ -124,10 +145,6 @@ export class NetworkClient {
     }
 
     this.readMessages();
-    this.interpolation.update(this.transport.getLatencyMs());
-    this.snapshots.applyInterpolatedFrames(
-      this.transport.getInterpolatedState(this.interpolation.getInterpolationDelayMs())
-    );
 
     const { sequence, yawDelta } = this.ackBuffer.enqueueInput(delta, movement, orientation);
 
@@ -180,6 +197,20 @@ export class NetworkClient {
     this.transport.flush();
   }
 
+  public updateInterpolatedSnapshots(): void {
+    if (!this.transport.isConnected()) {
+      return;
+    }
+    this.readMessages();
+    this.interpolation.update(this.transport.getLatencyMs());
+    const appliedChanges = this.snapshots.applyInterpolatedFrames(
+      this.transport.getInterpolatedState(this.interpolation.getInterpolationDelayMs())
+    );
+    if (appliedChanges > 0) {
+      this.interpolation.observeSnapshotArrival(performance.now());
+    }
+  }
+
   public queueHotbarAssignment(slot: number, abilityId: number): void {
     const queued = this.getOrCreateQueuedAbilityCommand();
     queued.applyAssignment = true;
@@ -224,53 +255,166 @@ export class NetworkClient {
     this.transport.flush();
   }
 
-  public queuePickupWorldItem(worldItemNid: number): void {
+  public queuePlayerSettings(settingsJson: string): void {
+    if (!this.transport.isConnected()) {
+      return;
+    }
+    this.transport.addCommand({
+      ntype: NType.PlayerSettingsCommand,
+      settingsJson
+    } satisfies PlayerSettingsCommand);
+    this.transport.flush();
+  }
+
+  public queuePickupWorldItem(pickupNid: number): void {
     this.queueItemCommand({
-      action: ITEM_COMMAND_PICKUP,
-      worldItemNid,
+      action: INVENTORY_OP_PICKUP,
+      pickupNid,
       itemInstanceId: 0,
       quantity: 0,
-      equipmentSlot: 0
+      equipmentSlot: 0,
+      sourceSlot: 0,
+      targetSlot: 0,
+      activationChannel: 0,
+      payloadKind: 0
     });
   }
 
   public queueDropInventoryItem(itemInstanceId: number, quantity = 0): void {
     this.queueItemCommand({
-      action: ITEM_COMMAND_DROP,
-      worldItemNid: 0,
+      action: INVENTORY_OP_DROP,
+      pickupNid: 0,
       itemInstanceId,
       quantity,
-      equipmentSlot: 0
+      equipmentSlot: 0,
+      sourceSlot: 0,
+      targetSlot: 0,
+      activationChannel: 0,
+      payloadKind: 0
     });
   }
 
   public queueUseInventoryItem(itemInstanceId: number): void {
+    this.queueUseInventoryItemWithChannel(itemInstanceId, 0);
+  }
+
+  public queueUseInventoryItemWithChannel(itemInstanceId: number, activationChannel: number): void {
     this.queueItemCommand({
-      action: ITEM_COMMAND_USE,
-      worldItemNid: 0,
+      action: INVENTORY_OP_USE,
+      pickupNid: 0,
       itemInstanceId,
       quantity: 0,
-      equipmentSlot: 0
+      equipmentSlot: 0,
+      sourceSlot: 0,
+      targetSlot: 0,
+      activationChannel,
+      payloadKind: 0
     });
   }
 
   public queueEquipInventoryItem(itemInstanceId: number): void {
     this.queueItemCommand({
-      action: ITEM_COMMAND_EQUIP,
-      worldItemNid: 0,
+      action: INVENTORY_OP_EQUIP,
+      pickupNid: 0,
       itemInstanceId,
       quantity: 0,
-      equipmentSlot: 0
+      equipmentSlot: 0,
+      sourceSlot: 0,
+      targetSlot: 0,
+      activationChannel: 0,
+      payloadKind: 0
     });
   }
 
   public queueUnequipInventorySlot(slot: EquipmentSlot): void {
     this.queueItemCommand({
-      action: ITEM_COMMAND_UNEQUIP,
-      worldItemNid: 0,
+      action: INVENTORY_OP_UNEQUIP,
+      pickupNid: 0,
       itemInstanceId: 0,
       quantity: 0,
-      equipmentSlot: equipmentSlotToWireValue(slot)
+      equipmentSlot: equipmentSlotToWireValue(slot),
+      sourceSlot: 0,
+      targetSlot: 0,
+      activationChannel: 0,
+      payloadKind: 0
+    });
+  }
+
+  public queueAssignHotbarItemSlot(targetSlot: number, itemInstanceId: number): void {
+    this.queueAssignHotbarPayload(targetSlot, "item_instance", itemInstanceId);
+  }
+
+  public queueAssignHotbarAbilitySlot(targetSlot: number, abilityId: number): void {
+    this.queueAssignHotbarPayload(targetSlot, "ability", abilityId);
+  }
+
+  private queueAssignHotbarPayload(targetSlot: number, kind: "item_instance" | "ability" | "action", refId: number): void {
+    this.queueItemCommand({
+      action: INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
+      pickupNid: 0,
+      itemInstanceId: refId,
+      quantity: 0,
+      equipmentSlot: 0,
+      sourceSlot: 0,
+      targetSlot,
+      activationChannel: 0,
+      payloadKind: hotbarPayloadKindToWireValue(kind)
+    });
+  }
+
+  public queueClearHotbarSlot(sourceSlot: number): void {
+    this.queueItemCommand({
+      action: INVENTORY_OP_CLEAR_HOTBAR_SLOT,
+      pickupNid: 0,
+      itemInstanceId: 0,
+      quantity: 0,
+      equipmentSlot: 0,
+      sourceSlot,
+      targetSlot: 0,
+      activationChannel: 0,
+      payloadKind: 0
+    });
+  }
+
+  public queueMoveHotbarSlot(sourceSlot: number, targetSlot: number): void {
+    this.queueItemCommand({
+      action: INVENTORY_OP_MOVE_HOTBAR_SLOT,
+      pickupNid: 0,
+      itemInstanceId: 0,
+      quantity: 0,
+      equipmentSlot: 0,
+      sourceSlot,
+      targetSlot,
+      activationChannel: 0,
+      payloadKind: 0
+    });
+  }
+
+  public queueExecuteHotbarSlot(sourceSlot: number, activationChannel: number): void {
+    this.queueItemCommand({
+      action: INVENTORY_OP_EXECUTE_HOTBAR_SLOT,
+      pickupNid: 0,
+      itemInstanceId: 0,
+      quantity: 0,
+      equipmentSlot: 0,
+      sourceSlot,
+      targetSlot: 0,
+      activationChannel,
+      payloadKind: 0
+    });
+  }
+
+  public queueDropHotbarSlot(sourceSlot: number): void {
+    this.queueItemCommand({
+      action: INVENTORY_OP_DROP_HOTBAR_SLOT,
+      pickupNid: 0,
+      itemInstanceId: 0,
+      quantity: 0,
+      equipmentSlot: 0,
+      sourceSlot,
+      targetSlot: 0,
+      activationChannel: 0,
+      payloadKind: 0
     });
   }
 
@@ -311,8 +455,33 @@ export class NetworkClient {
     return this.inventory.consumeState();
   }
 
+  public consumeInventoryActionFeedback(): InventoryActionFeedback[] {
+    if (this.pendingInventoryActionFeedback.length <= 0) {
+      return [];
+    }
+    const next = this.pendingInventoryActionFeedback.slice();
+    this.pendingInventoryActionFeedback.length = 0;
+    return next;
+  }
+
   public getInventoryState(): InventoryState {
     return this.inventory.getState();
+  }
+
+  public consumeSettingsState(): SettingsState | null {
+    if (this.pendingSettingsState.length <= 0) {
+      return null;
+    }
+    return this.pendingSettingsState.shift() ?? null;
+  }
+
+  public consumeServerAlerts(): ServerAlertState[] {
+    if (this.pendingServerAlerts.length <= 0) {
+      return [];
+    }
+    const next = this.pendingServerAlerts.slice();
+    this.pendingServerAlerts.length = 0;
+    return next;
   }
 
   public getRemotePlayers(): RemotePlayerState[] {
@@ -369,12 +538,43 @@ export class NetworkClient {
     return this.ackBuffer.getServerCarriedFramePid();
   }
 
+  public getActiveCarrierFramePids(): number[] {
+    if (this.activeCarrierVolumeMembershipKeys.size === 0) {
+      return [];
+    }
+    const framePids = new Set<number>();
+    for (const key of this.activeCarrierVolumeMembershipKeys) {
+      const separator = key.indexOf(":");
+      if (separator <= 0) continue;
+      const framePid = Number(key.slice(0, separator));
+      if (!Number.isFinite(framePid)) continue;
+      framePids.add(Math.floor(framePid));
+    }
+    return Array.from(framePids).sort((a, b) => a - b);
+  }
+
   public getInterpolationDelayMs(): number {
     return this.interpolation.getInterpolationDelayMs();
   }
 
   public getAckJitterMs(): number {
     return this.interpolation.getAckJitterMs();
+  }
+
+  public getInterpolationTuning(): {
+    minMs: number;
+    maxMs: number;
+    baseTicks: number;
+    holdMs: number;
+    stepMs: number;
+  } {
+    return this.interpolation.getTuning();
+  }
+
+  public setInterpolationTuning(
+    tuning: Partial<{ minMs: number; maxMs: number; baseTicks: number; holdMs: number; stepMs: number }>
+  ): void {
+    this.interpolation.setTuning(tuning);
   }
 
   public getLatencyMs(): number {
@@ -467,6 +667,40 @@ export class NetworkClient {
       onInventoryStateMessage: (message) => {
         this.inventory.processInventoryJson(message.inventoryJson);
       },
+      onCarrierVolumeEnteredMessage: (message) => {
+        this.applyCarrierVolumeEntered(message);
+      },
+      onCarrierVolumeExitedMessage: (message) => {
+        this.applyCarrierVolumeExited(message);
+      },
+      onInventoryActionResultMessage: (message) => {
+        this.pendingInventoryActionFeedback.push({
+          action: this.clampUnsignedInt(message.action, 0xff),
+          ok: Boolean(message.ok),
+          reason: typeof message.reason === "string" ? message.reason : "unknown"
+        });
+      },
+      onPlayerSettingsMessage: (message) => {
+        try {
+          this.pendingSettingsState.push({
+            settings: coercePlayerSettings(JSON.parse(message.settingsJson))
+          });
+        } catch {
+          this.pendingSettingsState.push({
+            settings: coercePlayerSettings(null)
+          });
+        }
+      },
+      onServerAlertMessage: (message: ServerAlertMessage) => {
+        const text = typeof message.text === "string" ? message.text.trim() : "";
+        if (text.length <= 0) {
+          return;
+        }
+        this.pendingServerAlerts.push({
+          text,
+          severity: alertSeverityFromWireValue(message.severity)
+        });
+      },
       onUnhandledMessage: (message) => {
         if (this.abilities.processMessage(message)) {
           return;
@@ -505,10 +739,14 @@ export class NetworkClient {
     this.transport.addCommand({
       ntype: NType.ItemCommand,
       action: this.clampUnsignedInt(command.action, 0xff),
-      worldItemNid: this.clampUnsignedInt(command.worldItemNid, 0xffff),
+      pickupNid: this.clampUnsignedInt(command.pickupNid, 0xffff),
       itemInstanceId: this.clampUnsignedInt(command.itemInstanceId, 0xffffffff),
       quantity: this.clampUnsignedInt(command.quantity, 0xffff),
-      equipmentSlot: this.clampUnsignedInt(command.equipmentSlot, 0xff)
+      equipmentSlot: this.clampUnsignedInt(command.equipmentSlot, 0xff),
+      sourceSlot: this.clampUnsignedInt(command.sourceSlot, 0xff),
+      targetSlot: this.clampUnsignedInt(command.targetSlot, 0xff),
+      activationChannel: this.clampUnsignedInt(command.activationChannel, 0xff),
+      payloadKind: this.clampUnsignedInt(command.payloadKind, 0xff)
     } satisfies ItemCommand);
     this.transport.flush();
   }
@@ -556,4 +794,23 @@ export class NetworkClient {
     }
     return Math.max(0, raw);
   }
+
+  private applyCarrierVolumeEntered(message: CarrierVolumeEnteredMessage): void {
+    const framePid = Math.floor(Number(message.framePid));
+    const volumeId = typeof message.volumeId === "string" ? message.volumeId : "";
+    if (!Number.isFinite(framePid) || volumeId.length === 0) {
+      return;
+    }
+    this.activeCarrierVolumeMembershipKeys.add(`${framePid}:${volumeId}`);
+  }
+
+  private applyCarrierVolumeExited(message: CarrierVolumeExitedMessage): void {
+    const framePid = Math.floor(Number(message.framePid));
+    const volumeId = typeof message.volumeId === "string" ? message.volumeId : "";
+    if (!Number.isFinite(framePid) || volumeId.length === 0) {
+      return;
+    }
+    this.activeCarrierVolumeMembershipKeys.delete(`${framePid}:${volumeId}`);
+  }
 }
+

@@ -6,6 +6,7 @@
 import { Clock } from "three";
 import {
   ABILITY_ID_NONE,
+  ALERT_SEVERITIES,
   DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_PRIMARY_MOUSE_SLOT,
   DEFAULT_SECONDARY_MOUSE_SLOT,
@@ -17,15 +18,22 @@ import {
   NET_DIAGNOSTICS_WARNING_P95_IN_MESSAGES,
   NET_DIAGNOSTICS_WARNING_P95_OUT_BYTES,
   NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES,
+  coerceClientLocalSettings,
   getAbilityDefinitionById,
+  getLocationDefinitionByPid,
   getItemDefinitionById,
   movementModeToLabel,
-  type InventoryStateSnapshot,
+  type ClientLocalSettings,
+  type PlayerSettings,
+  coercePlayerSettings,
+  normalizeYaw,
+  type InventorySnapshot,
   type RuntimeMapConfig
 } from "../../shared/index";
 import type { BootstrapRequest, BootstrapResponse } from "../../shared/bootstrapProtocol";
 import { NetworkClient } from "./NetworkClient";
 import { InputController } from "./InputController";
+import { SettingsSaveScheduler } from "./SettingsSaveScheduler";
 import { LocalPhysicsWorld } from "./LocalPhysicsWorld";
 import { DeterministicPlatformTimeline } from "./DeterministicPlatformTimeline";
 import { RenderSnapshotAssembler } from "./RenderSnapshotAssembler";
@@ -44,6 +52,10 @@ const FIXED_STEP = 1 / 60;
 const LOOK_PITCH_LIMIT = 1.45;
 const TRANSFER_BOOTSTRAP_STORAGE_KEY = "mapTransferBootstrapV1";
 const TRANSFER_BOOTSTRAP_TTL_MS = 15_000;
+const PLAYER_SETTINGS_LOCAL_CACHE_KEY = "playerSettingsLocalCache";
+const CLIENT_LOCAL_SETTINGS_CACHE_KEY = "clientLocalSettingsCache";
+const SETTINGS_SAVE_DEBOUNCE_MS = 1500;
+const TEST_ALERT_INTERVAL_SECONDS = 60;
 
 interface TransferBootstrapPayload {
   wsUrl: string;
@@ -93,7 +105,18 @@ export class GameClientApp {
   private activeAccessKey: string | null = null;
   private transferInProgress = false;
   private currentInteractTargetNid: number | null = null;
-  private inventoryState: InventoryStateSnapshot = { maxSlots: 32, items: [], equipment: {} };
+  private playerSettings = coercePlayerSettings(null);
+  private clientLocalSettings = coerceClientLocalSettings(null);
+  private readonly settingsSaveScheduler = new SettingsSaveScheduler(SETTINGS_SAVE_DEBOUNCE_MS);
+  private inventoryState: InventorySnapshot = { maxSlots: 32, itemInstances: [], equipment: {}, hotbarSlots: [] };
+  private readonly visualCarrierPreviousYawByFramePid = new Map<number, number>();
+  private renderedLocationFrameSnapshot: ReadonlyMap<
+    number,
+    { x: number; y: number; z: number; rotation: { x: number; y: number; z: number; w: number } }
+  > = new Map();
+  private previousPhysicsRenderPose: { x: number; y: number; z: number } | null = null;
+  private currentPhysicsRenderPose: { x: number; y: number; z: number } | null = null;
+  private testAlertElapsedSeconds = 0;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -107,13 +130,22 @@ export class GameClientApp {
     this.physics = physics;
     this.cspEnabled = cspEnabled;
     this.e2eSimulationOnly = e2eSimulationOnly;
+    this.playerSettings = GameClientApp.loadCachedPlayerSettings();
+    this.clientLocalSettings = GameClientApp.loadCachedClientLocalSettings();
     this.input = new InputController(canvas);
+    this.applyInputSettings(this.playerSettings);
     this.ui = ClientUiManager.mount(document, {
       initialHotbarAssignments: this.hotbarAbilityIds,
       initialPrimaryMouseSlot: this.primaryMouseSlot,
       initialSecondaryMouseSlot: this.secondaryMouseSlot,
+      initialPlayerSettings: this.playerSettings,
+      initialClientLocalSettings: this.clientLocalSettings,
       onHotbarAssignmentChanged: (slot, abilityId) => {
-        this.network.queueHotbarAssignment(slot, abilityId);
+        if (abilityId <= 0) {
+          this.network.queueClearHotbarSlot(slot);
+          return;
+        }
+        this.network.queueAssignHotbarAbilitySlot(slot, abilityId);
       },
       onAbilityForgotten: (abilityId) => {
         this.network.queueForgetAbility(abilityId);
@@ -124,22 +156,51 @@ export class GameClientApp {
       onInventoryItemDropped: (itemInstanceId) => {
         this.network.queueDropInventoryItem(itemInstanceId);
       },
-      onInventoryItemUsed: (itemInstanceId) => {
-        this.network.queueUseInventoryItem(itemInstanceId);
+      onInventoryItemUsed: (itemInstanceId, channel) => {
+        this.network.queueUseInventoryItemWithChannel(itemInstanceId, channel);
       },
       onInventoryItemEquipped: (itemInstanceId) => {
         this.network.queueEquipInventoryItem(itemInstanceId);
       },
       onInventorySlotUnequipped: (slot) => {
         this.network.queueUnequipInventorySlot(slot);
+      },
+      onHotbarItemAssigned: (slot, itemInstanceId) => {
+        this.network.queueAssignHotbarItemSlot(slot, itemInstanceId);
+      },
+      onHotbarSlotCleared: (slot) => {
+        this.network.queueClearHotbarSlot(slot);
+      },
+      onHotbarSlotMoved: (sourceSlot, targetSlot) => {
+        this.network.queueMoveHotbarSlot(sourceSlot, targetSlot);
+      },
+      onHotbarSlotExecuted: (slot, channel) => {
+        this.network.queueExecuteHotbarSlot(slot, channel);
+      },
+      onHotbarSlotDropped: (slot) => {
+        this.network.queueDropHotbarSlot(slot);
+      },
+      onPlayerSettingsChanged: (settingsPatch) => {
+        this.applyPlayerSettingsPatch(settingsPatch, true);
+      },
+      onClientLocalSettingsChanged: (settingsPatch) => {
+        this.applyClientLocalSettingsPatch(settingsPatch);
       }
     });
     this.activeAccessKey = initialAccessKey.length > 0 ? initialAccessKey : null;
-    this.renderer = new WorldRenderer(canvas);
+    this.renderer = new WorldRenderer(canvas, {
+      clientLocalSettings: this.clientLocalSettings
+    });
+    this.renderer.setFieldOfView(this.playerSettings.fieldOfView);
+    this.renderer.setGraphicsPreset(this.clientLocalSettings.graphicsPreset);
     this.networkOrchestrator = new ClientNetworkOrchestrator(this.network, this.physics);
     this.renderSnapshotAssembler = new RenderSnapshotAssembler({
       getRenderSnapshotState: (frameDeltaSeconds) => this.createRenderSnapshot(frameDeltaSeconds)
     });
+    const initialPhysicsPose = this.physics.getPose();
+    const initialRenderPose = { x: initialPhysicsPose.x, y: initialPhysicsPose.y, z: initialPhysicsPose.z };
+    this.previousPhysicsRenderPose = initialRenderPose;
+    this.currentPhysicsRenderPose = initialRenderPose;
   }
 
   public static async create(
@@ -191,6 +252,7 @@ export class GameClientApp {
     }
     this.running = true;
     this.input.attach();
+    window.addEventListener("beforeunload", this.onBeforeUnload);
     window.addEventListener("resize", this.onResize);
     this.onResize();
     if (!this.e2eSimulationOnly) {
@@ -203,6 +265,7 @@ export class GameClientApp {
     if (this.running) {
       this.running = false;
       this.input.detach();
+      window.removeEventListener("beforeunload", this.onBeforeUnload);
       window.removeEventListener("resize", this.onResize);
       window.cancelAnimationFrame(this.rafId);
     }
@@ -222,6 +285,9 @@ export class GameClientApp {
     if (this.input.consumeMainMenuToggle()) {
       const open = this.ui.toggleMainMenu();
       this.input.setMainUiOpen(open);
+      if (!open) {
+        this.flushSettingsNow();
+      }
       if (document.pointerLockElement === this.canvas) {
         void document.exitPointerLock();
       }
@@ -259,14 +325,31 @@ export class GameClientApp {
       this.stepFixed(FIXED_STEP);
       this.accumulator -= FIXED_STEP;
     }
+    this.network.updateInterpolatedSnapshots();
     this.applyAbilityEvents();
     this.applyAbilityCreatorEvents();
     this.applyInventoryEvents();
+    this.applyInventoryFeedbackEvents();
+    this.applySettingsEvents();
+    this.applyServerAlertEvents();
+    this.maybeFlushSettingsDebounced();
 
     const renderSnapshot = this.renderSnapshotAssembler.build(seconds);
     this.renderer.apply(renderSnapshot);
+    this.renderedLocationFrameSnapshot = this.renderer.getRenderedLocationFrameSnapshot();
+    this.applyVisualCarrierYawFromRenderedLocations();
     this.updateInteractPrompt();
     this.updateDiagnosticsOverlay();
+    this.updateTestAlert(seconds);
+  }
+
+  private updateTestAlert(deltaSeconds: number): void {
+    this.testAlertElapsedSeconds += deltaSeconds;
+    while (this.testAlertElapsedSeconds >= TEST_ALERT_INTERVAL_SECONDS) {
+      this.testAlertElapsedSeconds -= TEST_ALERT_INTERVAL_SECONDS;
+      const randomSeverity = ALERT_SEVERITIES[Math.floor(Math.random() * ALERT_SEVERITIES.length)] ?? "info";
+      this.ui.showAlert(`Test alert [${randomSeverity}]: queued notification system active.`, randomSeverity);
+    }
   }
 
   private stepFixed(delta: number): void {
@@ -283,10 +366,18 @@ export class GameClientApp {
     const pitch = this.input.getPitch();
 
     const queuedDirectCastSlot = this.input.consumeDirectCastSlotTrigger();
-    const usePrimaryPressed = !mainUiOpen && (this.input.consumePrimaryActionTrigger() || this.consumeTestPrimaryActionTrigger());
-    const useSecondaryPressed = !mainUiOpen && (this.input.consumeSecondaryActionTrigger() || this.consumeTestSecondaryActionTrigger());
-    const usePrimaryHeld = !mainUiOpen && (this.input.isPrimaryActionHeld() || this.testPrimaryHeld);
-    const useSecondaryHeld = !mainUiOpen && (this.input.isSecondaryActionHeld() || this.testSecondaryHeld);
+    const usePrimaryPressedRaw = !mainUiOpen && (this.input.consumePrimaryActionTrigger() || this.consumeTestPrimaryActionTrigger());
+    const useSecondaryPressedRaw = !mainUiOpen && (this.input.consumeSecondaryActionTrigger() || this.consumeTestSecondaryActionTrigger());
+    const usePrimaryHeldRaw = !mainUiOpen && (this.input.isPrimaryActionHeld() || this.testPrimaryHeld);
+    const useSecondaryHeldRaw = !mainUiOpen && (this.input.isSecondaryActionHeld() || this.testSecondaryHeld);
+    const primaryHotbarPayload = this.inventoryState.hotbarSlots[this.primaryMouseSlot] ?? null;
+    const secondaryHotbarPayload = this.inventoryState.hotbarSlots[this.secondaryMouseSlot] ?? null;
+    const primaryUsesPayloadHotbar = primaryHotbarPayload !== null;
+    const secondaryUsesPayloadHotbar = secondaryHotbarPayload !== null;
+    const usePrimaryPressed = usePrimaryPressedRaw && !primaryUsesPayloadHotbar;
+    const useSecondaryPressed = useSecondaryPressedRaw && !secondaryUsesPayloadHotbar;
+    const usePrimaryHeld = usePrimaryHeldRaw && !primaryUsesPayloadHotbar;
+    const useSecondaryHeld = useSecondaryHeldRaw && !secondaryUsesPayloadHotbar;
     const castSlotPressed = !mainUiOpen && queuedDirectCastSlot !== null;
     const castSlotIndex = queuedDirectCastSlot ?? 0;
 
@@ -295,6 +386,12 @@ export class GameClientApp {
     }
     if (useSecondaryPressed && this.getAbilityDefinitionAtSlot(this.secondaryMouseSlot)?.melee) {
       this.renderer.triggerLocalMeleePunch();
+    }
+    if (usePrimaryPressedRaw && primaryUsesPayloadHotbar) {
+      this.network.queueExecuteHotbarSlot(this.primaryMouseSlot, 0);
+    }
+    if (useSecondaryPressedRaw && secondaryUsesPayloadHotbar) {
+      this.network.queueExecuteHotbarSlot(this.secondaryMouseSlot, 1);
     }
 
     this.networkOrchestrator.stepFixed({
@@ -317,6 +414,18 @@ export class GameClientApp {
       }
     });
 
+    const physicsPose = this.physics.getPose();
+    this.previousPhysicsRenderPose = this.currentPhysicsRenderPose ?? {
+      x: physicsPose.x,
+      y: physicsPose.y,
+      z: physicsPose.z
+    };
+    this.currentPhysicsRenderPose = {
+      x: physicsPose.x,
+      y: physicsPose.y,
+      z: physicsPose.z
+    };
+
     this.sampleGroundingDiagnostics();
   }
 
@@ -331,10 +440,8 @@ export class GameClientApp {
     }
 
     if (events.abilityState) {
-      this.hotbarAbilityIds = [...events.abilityState.hotbarAbilityIds];
       this.primaryMouseSlot = events.abilityState.primaryMouseSlot;
       this.secondaryMouseSlot = events.abilityState.secondaryMouseSlot;
-      this.ui.setHotbarAssignments(this.hotbarAbilityIds);
       this.ui.setMouseBindings(this.primaryMouseSlot, this.secondaryMouseSlot);
     }
     if (events.ownedAbilityIds) {
@@ -355,7 +462,110 @@ export class GameClientApp {
       return;
     }
     this.inventoryState = inventoryState;
+    this.syncAbilityAssignmentsFromInventoryHotbar();
     this.ui.setInventoryState(inventoryState);
+  }
+
+  private syncAbilityAssignmentsFromInventoryHotbar(): void {
+    const nextAssignments = new Array<number>(this.hotbarAbilityIds.length).fill(ABILITY_ID_NONE);
+    const slots = this.inventoryState.hotbarSlots;
+    for (let slot = 0; slot < nextAssignments.length; slot += 1) {
+      const payload = slots[slot] ?? null;
+      if (payload?.kind === "ability") {
+        nextAssignments[slot] = payload.refId;
+      }
+    }
+    this.hotbarAbilityIds = nextAssignments;
+    this.ui.setHotbarAssignments(this.hotbarAbilityIds);
+  }
+
+  private applyInventoryFeedbackEvents(): void {
+    const feedbacks = this.network.consumeInventoryActionFeedback();
+    for (const feedback of feedbacks) {
+      if (feedback.ok) {
+        continue;
+      }
+      console.warn(`[inventory] action=${feedback.action} failed reason=${feedback.reason}`);
+    }
+  }
+
+  private applySettingsEvents(): void {
+    const state = this.network.consumeSettingsState();
+    if (!state) {
+      return;
+    }
+    this.applyPlayerSettingsPatch(state.settings, false);
+  }
+
+  private applyServerAlertEvents(): void {
+    const alerts = this.network.consumeServerAlerts();
+    for (const alert of alerts) {
+      this.ui.showAlert(alert.text, alert.severity);
+    }
+  }
+
+  private maybeFlushSettingsDebounced(): void {
+    const nowMs = performance.now();
+    if (!this.settingsSaveScheduler.consumeShouldFlush(nowMs)) {
+      return;
+    }
+    this.sendSettingsToServer();
+  }
+
+  private flushSettingsNow(): void {
+    if (!this.settingsSaveScheduler.forceFlush()) {
+      return;
+    }
+    this.sendSettingsToServer();
+  }
+
+  private sendSettingsToServer(): void {
+    if (this.network.getConnectionState() !== "connected") {
+      this.settingsSaveScheduler.markDirty(performance.now());
+      return;
+    }
+    const settings = this.buildSettingsSnapshot();
+    this.network.queuePlayerSettings(JSON.stringify(settings));
+  }
+
+  private applyPlayerSettingsPatch(settingsPatch: Partial<PlayerSettings>, markDirtyForServer: boolean): void {
+    const normalized = coercePlayerSettings({
+      ...this.playerSettings,
+      ...settingsPatch
+    });
+    this.playerSettings = normalized;
+    this.applyInputSettings(normalized);
+    this.ui.setPlayerSettings(normalized);
+    this.renderer.setFieldOfView(normalized.fieldOfView);
+    GameClientApp.saveCachedPlayerSettings(normalized);
+    if (markDirtyForServer) {
+      this.settingsSaveScheduler.markDirty(performance.now());
+    }
+  }
+
+  private applyInputSettings(settings: PlayerSettings): void {
+    this.input.setDigitKeysActivateHotbar(settings.digitKeysActivateHotbar);
+    this.input.setMouseSensitivity(settings.mouseSensitivity);
+    this.input.setMouseSmoothingEnabled(settings.mouseSmoothing);
+  }
+
+  private applyClientLocalSettingsPatch(settingsPatch: Partial<ClientLocalSettings>): void {
+    const previous = this.clientLocalSettings;
+    const normalized = coerceClientLocalSettings({
+      ...previous,
+      ...settingsPatch
+    });
+    this.clientLocalSettings = normalized;
+    this.ui.setClientLocalSettings(normalized);
+    this.renderer.setGraphicsPreset(normalized.graphicsPreset);
+    GameClientApp.saveCachedClientLocalSettings(normalized);
+    if (normalized.antiAliasingMode !== previous.antiAliasingMode) {
+      window.location.reload();
+    }
+  }
+
+  private buildSettingsSnapshot(): PlayerSettings {
+    return this.playerSettings;
   }
 
   private updateDiagnosticsOverlay(): void {
@@ -479,6 +689,7 @@ export class GameClientApp {
       locationRoots: this.network.getLocationRoots().map((location) => ({
         nid: location.nid,
         modelId: location.modelId,
+        locationPid: location.locationPid,
         locationKind: location.locationKind,
         locationArchetypeId: location.locationArchetypeId,
         locationSeed: location.locationSeed,
@@ -507,14 +718,14 @@ export class GameClientApp {
         rotationX: e.rotationX, rotationY: e.rotationY, rotationZ: e.rotationZ, rotationW: e.rotationW,
         health: e.health,
         maxHealth: e.maxHealth,
-        itemArchetypeId: e.itemArchetypeId,
+        pickupDefinitionId: e.pickupDefinitionId,
         itemQuantity: e.itemQuantity
       })),
       inventory: {
-        items: this.inventoryState.items.map((item) => ({
+        items: this.inventoryState.itemInstances.map((item) => ({
           itemInstanceId: item.itemInstanceId,
-          archetypeId: item.archetypeId,
-          name: getItemDefinitionById(item.archetypeId)?.name ?? "Unknown",
+          definitionId: item.definitionId,
+          name: getItemDefinitionById(item.definitionId)?.name ?? "Unknown",
           quantity: item.quantity,
           slotIndex: item.slotIndex
         })),
@@ -627,22 +838,22 @@ export class GameClientApp {
       this.queuedTestInteractCount = Math.min(this.queuedTestInteractCount + normalized, 1024);
     };
     window.drop_first_inventory_item = () => {
-      const first = this.inventoryState.items[0];
+      const first = this.inventoryState.itemInstances[0];
       if (first) {
         this.network.queueDropInventoryItem(first.itemInstanceId);
       }
     };
     window.use_first_inventory_item = () => {
-      const firstUsable = this.inventoryState.items.find((item) =>
-        Boolean(getItemDefinitionById(item.archetypeId)?.use)
+      const firstUsable = this.inventoryState.itemInstances.find((item) =>
+        Boolean(getItemDefinitionById(item.definitionId)?.use)
       );
       if (firstUsable) {
         this.network.queueUseInventoryItem(firstUsable.itemInstanceId);
       }
     };
     window.equip_first_equipment_item = () => {
-      const firstEquipment = this.inventoryState.items.find((item) =>
-        Boolean(getItemDefinitionById(item.archetypeId)?.equipSlot)
+      const firstEquipment = this.inventoryState.itemInstances.find((item) =>
+        Boolean(getItemDefinitionById(item.definitionId)?.equipSlot)
       );
       if (firstEquipment) {
         this.network.queueEquipInventoryItem(firstEquipment.itemInstanceId);
@@ -684,9 +895,12 @@ export class GameClientApp {
   }
 
   private createRenderSnapshot(frameDeltaSeconds: number): RenderFrameSnapshot {
-    const renderServerTimeSeconds = this.networkOrchestrator.getRenderServerTimeSeconds(this.isCspActive());
+    const renderServerTimeSeconds = this.networkOrchestrator.advanceRenderServerTime(
+      frameDeltaSeconds,
+      this.isCspActive()
+    );
     const worldEntities = [
-      ...this.getRenderPlatformStates(),
+      ...this.getRenderPlatformStatesAt(renderServerTimeSeconds),
       ...this.network.getWorldEntities()
     ];
     return {
@@ -706,6 +920,16 @@ export class GameClientApp {
 
   private getRenderPosition(): { x: number; y: number; z: number } {
     if (this.isCspActive()) {
+      const previous = this.previousPhysicsRenderPose;
+      const current = this.currentPhysicsRenderPose;
+      if (previous && current) {
+        const alpha = Math.max(0, Math.min(1, this.accumulator / FIXED_STEP));
+        return {
+          x: previous.x + (current.x - previous.x) * alpha,
+          y: previous.y + (current.y - previous.y) * alpha,
+          z: previous.z + (current.z - previous.z) * alpha
+        };
+      }
       const pose = this.physics.getPose();
       return { x: pose.x, y: pose.y, z: pose.z };
     }
@@ -721,6 +945,10 @@ export class GameClientApp {
 
   private getRenderPlatformStates() {
     return this.platformTimeline.sampleStates(this.networkOrchestrator.getRenderServerTimeSeconds(this.isCspActive()));
+  }
+
+  private getRenderPlatformStatesAt(renderServerTimeSeconds: number) {
+    return this.platformTimeline.sampleStates(renderServerTimeSeconds);
   }
 
   private readonly onResize = (): void => {
@@ -782,7 +1010,7 @@ export class GameClientApp {
     const direction = this.computeViewDirection(pose.yaw, pose.pitch);
     let bestNid: number | null = null;
     let bestScore = Number.NEGATIVE_INFINITY;
-    for (const entity of this.network.getWorldEntities().filter(e => e.itemArchetypeId > 0)) {
+    for (const entity of this.network.getWorldEntities().filter(e => e.pickupDefinitionId > 0)) {
       const dx = entity.x - pose.x;
       const dy = entity.y + 0.85 - pose.y;
       const dz = entity.z - pose.z;
@@ -809,8 +1037,8 @@ export class GameClientApp {
       this.ui.clearInteractPrompt();
       return;
     }
-    const item = this.network.getWorldEntities().find((entry) => entry.nid === targetNid && entry.itemArchetypeId > 0);
-    const definition = item ? getItemDefinitionById(item.itemArchetypeId) : null;
+    const item = this.network.getWorldEntities().find((entry) => entry.nid === targetNid && entry.pickupDefinitionId > 0);
+    const definition = item ? getItemDefinitionById(item.pickupDefinitionId) : null;
     if (!item || !definition) {
       this.ui.clearInteractPrompt();
       return;
@@ -979,6 +1207,62 @@ export class GameClientApp {
     return raw === "1" || raw === "true";
   }
 
+  private static loadCachedPlayerSettings(): PlayerSettings {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return coercePlayerSettings(null);
+    }
+    try {
+      const raw = window.localStorage.getItem(PLAYER_SETTINGS_LOCAL_CACHE_KEY);
+      if (!raw) {
+        return coercePlayerSettings(null);
+      }
+      return coercePlayerSettings(JSON.parse(raw));
+    } catch {
+      return coercePlayerSettings(null);
+    }
+  }
+
+  private static saveCachedPlayerSettings(settings: PlayerSettings): void {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(PLAYER_SETTINGS_LOCAL_CACHE_KEY, JSON.stringify(settings));
+    } catch {
+      // Ignore storage failures; setting still applies for this session.
+    }
+  }
+
+  private static loadCachedClientLocalSettings(): ClientLocalSettings {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return coerceClientLocalSettings(null);
+    }
+    try {
+      const raw = window.localStorage.getItem(CLIENT_LOCAL_SETTINGS_CACHE_KEY);
+      if (!raw) {
+        return coerceClientLocalSettings(null);
+      }
+      return coerceClientLocalSettings(JSON.parse(raw));
+    } catch {
+      return coerceClientLocalSettings(null);
+    }
+  }
+
+  private static saveCachedClientLocalSettings(settings: ClientLocalSettings): void {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(CLIENT_LOCAL_SETTINGS_CACHE_KEY, JSON.stringify(settings));
+    } catch {
+      // Ignore storage failures; setting still applies for this session.
+    }
+  }
+
+  private readonly onBeforeUnload = (): void => {
+    this.flushSettingsNow();
+  };
+
   private isCspActive(): boolean {
     return this.cspEnabled;
   }
@@ -991,6 +1275,7 @@ export class GameClientApp {
     if (!transfer) {
       return;
     }
+    this.flushSettingsNow();
     this.transferInProgress = true;
     if (this.stageFullReloadTransfer(transfer)) {
       return;
@@ -1070,4 +1355,70 @@ export class GameClientApp {
       return null;
     }
   }
+
+  private applyVisualCarrierYawFromRenderedLocations(): void {
+    const framePids = this.network.getActiveCarrierFramePids();
+    if (framePids.length === 0) {
+      this.visualCarrierPreviousYawByFramePid.clear();
+      return;
+    }
+
+    const activeFrameSet = new Set<number>(framePids);
+    for (const trackedFramePid of this.visualCarrierPreviousYawByFramePid.keys()) {
+      if (!activeFrameSet.has(trackedFramePid)) {
+        this.visualCarrierPreviousYawByFramePid.delete(trackedFramePid);
+      }
+    }
+
+    let combinedDeltaYaw = 0;
+    for (let i = 0; i < framePids.length; i += 1) {
+      const framePid = framePids[i];
+      if (framePid === undefined) {
+        continue;
+      }
+      const location = getLocationDefinitionByPid(framePid);
+      if (!location || location.motion === "static") {
+        this.visualCarrierPreviousYawByFramePid.delete(framePid);
+        continue;
+      }
+      const locationRoot = this.resolveRenderedLocationRootByCarrierFramePid(framePid);
+      if (!locationRoot) {
+        continue;
+      }
+      const currentYaw = this.extractYawFromRotationQuaternion(locationRoot.rotation);
+      if (!Number.isFinite(currentYaw)) {
+        continue;
+      }
+      const previousYaw = this.visualCarrierPreviousYawByFramePid.get(framePid);
+      this.visualCarrierPreviousYawByFramePid.set(framePid, currentYaw);
+      if (previousYaw === undefined) {
+        continue;
+      }
+      combinedDeltaYaw = normalizeYaw(combinedDeltaYaw + normalizeYaw(currentYaw - previousYaw));
+    }
+
+    if (Math.abs(combinedDeltaYaw) <= 1e-6) {
+      return;
+    }
+    this.input.applyYawDelta(combinedDeltaYaw);
+    this.network.syncSentYaw(this.input.getYaw());
+  }
+
+  private resolveRenderedLocationRootByCarrierFramePid(framePid: number) {
+    return this.renderedLocationFrameSnapshot.get(framePid) ?? null;
+  }
+
+  private extractYawFromRotationQuaternion(rotation: {
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+  }): number {
+    const sinYawCosPitch = 2 * (rotation.w * rotation.y + rotation.x * rotation.z);
+    const cosYawCosPitch = 1 - 2 * (rotation.y * rotation.y + rotation.z * rotation.z);
+    return Math.atan2(sinYawCosPitch, cosYawCosPitch);
+  }
 }
+
+
+

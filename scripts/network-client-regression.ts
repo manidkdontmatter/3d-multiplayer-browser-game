@@ -94,9 +94,9 @@ function runAckBufferRegression(): void {
 
 function runInterpolationRegression(): void {
   const interpolation = new InterpolationController();
-  interpolation.observeAckArrival(1000);
-  interpolation.observeAckArrival(1034);
-  interpolation.observeAckArrival(1068);
+  interpolation.observeSnapshotArrival(1000);
+  interpolation.observeSnapshotArrival(1034);
+  interpolation.observeSnapshotArrival(1068);
   interpolation.update(50);
 
   const delay = interpolation.getInterpolationDelayMs();

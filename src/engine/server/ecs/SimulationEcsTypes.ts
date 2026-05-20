@@ -15,6 +15,7 @@ export type WorldWithComponents = {
     Health: { value: number[]; max: number[] };
     ItemArchetypeId: { value: number[] };
     ItemQuantity: { value: number[] };
+    LocationPid: { value: number[] };
     LocationKind: { value: number[] };
     LocationArchetypeId: { value: number[] };
     LocationSeed: { value: number[] };

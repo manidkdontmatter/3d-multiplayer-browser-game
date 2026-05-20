@@ -5,7 +5,7 @@
  */
 import type { MovementMode } from "../../shared/index";
 import type { AbilityCategory } from "../../shared/index";
-import type { WorldItemState } from "../../shared/index";
+import type { PickupState } from "../../shared/index";
 
 export interface MovementInput {
   forward: number;
@@ -39,6 +39,7 @@ export interface RemotePlayerState {
 export interface LocationRootState {
   nid: number;
   modelId: number;
+  locationPid: number;
   locationKind: number;
   locationArchetypeId: number;
   locationSeed: number;
@@ -71,7 +72,7 @@ export interface WorldEntityState {
   rotationW: number;
   health: number;
   maxHealth: number;
-  itemArchetypeId: number;
+  pickupDefinitionId: number;
   itemQuantity: number;
 }
 
@@ -95,3 +96,4 @@ export interface RenderFrameSnapshot {
   worldEntities: WorldEntityState[];
   projectiles: ProjectileState[];
 }
+

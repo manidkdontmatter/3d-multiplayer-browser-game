@@ -4,9 +4,12 @@
  * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
  */
 import type {
+  LoadPersistentPickupsRequest,
+  LoadPersistentPickupsResponse,
   GenericOrchestratorResponse,
   MapHeartbeatRequest,
   MapRegistrationRequest,
+  PersistPersistentPickupsRequest,
   PersistCriticalEventRequest,
   PersistInventoryMutationRequest,
   PersistSnapshotBatchRequest,
@@ -69,6 +72,14 @@ export interface OrchestratorIpcRequestMap {
   };
   PersistInventoryMutation: {
     request: PersistInventoryMutationRequest;
+    response: GenericOrchestratorResponse;
+  };
+  LoadPersistentPickups: {
+    request: LoadPersistentPickupsRequest;
+    response: LoadPersistentPickupsResponse;
+  };
+  PersistPersistentPickups: {
+    request: PersistPersistentPickupsRequest;
     response: GenericOrchestratorResponse;
   };
   ReserveIncomingTransfer: {

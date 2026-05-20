@@ -6,7 +6,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { buildTerrainMeshData } from "./world";
 import {
-  PHYSICS_GROUP_CARRIER_TRIGGER,
+  PHYSICS_GROUP_CARRIER_SENSOR,
   PHYSICS_GROUP_SOLID
 } from "./physicsCollisionGroups";
 import {
@@ -18,12 +18,30 @@ import {
 import type { CarrierVolumeDefinition } from "./movingReferenceFrames";
 
 export function createStaticWorldColliders(world: RAPIER.World): void {
+  const mapInstanceId = resolveRuntimeMapInstanceId();
   for (const definition of VOID_LOCATION_DEFINITIONS) {
+    if (definition.mapInstanceIds && definition.mapInstanceIds.length > 0) {
+      if (mapInstanceId !== null && !definition.mapInstanceIds.includes(mapInstanceId)) {
+        continue;
+      }
+    }
     if (definition.motion !== "static") {
       continue;
     }
     createStaticLocationColliders(world, definition);
   }
+}
+
+function resolveRuntimeMapInstanceId(): string | null {
+  if (typeof process === "undefined" || !process?.env) {
+    return null;
+  }
+  const value = process.env.MAP_INSTANCE_ID;
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function createStaticLocationColliders(world: RAPIER.World, definition: LocationRootDefinition): void {
@@ -98,8 +116,11 @@ export function createLocationCarrierSensorColliders(
     }
     desc
       .setSensor(true)
-      .setCollisionGroups(PHYSICS_GROUP_CARRIER_TRIGGER)
-      .setSolverGroups(PHYSICS_GROUP_CARRIER_TRIGGER)
+      .setCollisionGroups(PHYSICS_GROUP_CARRIER_SENSOR)
+      .setSolverGroups(PHYSICS_GROUP_CARRIER_SENSOR)
+      .setActiveCollisionTypes(
+        RAPIER.ActiveCollisionTypes.DEFAULT | RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC
+      )
       .setTranslation(volume.localX, volume.localY, volume.localZ)
       .setRotation(yawToQuaternion(volume.localYaw ?? 0));
     colliders.push(world.createCollider(desc, body));

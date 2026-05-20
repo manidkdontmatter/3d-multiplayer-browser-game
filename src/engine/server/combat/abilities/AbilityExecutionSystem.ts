@@ -48,15 +48,27 @@ export class AbilityExecutionSystem {
     const unlocked = c.UnlockedAbilityIds.value[eid] ?? [];
     const ability = this.options.resolveAbilityById(unlocked, abilityId);
     if (!ability) return;
+    this.executeAbilityByEid(eid, ability);
+  }
 
+  public tryUseAbilityByIdByEid(eid: number, abilityId: number): boolean {
+    const c = this.options.ecsComponents;
+    const unlocked = c.UnlockedAbilityIds.value[eid] ?? [];
+    const ability = this.options.resolveAbilityById(unlocked, abilityId);
+    if (!ability) return false;
+    return this.executeAbilityByEid(eid, ability);
+  }
+
+  private executeAbilityByEid(eid: number, ability: AbilityDefinition): boolean {
+    const c = this.options.ecsComponents;
     const pp = ability.projectile;
     const mp = ability.melee;
     const cooldown = pp?.cooldownSeconds ?? mp?.cooldownSeconds;
-    if (cooldown === undefined) return;
+    if (cooldown === undefined) return false;
 
     const elapsed = this.options.getElapsedSeconds();
     const lastFired = c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY;
-    if (elapsed - lastFired < cooldown) return;
+    if (elapsed - lastFired < cooldown) return false;
 
     c.LastPrimaryFireAtSeconds.value[eid] = elapsed;
     const ownerNid = c.NetworkId.value[eid] ?? 0;
@@ -69,11 +81,12 @@ export class AbilityExecutionSystem {
       const yaw = c.Yaw.value[eid] ?? 0;
       const pitch = c.Pitch.value[eid] ?? 0;
       this.spawnProjectileFromEid(ownerNid, x, y, z, yaw, pitch, pp);
-      return;
+      return true;
     }
     if (mp) {
       this.options.applyMeleeHit(eid, mp);
     }
+    return true;
   }
 
   private spawnProjectileFromEid(

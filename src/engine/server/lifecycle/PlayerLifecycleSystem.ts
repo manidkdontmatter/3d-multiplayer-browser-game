@@ -94,7 +94,10 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
         .capsule(this.options.playerCapsuleHalfHeight, this.options.playerCapsuleRadius)
         .setFriction(0)
         .setCollisionGroups(PHYSICS_GROUP_CHARACTER)
-        .setSolverGroups(PHYSICS_GROUP_CHARACTER),
+        .setSolverGroups(PHYSICS_GROUP_CHARACTER)
+        .setActiveCollisionTypes(
+          RAPIER.ActiveCollisionTypes.DEFAULT | RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC
+        ),
       body
     );
 

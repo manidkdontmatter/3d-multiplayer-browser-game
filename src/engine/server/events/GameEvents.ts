@@ -112,7 +112,7 @@ export interface AbilityStateChangedPayload {
 export interface ItemPickedUpPayload {
   userId: number;
   itemEid: number;
-  itemArchetypeId: number;
+  pickupDefinitionId: number;
   quantity: number;
 }
 
@@ -158,3 +158,4 @@ export interface EffectSpawnEntityPayload {
   sourceEid: number | null;
   position: { x: number; y: number; z: number };
 }
+

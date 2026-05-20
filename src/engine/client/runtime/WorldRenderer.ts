@@ -4,6 +4,7 @@
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
 import { Vector3 } from "three";
+import type { ClientLocalSettings, GraphicsPreset } from "../../shared";
 import { AudioEngine } from "./audio/AudioEngine";
 import type { RenderFrameSnapshot } from "./types";
 import { AudioEventBridge } from "./rendering/AudioEventBridge";
@@ -12,6 +13,10 @@ import { ProjectileVisualSystem } from "./rendering/ProjectileVisualSystem";
 import { RemoteCharacterVisualSystem } from "./rendering/RemoteCharacterVisualSystem";
 import { WorldEntityVisualSystem } from "./rendering/WorldEntityVisualSystem";
 import { WorldEnvironment } from "./rendering/WorldEnvironment";
+
+export interface WorldRendererOptions {
+  clientLocalSettings?: ClientLocalSettings;
+}
 
 export class WorldRenderer {
   private readonly environment: WorldEnvironment;
@@ -24,8 +29,10 @@ export class WorldRenderer {
   private disposed = false;
   private localPlayerNid: number | null = null;
 
-  public constructor(canvas: HTMLCanvasElement) {
-    this.environment = new WorldEnvironment(canvas);
+  public constructor(canvas: HTMLCanvasElement, options: WorldRendererOptions = {}) {
+    this.environment = new WorldEnvironment(canvas, {
+      clientLocalSettings: options.clientLocalSettings
+    });
     this.audio = new AudioEngine(this.environment.camera, this.environment.scene);
     this.projectileVisuals = new ProjectileVisualSystem(this.environment.scene);
     this.worldEntities = new WorldEntityVisualSystem(this.environment.scene);
@@ -44,6 +51,14 @@ export class WorldRenderer {
     this.environment.resize(width, height);
   }
 
+  public setFieldOfView(fieldOfView: number): void {
+    this.environment.setFieldOfView(fieldOfView);
+  }
+
+  public setGraphicsPreset(preset: GraphicsPreset): void {
+    this.environment.setGraphicsPreset(preset);
+  }
+
   public triggerLocalMeleePunch(): void {
     this.localCharacter.triggerLocalMeleePunch();
   }
@@ -57,7 +72,7 @@ export class WorldRenderer {
     });
     this.remoteCharacters.syncRemotePlayers(snapshot.remotePlayers, snapshot.frameDeltaSeconds);
     this.audioEventBridge.applyAbilityUseEvents(snapshot.abilityUseEvents);
-    this.worldEntities.syncLocationRoots(snapshot.locationRoots);
+    this.worldEntities.syncLocationRoots(snapshot.locationRoots, snapshot.frameDeltaSeconds);
     this.worldEntities.syncWorldEntities(snapshot.worldEntities);
     this.projectileVisuals.syncProjectiles(snapshot.projectiles, snapshot.frameDeltaSeconds);
     this.environment.render(
@@ -69,6 +84,37 @@ export class WorldRenderer {
 
   public getForwardDirection(): Vector3 {
     return this.environment.getForwardDirection();
+  }
+
+  public getRenderedLocationRootByLocationPid(locationPid: number): {
+    x: number;
+    y: number;
+    z: number;
+    rotation: { x: number; y: number; z: number; w: number };
+  } | null {
+    return this.worldEntities.getRenderedLocationRootByLocationPid(locationPid);
+  }
+
+  public getRenderedLocationFrameSnapshot(): ReadonlyMap<
+    number,
+    { x: number; y: number; z: number; rotation: { x: number; y: number; z: number; w: number } }
+  > {
+    return this.worldEntities.getRenderedLocationFrameSnapshot();
+  }
+
+  public getLocationPresentationTuning(): {
+    enabled: boolean;
+    smoothRate: number;
+    snapDistance: number;
+    snapDot: number;
+  } {
+    return this.worldEntities.getLocationPresentationTuning();
+  }
+
+  public setLocationPresentationTuning(
+    tuning: Partial<{ enabled: boolean; smoothRate: number; snapDistance: number; snapDot: number }>
+  ): void {
+    this.worldEntities.setLocationPresentationTuning(tuning);
   }
 
   public dispose(): void {

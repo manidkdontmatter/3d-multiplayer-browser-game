@@ -11,7 +11,7 @@ import type {
   MeleeAbilityProfile,
   ProjectileAbilityProfile
 } from "./abilities";
-import type { ItemCategory, EquipmentSlot, ItemArchetypeDefinition, ItemUseDefinition } from "./items";
+import type { ItemCategory, EquipmentSlot, ItemDefinition, ItemUseProfile } from "./items";
 import type { PlatformArchetypeCatalog, PlatformDefinition } from "./platforms";
 
 export type BlueprintComponentPayload = Record<string, unknown>;
@@ -181,7 +181,7 @@ export function buildAbilityDefinitionFromBlueprint(blueprint: BlueprintDefiniti
   return definition;
 }
 
-export function buildItemDefinitionFromBlueprint(blueprint: BlueprintDefinition): ItemArchetypeDefinition | null {
+export function buildItemDefinitionFromBlueprint(blueprint: BlueprintDefinition): ItemDefinition | null {
   const inventoryItem = readInventoryItem(blueprint.components.InventoryItem);
   if (!inventoryItem) {
     return null;
@@ -318,16 +318,46 @@ function readEquippable(payload: BlueprintComponentPayload | undefined): { slot:
   return { slot };
 }
 
-function readConsumableEffect(payload: BlueprintComponentPayload | undefined): ItemUseDefinition | null {
+function readConsumableEffect(payload: BlueprintComponentPayload | undefined): ItemUseProfile | null {
   if (!isRecord(payload)) return null;
+  if (Array.isArray(payload.actions)) {
+    const actions = payload.actions
+      .map((rawAction) => {
+        if (!isRecord(rawAction)) {
+          return null;
+        }
+        const key = typeof rawAction.key === "string" && rawAction.key.trim().length > 0 ? rawAction.key.trim() : "";
+        const label = typeof rawAction.label === "string" && rawAction.label.trim().length > 0 ? rawAction.label.trim() : "";
+        if (key.length <= 0 || label.length <= 0) {
+          return null;
+        }
+        return {
+          key,
+          label,
+          restoreHealth: readOptionalFiniteNumber(rawAction.restoreHealth),
+          consumeQuantity: Math.max(1, Math.floor(readFiniteNumber(rawAction.consumeQuantity, 1)))
+        };
+      })
+      .filter((action): action is NonNullable<typeof action> => Boolean(action));
+    if (actions.length > 0) {
+      return { actions };
+    }
+  }
   const restoreHealth = readOptionalFiniteNumber(payload.restoreHealth);
   const consumeQuantity = readOptionalFiniteNumber(payload.consumeQuantity);
+  const actionLabel = typeof payload.label === "string" && payload.label.trim().length > 0 ? payload.label.trim() : "Use";
   if (restoreHealth === undefined && consumeQuantity === undefined) {
     return null;
   }
   return {
-    restoreHealth,
-    consumeQuantity: consumeQuantity === undefined ? 1 : Math.max(1, Math.floor(consumeQuantity))
+    actions: [
+      {
+        key: "default",
+        label: actionLabel,
+        restoreHealth,
+        consumeQuantity: consumeQuantity === undefined ? 1 : Math.max(1, Math.floor(consumeQuantity))
+      }
+    ]
   };
 }
 
@@ -705,3 +735,4 @@ function parseOptionalFiniteNumberStrict(value: unknown, label: string): number 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
+

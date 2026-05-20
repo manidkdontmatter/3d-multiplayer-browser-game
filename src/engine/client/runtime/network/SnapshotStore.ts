@@ -25,11 +25,12 @@ export class SnapshotStore {
     this.entities.clear();
   }
 
-  public applyInterpolatedFrames(rawFrames: unknown): void {
+  public applyInterpolatedFrames(rawFrames: unknown): number {
     if (!Array.isArray(rawFrames)) {
-      return;
+      return 0;
     }
 
+    let appliedChanges = 0;
     for (const rawFrame of rawFrames) {
       const frame = rawFrame as {
         createEntities?: unknown[];
@@ -47,6 +48,7 @@ export class SnapshotStore {
           continue;
         }
         this.entities.set(nid, { ...entity });
+        appliedChanges += 1;
       }
 
       for (const rawPatch of frame.updateEntities ?? []) {
@@ -63,20 +65,23 @@ export class SnapshotStore {
         }
         entity[patch.prop] = patch.value;
         this.entities.set(patch.nid, entity);
+        appliedChanges += 1;
       }
 
       for (const rawNid of frame.deleteEntities ?? []) {
         if (typeof rawNid === "number") {
           this.entities.delete(rawNid);
+          appliedChanges += 1;
         }
       }
     }
+    return appliedChanges;
   }
 
   public getRemotePlayers(localPlayerNid: number | null): RemotePlayerState[] {
     const output: RemotePlayerState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.BaseEntity) {
+      if (rawEntity.ntype !== NType.RuntimeEntity) {
         continue;
       }
       const player = this.toPlayerState(rawEntity);
@@ -96,7 +101,7 @@ export class SnapshotStore {
       return null;
     }
     const rawEntity = this.entities.get(localPlayerNid);
-    if (!rawEntity || rawEntity.ntype !== NType.BaseEntity) {
+    if (!rawEntity || rawEntity.ntype !== NType.RuntimeEntity) {
       return null;
     }
     return this.toPlayerState(rawEntity);
@@ -105,7 +110,7 @@ export class SnapshotStore {
   public getLocationRoots(): LocationRootState[] {
     const output: LocationRootState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.LocationRootEntity) {
+      if (rawEntity.ntype !== NType.WorldAnchorEntity) {
         continue;
       }
       const location = this.toLocationRootState(rawEntity);
@@ -120,7 +125,7 @@ export class SnapshotStore {
   public getProjectiles(): ProjectileState[] {
     const output: ProjectileState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.BaseEntity) {
+      if (rawEntity.ntype !== NType.RuntimeEntity) {
         continue;
       }
       const projectile = this.toProjectileState(rawEntity);
@@ -135,7 +140,7 @@ export class SnapshotStore {
   public getWorldEntities(): WorldEntityState[] {
     const output: WorldEntityState[] = [];
     for (const rawEntity of this.entities.values()) {
-      if (rawEntity.ntype !== NType.BaseEntity) {
+      if (rawEntity.ntype !== NType.RuntimeEntity) {
         continue;
       }
       const modelId = rawEntity.modelId;
@@ -193,6 +198,7 @@ export class SnapshotStore {
     }
     const modelId = raw.modelId;
     const nid = raw.nid;
+    const locationPid = raw.locationPid;
     const position = this.readPosition(raw.position);
     const rotation = this.readRotation(raw.rotation);
     const locationArchetypeId = raw.locationArchetypeId;
@@ -204,6 +210,7 @@ export class SnapshotStore {
     if (
       typeof nid !== "number" ||
       typeof modelId !== "number" ||
+      typeof locationPid !== "number" ||
       typeof locationArchetypeId !== "number" ||
       typeof locationSeed !== "number" ||
       typeof locationEnvironmentId !== "number" ||
@@ -218,6 +225,7 @@ export class SnapshotStore {
     return {
       nid,
       modelId,
+      locationPid,
       locationKind,
       locationArchetypeId,
       locationSeed,
@@ -270,7 +278,7 @@ export class SnapshotStore {
     }
     const health = typeof raw.health === "number" ? raw.health : 0;
     const maxHealth = typeof raw.maxHealth === "number" ? raw.maxHealth : 0;
-    const itemArchetypeId = typeof raw.itemArchetypeId === "number" ? raw.itemArchetypeId : 0;
+    const pickupDefinitionId = typeof raw.pickupDefinitionId === "number" ? raw.pickupDefinitionId : 0;
     const itemQuantity = typeof raw.itemQuantity === "number" ? raw.itemQuantity : 0;
     return {
       nid,
@@ -284,7 +292,7 @@ export class SnapshotStore {
       rotationW: rotation.w,
       health,
       maxHealth,
-      itemArchetypeId,
+      pickupDefinitionId,
       itemQuantity
     };
   }
@@ -329,3 +337,4 @@ export class SnapshotStore {
     };
   }
 }
+

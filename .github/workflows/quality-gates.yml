@@ -29,7 +29,6 @@ jobs:
   perf-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,8 +50,28 @@ jobs:
           LOAD_CONNECT_STAGGER_MS: "5"
           LOAD_CONNECT_SETTLE_MS: "300"
           LOAD_ENFORCE_PASS: "1"
+          LOAD_RUN_LABEL: "ci-perf-smoke-clustered"
           LOAD_MIN_TPS_RATIO: "0.98"
           LOAD_MAX_P95_TICK_MS: "30"
           LOAD_MAX_MEAN_TICK_MS: "22"
           LOAD_MIN_CONNECTED_RATIO: "1"
-        run: npm run perf:gate:load:smoke
+          LOAD_MAX_AVG_OUT_BYTES_PER_SECOND_PER_PLAYER: "20000"
+          LOAD_MAX_P95_OUT_BYTES_PER_SECOND_PER_PLAYER: "70000"
+          LOAD_MAX_AVG_OUT_MESSAGES_PER_SECOND_PER_PLAYER: "35"
+          LOAD_MAX_P95_OUT_MESSAGES_PER_SECOND_PER_PLAYER: "45"
+          LOAD_MAX_HEAP_DELTA_MB: "600"
+          LOAD_MAX_GC_P95_MS: "30"
+          LOAD_MAX_GC_TOTAL_MS: "400"
+          LOAD_PROFILE_CPU: "0"
+          LOAD_TOPOLOGY: "clustered"
+        run: npm run test:load:network
+
+      - name: Upload Perf Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-smoke-network-load
+          path: |
+            profiling/network-load/*.json
+            profiling/network-load/*.cpuprofile
+          if-no-files-found: warn

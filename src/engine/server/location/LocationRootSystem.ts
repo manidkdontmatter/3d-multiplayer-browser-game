@@ -14,6 +14,7 @@ import {
   VOID_LOCATION_DEFINITIONS,
   type LocationRootDefinition
 } from "../../shared/index";
+import type { CarrierVolumeDefinition } from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
 
 export interface LocationRootEntity {
@@ -63,6 +64,11 @@ export interface LocationFrameCarry {
   carriedFramePid: number | null;
 }
 
+export interface CarrierVolumeMembershipRef {
+  framePid: number;
+  volumeId: string;
+}
+
 const CARRIER_FRAME_STICKY_MARGIN = 0.25;
 
 export interface LocationRootSystemOptions {
@@ -74,11 +80,18 @@ export interface LocationRootSystemOptions {
 export class LocationRootSystem {
   private readonly locationsByPid = new Map<number, LocationRootEntity>();
   private readonly locationPidByCarrierSensorHandle = new Map<number, number>();
+  private readonly carrierMembershipBySensorHandle = new Map<number, CarrierVolumeMembershipRef>();
 
   public constructor(private readonly options: LocationRootSystemOptions) {}
 
   public initializeLocations(): void {
+    const mapInstanceId = (process.env.MAP_INSTANCE_ID ?? "").trim();
     for (const definition of VOID_LOCATION_DEFINITIONS) {
+      if (definition.mapInstanceIds && definition.mapInstanceIds.length > 0) {
+        if (mapInstanceId.length <= 0 || !definition.mapInstanceIds.includes(mapInstanceId)) {
+          continue;
+        }
+      }
       const pose = sampleLocationTransform(definition, 0);
       const kinematic =
         definition.motion === "drift"
@@ -118,8 +131,24 @@ export class LocationRootSystem {
         carrierSensorColliders
       };
       this.locationsByPid.set(location.pid, location);
-      for (const sensor of carrierSensorColliders) {
+      const carrierVolumes = definition.carrierVolumes ?? [];
+      let sensorIndex = 0;
+      for (let i = 0; i < carrierVolumes.length; i += 1) {
+        const volume = carrierVolumes[i];
+        if (!volume || !isCarrierVolumeColliderValid(volume)) {
+          continue;
+        }
+        const sensor = carrierSensorColliders[sensorIndex];
+        sensorIndex += 1;
+        if (!sensor) continue;
         this.locationPidByCarrierSensorHandle.set(sensor.handle, location.pid);
+        const volumeId = volume.id;
+        if (typeof volumeId === "string" && volumeId.length > 0) {
+          this.carrierMembershipBySensorHandle.set(sensor.handle, {
+            framePid: location.pid,
+            volumeId
+          });
+        }
       }
       this.options.onLocationAdded?.(location);
     }
@@ -254,6 +283,18 @@ export class LocationRootSystem {
     return this.locationPidByCarrierSensorHandle.get(colliderHandle) ?? null;
   }
 
+  public collectCarrierVolumeMembershipsForCollider(collider: RAPIER.Collider): CarrierVolumeMembershipRef[] {
+    const memberships: CarrierVolumeMembershipRef[] = [];
+    this.options.world.intersectionPairsWith(collider, (otherCollider) => {
+      const membership = this.carrierMembershipBySensorHandle.get(otherCollider.handle);
+      if (!membership) {
+        return;
+      }
+      memberships.push(membership);
+    });
+    return memberships;
+  }
+
   private sampleLocationCarryFromPreviousFrame(
     location: LocationRootEntity,
     bodyPos: { x: number; y: number; z: number },
@@ -280,4 +321,14 @@ export class LocationRootSystem {
 
 function yawToQuaternion(yaw: number): { x: number; y: number; z: number; w: number } {
   return { x: 0, y: Math.sin(yaw * 0.5), z: 0, w: Math.cos(yaw * 0.5) };
+}
+
+function isCarrierVolumeColliderValid(volume: CarrierVolumeDefinition): boolean {
+  if (volume.shape === "sphere") {
+    return Math.max(0, volume.radius ?? 0) > 0;
+  }
+  const halfX = Math.max(0, volume.halfX ?? 0);
+  const halfY = Math.max(0, volume.halfY ?? 0);
+  const halfZ = Math.max(0, volume.halfZ ?? 0);
+  return halfX > 0 && halfY > 0 && halfZ > 0;
 }

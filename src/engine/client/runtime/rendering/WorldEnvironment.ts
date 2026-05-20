@@ -38,7 +38,9 @@ import {
 } from "three";
 import {
   buildTerrainMeshData,
+  coerceClientLocalSettings,
   DEFAULT_VISUAL_GRASS_VARIANTS,
+  DEFAULT_FIELD_OF_VIEW,
   ENVIRONMENT_PRESET_SKY_BLUE_DAY,
   ENVIRONMENT_PRESET_VOID_ARCANE,
   ENVIRONMENT_PRESET_VOID_DEEP,
@@ -49,8 +51,12 @@ import {
   getEnvironmentVolumeWeight,
   generateDeterministicVisualBushes,
   generateDeterministicVisualGrass,
+  MAX_FIELD_OF_VIEW,
+  MIN_FIELD_OF_VIEW,
   VOID_ENVIRONMENT_VOLUME_DEFINITIONS,
+  type ClientLocalSettings,
   type EnvironmentVolumeDefinition,
+  type GraphicsPreset,
   type VisualGrassInstance
 } from "../../../shared/index";
 import { configureAssetLoaderRenderer, ensureAsset, getLoadedAsset } from "../../assets/assetLoader";
@@ -150,8 +156,6 @@ const GRASS_RENDER_VARIANTS: readonly GrassRenderVariant[] = [
 const GRASS_WIND_ENABLED = true;
 const GRASS_DISTANCE_FADE_ENABLED = false;
 const GRASS_CELL_SIZE = 48;
-const GRASS_LOD_NEAR_DISTANCE = 220;
-const GRASS_LOD_FAR_DISTANCE = 600;
 const GRASS_FAR_DENSITY_STRIDE = 3;
 const GRASS_FADE_START_DISTANCE = 90;
 const GRASS_FADE_END_DISTANCE = 150;
@@ -171,6 +175,15 @@ const ZERO_SKY_WEIGHTS: VoidSkyWeights = {
 };
 const VOID_SKY_RENDER_ORDER = -1000;
 const ENVIRONMENT_VFX_RENDER_ORDER = -900;
+const GRAPHICS_PRESET_PROFILE: Record<GraphicsPreset, { pixelRatioScale: number; nearLodDistance: number; farLodDistance: number }> = {
+  low: { pixelRatioScale: 0.75, nearLodDistance: 140, farLodDistance: 360 },
+  medium: { pixelRatioScale: 1, nearLodDistance: 220, farLodDistance: 600 },
+  high: { pixelRatioScale: 1.2, nearLodDistance: 320, farLodDistance: 900 }
+};
+
+export interface WorldEnvironmentOptions {
+  clientLocalSettings?: ClientLocalSettings;
+}
 
 const VOID_SKY_LAYERS: readonly VoidSkyLayerDefinition[] = [
   {
@@ -294,23 +307,26 @@ export class WorldEnvironment {
   private skyboxMaterial: ShaderMaterial | null = null;
   private ambientLight: AmbientLight | null = null;
   private sunLight: DirectionalLight | null = null;
+  private graphicsPreset: GraphicsPreset = "high";
+  private grassLodNearDistance = GRAPHICS_PRESET_PROFILE.high.nearLodDistance;
+  private grassLodFarDistance = GRAPHICS_PRESET_PROFILE.high.farLodDistance;
   private pendingGrassInstances: VisualGrassInstance[] | null = null;
   private worldTextureRequestsIssued = false;
   private skyboxRequestsIssued = false;
   private grassInstancesAdded = false;
 
-  public constructor(canvas: HTMLCanvasElement) {
+  public constructor(canvas: HTMLCanvasElement, options: WorldEnvironmentOptions = {}) {
     const params = new URLSearchParams(window.location.search);
     this.e2eMode = params.get("e2e") === "1";
     const headlessLiteParam = params.get("headlessLite");
     this.headlessLite =
       headlessLiteParam === "0" || headlessLiteParam === "false" ? false : this.e2eMode;
+    const clientLocalSettings = coerceClientLocalSettings(options.clientLocalSettings);
     this.renderer = new WebGLRenderer({
       canvas,
-      antialias: !this.e2eMode,
+      antialias: !this.e2eMode && clientLocalSettings.antiAliasingMode === "msaa",
       powerPreference: "high-performance"
     });
-    this.renderer.setPixelRatio(this.e2eMode ? 1 : Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = this.currentEnvironment.exposure;
@@ -325,9 +341,10 @@ export class WorldEnvironment {
       this.currentEnvironment.fogFar
     );
 
-    this.camera = new PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.01, 5000);
+    this.camera = new PerspectiveCamera(DEFAULT_FIELD_OF_VIEW, window.innerWidth / window.innerHeight, 0.01, 5000);
     this.camera.layers.enable(LOCAL_FIRST_PERSON_ONLY_LAYER);
     this.camera.layers.disable(LOCAL_THIRD_PERSON_ONLY_LAYER);
+    this.setGraphicsPreset(clientLocalSettings.graphicsPreset);
 
     this.initializeScene();
   }
@@ -336,6 +353,27 @@ export class WorldEnvironment {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.applyRendererPixelRatioForCurrentPreset();
+  }
+
+  public setFieldOfView(fieldOfView: number): void {
+    if (!Number.isFinite(fieldOfView)) {
+      return;
+    }
+    this.camera.fov = Math.max(MIN_FIELD_OF_VIEW, Math.min(MAX_FIELD_OF_VIEW, fieldOfView));
+    this.camera.updateProjectionMatrix();
+  }
+
+  public setGraphicsPreset(preset: GraphicsPreset): void {
+    const profile = GRAPHICS_PRESET_PROFILE[preset];
+    if (!profile) {
+      return;
+    }
+    this.graphicsPreset = preset;
+    this.grassLodNearDistance = profile.nearLodDistance;
+    this.grassLodFarDistance = profile.farLodDistance;
+    this.applyRendererPixelRatioForCurrentPreset();
+    this.updateGrassLod(this.camera.position.x, this.camera.position.z);
   }
 
   public render(
@@ -942,6 +980,16 @@ export class WorldEnvironment {
     this.tryAddGrassInstances();
   }
 
+  private applyRendererPixelRatioForCurrentPreset(): void {
+    const profile = GRAPHICS_PRESET_PROFILE[this.graphicsPreset];
+    if (!profile) {
+      return;
+    }
+    const devicePixelRatio = this.e2eMode ? 1 : Math.min(window.devicePixelRatio, 2);
+    const targetPixelRatio = Math.max(0.5, Math.min(2, devicePixelRatio * profile.pixelRatioScale));
+    this.renderer.setPixelRatio(targetPixelRatio);
+  }
+
   private tryAddGrassInstances(): void {
     if (this.grassInstancesAdded || !this.pendingGrassInstances) {
       return;
@@ -956,8 +1004,8 @@ export class WorldEnvironment {
   }
 
   private updateGrassLod(cameraX: number, cameraZ: number): void {
-    const nearSq = GRASS_LOD_NEAR_DISTANCE * GRASS_LOD_NEAR_DISTANCE;
-    const farSq = GRASS_LOD_FAR_DISTANCE * GRASS_LOD_FAR_DISTANCE;
+    const nearSq = this.grassLodNearDistance * this.grassLodNearDistance;
+    const farSq = this.grassLodFarDistance * this.grassLodFarDistance;
     for (const batch of this.grassCellBatches) {
       const dx = batch.centerX - cameraX;
       const dz = batch.centerZ - cameraZ;

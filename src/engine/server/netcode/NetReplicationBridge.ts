@@ -9,7 +9,7 @@ import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 
 type NetEntity = {
   nid: number;
-  ntype: NType.BaseEntity | NType.LocationRootEntity;
+  ntype: NType.RuntimeEntity | NType.WorldAnchorEntity;
   x: number; y: number; z: number;
   modelId: number;
   position: { x: number; y: number; z: number };
@@ -17,7 +17,8 @@ type NetEntity = {
   grounded: boolean;
   movementMode: MovementMode;
   health: number; maxHealth: number;
-  itemArchetypeId: number; itemQuantity: number;
+  pickupDefinitionId: number; itemQuantity: number;
+  locationPid: number;
   locationKind: number; locationArchetypeId: number;
   locationSeed: number; locationEnvironmentId: number;
   locationStreamingRadius: number; locationInfluenceRadius: number;
@@ -51,7 +52,7 @@ export class NetReplicationBridge {
 
     const netEntity: NetEntity = {
       nid: 0,
-      ntype: isLocationRoot ? NType.LocationRootEntity : NType.BaseEntity,
+      ntype: isLocationRoot ? NType.WorldAnchorEntity : NType.RuntimeEntity,
       x, y, z,
       modelId: this.c.ModelId.value[simEid] ?? 0,
       position: { x, y, z },
@@ -65,8 +66,9 @@ export class NetReplicationBridge {
       movementMode: sanitizeMovementMode(this.c.MovementMode.value[simEid], MOVEMENT_MODE_GROUNDED),
       health: this.c.Health.value[simEid] ?? 0,
       maxHealth: this.c.Health.max[simEid] ?? 0,
-      itemArchetypeId: this.c.ItemArchetypeId.value[simEid] ?? 0,
+      pickupDefinitionId: this.c.ItemArchetypeId.value[simEid] ?? 0,
       itemQuantity: this.c.ItemQuantity.value[simEid] ?? 0,
+      locationPid: this.c.LocationPid.value[simEid] ?? 0,
       locationKind: locKind,
       locationArchetypeId: locArchetypeId,
       locationSeed: this.c.LocationSeed.value[simEid] ?? 0,
@@ -102,8 +104,9 @@ export class NetReplicationBridge {
     netEntity.movementMode = sanitizeMovementMode(this.c.MovementMode.value[simEid], MOVEMENT_MODE_GROUNDED);
     netEntity.health = this.c.Health.value[simEid] ?? 0;
     netEntity.maxHealth = this.c.Health.max[simEid] ?? 0;
-    netEntity.itemArchetypeId = this.c.ItemArchetypeId.value[simEid] ?? 0;
+    netEntity.pickupDefinitionId = this.c.ItemArchetypeId.value[simEid] ?? 0;
     netEntity.itemQuantity = this.c.ItemQuantity.value[simEid] ?? 0;
+    netEntity.locationPid = this.c.LocationPid.value[simEid] ?? 0;
     netEntity.locationKind = this.c.LocationKind.value[simEid] ?? 0;
     netEntity.locationArchetypeId = this.c.LocationArchetypeId.value[simEid] ?? 0;
     netEntity.locationSeed = this.c.LocationSeed.value[simEid] ?? 0;
@@ -121,3 +124,4 @@ export class NetReplicationBridge {
     this.channelBySimEid.delete(simEid);
   }
 }
+

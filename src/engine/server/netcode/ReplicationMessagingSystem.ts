@@ -205,4 +205,28 @@ export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
       })
     });
   }
+
+  public queueCarrierVolumeEntered(userId: number, framePid: number, volumeId: string): void {
+    const user = this.options.getUserById(userId);
+    if (!user) {
+      return;
+    }
+    user.queueMessage({
+      ntype: NType.CarrierVolumeEnteredMessage,
+      framePid: Math.floor(framePid),
+      volumeId
+    });
+  }
+
+  public queueCarrierVolumeExited(userId: number, framePid: number, volumeId: string): void {
+    const user = this.options.getUserById(userId);
+    if (!user) {
+      return;
+    }
+    user.queueMessage({
+      ntype: NType.CarrierVolumeExitedMessage,
+      framePid: Math.floor(framePid),
+      volumeId
+    });
+  }
 }

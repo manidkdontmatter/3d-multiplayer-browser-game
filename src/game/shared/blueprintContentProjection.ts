@@ -74,9 +74,9 @@ function projectItemCatalog(blueprints: readonly BlueprintDefinition[]): ItemCat
       use: item.use ?? null
     })),
     starterWorldItems: [
-      { archetypeId: 200, quantity: 3, x: 2.35, y: 21.05, z: -2.4 },
-      { archetypeId: 201, quantity: 1, x: 2.15, y: 21.05, z: -2.65 },
-      { archetypeId: 202, quantity: 8, x: 3.55, y: 21.05, z: -2.95 }
+      { definitionId: 200, quantity: 3, x: 2.35, y: 34.05, z: -2.4 },
+      { definitionId: 201, quantity: 1, x: 2.15, y: 34.05, z: -2.65 },
+      { definitionId: 202, quantity: 8, x: 3.55, y: 34.05, z: -2.95 }
     ]
   };
 }
@@ -90,3 +90,4 @@ function projectPlatformCatalog(blueprints: readonly BlueprintDefinition[]): Pla
     platforms
   };
 }
+

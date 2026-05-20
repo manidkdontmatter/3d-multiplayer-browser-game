@@ -14,6 +14,7 @@ import {
   MeshBasicMaterial,
   MeshStandardMaterial,
   Quaternion,
+  Vector3,
   SphereGeometry,
   type Scene
 } from "three";
@@ -32,36 +33,77 @@ import {
 
 const LOCATION_CACHE_TTL_MS = 10 * 60 * 1000;
 const CARRIER_VOLUME_WIREFRAME_COLOR = 0x66e0ff;
+let LOCATION_PRESENTATION_SMOOTH_RATE = 39;
+let LOCATION_PRESENTATION_SNAP_DISTANCE = 24;
+let LOCATION_PRESENTATION_SNAP_DOT = -0.25;
+let LOCATION_PRESENTATION_SMOOTH_ENABLED = true;
 
 interface LocationVisual {
   group: Group;
+  locationPid: number;
   lastSeenMs: number;
 }
 
 export class WorldEntityVisualSystem {
   private readonly worldEntities = new Map<number, Mesh>();
   private readonly locations = new Map<number, LocationVisual>();
+  private readonly renderedLocationByPid = new Map<
+    number,
+    { x: number; y: number; z: number; rotation: { x: number; y: number; z: number; w: number } }
+  >();
   private readonly quatScratch = new Quaternion();
+  private readonly vectorScratch = new Vector3();
 
   public constructor(private readonly scene: Scene) {}
 
-  public syncLocationRoots(locationRoots: LocationRootState[]): void {
+  public syncLocationRoots(locationRoots: LocationRootState[], frameDeltaSeconds: number): void {
     const now = performance.now();
     const activeNids = new Set<number>();
+    this.renderedLocationByPid.clear();
+    const dt = Math.max(0, Number.isFinite(frameDeltaSeconds) ? frameDeltaSeconds : 0);
+    const alpha = dt > 0 ? 1 - Math.exp(-LOCATION_PRESENTATION_SMOOTH_RATE * dt) : 1;
     for (const root of locationRoots) {
       activeNids.add(root.nid);
       let visual = this.locations.get(root.nid);
       if (!visual) {
         const group = this.createLocationGroup(root);
-        visual = { group, lastSeenMs: now };
+        group.position.set(root.x, root.y, root.z);
+        this.quatScratch.set(root.rotation.x, root.rotation.y, root.rotation.z, root.rotation.w);
+        group.setRotationFromQuaternion(this.quatScratch);
+        visual = { group, locationPid: root.locationPid, lastSeenMs: now };
         this.locations.set(root.nid, visual);
         this.scene.add(group);
       }
+      visual.locationPid = root.locationPid;
       visual.lastSeenMs = now;
       visual.group.visible = true;
-      visual.group.position.set(root.x, root.y, root.z);
       this.quatScratch.set(root.rotation.x, root.rotation.y, root.rotation.z, root.rotation.w);
-      visual.group.setRotationFromQuaternion(this.quatScratch);
+      this.vectorScratch.set(root.x, root.y, root.z);
+      const snapDistance = visual.group.position.distanceTo(this.vectorScratch);
+      const snapRotation = visual.group.quaternion.dot(this.quatScratch) < LOCATION_PRESENTATION_SNAP_DOT;
+      if (
+        !LOCATION_PRESENTATION_SMOOTH_ENABLED ||
+        snapDistance >= LOCATION_PRESENTATION_SNAP_DISTANCE ||
+        snapRotation ||
+        alpha >= 1
+      ) {
+        visual.group.position.copy(this.vectorScratch);
+        visual.group.quaternion.copy(this.quatScratch);
+      } else {
+        visual.group.position.lerp(this.vectorScratch, alpha);
+        visual.group.quaternion.slerp(this.quatScratch, alpha);
+      }
+      this.renderedLocationByPid.set(visual.locationPid, {
+        x: visual.group.position.x,
+        y: visual.group.position.y,
+        z: visual.group.position.z,
+        rotation: {
+          x: visual.group.quaternion.x,
+          y: visual.group.quaternion.y,
+          z: visual.group.quaternion.z,
+          w: visual.group.quaternion.w
+        }
+      });
     }
 
     for (const [nid, visual] of this.locations) {
@@ -75,6 +117,73 @@ export class WorldEntityVisualSystem {
       this.scene.remove(visual.group);
       this.disposeObjectTree(visual.group);
       this.locations.delete(nid);
+    }
+  }
+
+  public getRenderedLocationRootByLocationPid(locationPid: number): {
+    x: number;
+    y: number;
+    z: number;
+    rotation: { x: number; y: number; z: number; w: number };
+  } | null {
+    const cached = this.renderedLocationByPid.get(locationPid);
+    if (cached) {
+      return cached;
+    }
+    for (const visual of this.locations.values()) {
+      if (visual.locationPid !== locationPid || !visual.group.visible) {
+        continue;
+      }
+      return {
+        x: visual.group.position.x,
+        y: visual.group.position.y,
+        z: visual.group.position.z,
+        rotation: {
+          x: visual.group.quaternion.x,
+          y: visual.group.quaternion.y,
+          z: visual.group.quaternion.z,
+          w: visual.group.quaternion.w
+        }
+      };
+    }
+    return null;
+  }
+
+  public getRenderedLocationFrameSnapshot(): ReadonlyMap<
+    number,
+    { x: number; y: number; z: number; rotation: { x: number; y: number; z: number; w: number } }
+  > {
+    return this.renderedLocationByPid;
+  }
+
+  public getLocationPresentationTuning(): {
+    enabled: boolean;
+    smoothRate: number;
+    snapDistance: number;
+    snapDot: number;
+  } {
+    return {
+      enabled: LOCATION_PRESENTATION_SMOOTH_ENABLED,
+      smoothRate: LOCATION_PRESENTATION_SMOOTH_RATE,
+      snapDistance: LOCATION_PRESENTATION_SNAP_DISTANCE,
+      snapDot: LOCATION_PRESENTATION_SNAP_DOT
+    };
+  }
+
+  public setLocationPresentationTuning(
+    tuning: Partial<{ enabled: boolean; smoothRate: number; snapDistance: number; snapDot: number }>
+  ): void {
+    if (typeof tuning.enabled === "boolean") {
+      LOCATION_PRESENTATION_SMOOTH_ENABLED = tuning.enabled;
+    }
+    if (typeof tuning.smoothRate === "number" && Number.isFinite(tuning.smoothRate)) {
+      LOCATION_PRESENTATION_SMOOTH_RATE = Math.max(0, tuning.smoothRate);
+    }
+    if (typeof tuning.snapDistance === "number" && Number.isFinite(tuning.snapDistance)) {
+      LOCATION_PRESENTATION_SNAP_DISTANCE = Math.max(0, tuning.snapDistance);
+    }
+    if (typeof tuning.snapDot === "number" && Number.isFinite(tuning.snapDot)) {
+      LOCATION_PRESENTATION_SNAP_DOT = Math.max(-1, Math.min(1, tuning.snapDot));
     }
   }
 

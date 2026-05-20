@@ -4,13 +4,9 @@
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
 import {
-  getLocationDefinitionByPid,
   normalizeYaw,
-  PLATFORM_DEFINITIONS,
-  sampleLocationTransform,
   SERVER_TICK_SECONDS
 } from "../../../shared/index";
-import { samplePlatformTransform } from "../../../shared/platforms";
 import { LocalPhysicsWorld } from "../LocalPhysicsWorld";
 import { NetworkClient } from "../NetworkClient";
 import { ReconciliationSmoother } from "../ReconciliationSmoother";
@@ -38,7 +34,7 @@ export interface ClientNetworkStepParams {
 
 export class ClientNetworkOrchestrator {
   private readonly reconciliationSmoother: ReconciliationSmoother;
-  private lastNonCspYawCarryServerTimeSeconds: number | null = null;
+  private renderServerTimeSeconds: number | null = null;
 
   public constructor(
     private readonly network: NetworkClient,
@@ -65,10 +61,8 @@ export class ClientNetworkOrchestrator {
 
     let preReconciliationPose: PlayerPose | null = null;
     if (isCspActive) {
-      this.lastNonCspYawCarryServerTimeSeconds = null;
       const predictedPlatformYawDelta = this.physics.predictAttachedPlatformYawDelta(delta);
-      const predictedFrameYawDelta = this.physics.predictCarriedFrameYawDelta(delta);
-      const predictedYawDelta = normalizeYaw(predictedPlatformYawDelta + predictedFrameYawDelta);
+      const predictedYawDelta = normalizeYaw(predictedPlatformYawDelta);
       if (Math.abs(predictedYawDelta) > 1e-6) {
         look.applyYawDelta(predictedYawDelta);
         this.network.syncSentYaw(look.getYaw());
@@ -77,7 +71,6 @@ export class ClientNetworkOrchestrator {
       this.physics.step(delta, movement, yaw, pitch);
       preReconciliationPose = this.physics.getPose();
     } else {
-      this.applyDeterministicPlatformYawCarryForCspOff(look);
       this.reconciliationSmoother.reset();
     }
 
@@ -130,6 +123,40 @@ export class ClientNetworkOrchestrator {
   }
 
   public getRenderServerTimeSeconds(isCspActive: boolean): number {
+    if (this.renderServerTimeSeconds === null) {
+      this.updateRenderServerTimeClock(isCspActive, 0);
+    }
+    return this.renderServerTimeSeconds ?? 0;
+  }
+
+  public advanceRenderServerTime(seconds: number, isCspActive: boolean): number {
+    this.updateRenderServerTimeClock(isCspActive, seconds);
+    return this.renderServerTimeSeconds ?? 0;
+  }
+
+  private updateRenderServerTimeClock(isCspActive: boolean, seconds: number): void {
+    const dt = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+    const target = this.resolveRenderServerTimeTargetSeconds(isCspActive);
+    if (this.renderServerTimeSeconds === null || !Number.isFinite(this.renderServerTimeSeconds)) {
+      this.renderServerTimeSeconds = target;
+      return;
+    }
+    if (dt > 0) {
+      this.renderServerTimeSeconds += dt;
+    }
+    const error = target - this.renderServerTimeSeconds;
+    if (Math.abs(error) > 0.5) {
+      this.renderServerTimeSeconds = target;
+      return;
+    }
+    const correctionGain = Math.min(1, dt * 8);
+    this.renderServerTimeSeconds += error * correctionGain;
+    if (this.renderServerTimeSeconds < 0) {
+      this.renderServerTimeSeconds = 0;
+    }
+  }
+
+  private resolveRenderServerTimeTargetSeconds(isCspActive: boolean): number {
     if (isCspActive) {
       return this.physics.getSimulationSeconds();
     }
@@ -150,59 +177,7 @@ export class ClientNetworkOrchestrator {
   }
 
   public reset(): void {
-    this.lastNonCspYawCarryServerTimeSeconds = null;
     this.reconciliationSmoother.reset();
-  }
-
-  private applyDeterministicPlatformYawCarryForCspOff(look: {
-    getYaw: () => number;
-    applyYawDelta: (deltaYaw: number) => void;
-  }): void {
-    const currentServerTimeSeconds = this.getRenderServerTimeSeconds(false);
-    const previousServerTimeSeconds = this.lastNonCspYawCarryServerTimeSeconds;
-    this.lastNonCspYawCarryServerTimeSeconds = currentServerTimeSeconds;
-    if (previousServerTimeSeconds === null) {
-      return;
-    }
-
-    const groundedPlatformPid = this.network.getServerGroundedPlatformPid();
-    if (groundedPlatformPid >= 0) {
-      const definition = PLATFORM_DEFINITIONS.find((platform) => platform.pid === groundedPlatformPid);
-      if (!definition) {
-        return;
-      }
-
-      const previousPose = samplePlatformTransform(definition, previousServerTimeSeconds);
-      const currentPose = samplePlatformTransform(definition, currentServerTimeSeconds);
-      this.applyYawCarryDelta(look, normalizeYaw(currentPose.yaw - previousPose.yaw));
-      return;
-    }
-
-    const carriedFramePid = this.network.getServerCarriedFramePid();
-    if (carriedFramePid < 0) {
-      return;
-    }
-    const location = getLocationDefinitionByPid(carriedFramePid);
-    if (!location || location.motion === "static") {
-      return;
-    }
-
-    const previousPose = sampleLocationTransform(location, previousServerTimeSeconds);
-    const currentPose = sampleLocationTransform(location, currentServerTimeSeconds);
-    this.applyYawCarryDelta(look, normalizeYaw(currentPose.yaw - previousPose.yaw));
-  }
-
-  private applyYawCarryDelta(
-    look: {
-      getYaw: () => number;
-      applyYawDelta: (deltaYaw: number) => void;
-    },
-    yawDelta: number
-  ): void {
-    if (Math.abs(yawDelta) <= 1e-6) {
-      return;
-    }
-    look.applyYawDelta(yawDelta);
-    this.network.syncSentYaw(look.getYaw());
+    this.renderServerTimeSeconds = null;
   }
 }

@@ -1,17 +1,31 @@
 /**
- * Purpose: This file manages shared item data or item-related runtime behavior.
+ * Purpose: This file defines canonical shared item, item-instance, inventory, and pickup data models.
  * Scope: It belongs to the engine shared rules/data layer.
- * Human Summary: Shared by client and server so both sides use the same definitions where required.
+ * Human Summary: Shared by client and server so both sides use one authoritative vocabulary and schema.
  */
 export type ItemCategory = "consumable" | "equipment" | "material" | "quest";
 export type EquipmentSlot = "weapon" | "head" | "body" | "legs" | "accessory";
+export type PickupPersistencePolicy = "persistent" | "transient_bootstrap" | "transient_runtime";
 
-export interface ItemUseDefinition {
+export interface ItemUseAction {
+  key: string;
+  label: string;
   restoreHealth?: number;
   consumeQuantity: number;
 }
 
-export interface ItemArchetypeDefinition {
+export interface ItemUseProfile {
+  actions: ItemUseAction[];
+}
+
+export type HotbarPayloadKind = "item_instance" | "ability" | "action";
+
+export interface HotbarSlotPayload {
+  kind: HotbarPayloadKind;
+  refId: number;
+}
+
+export interface ItemDefinition {
   id: number;
   key: string;
   name: string;
@@ -20,46 +34,81 @@ export interface ItemArchetypeDefinition {
   modelId: number;
   stackMax: number;
   equipSlot: EquipmentSlot | null;
-  use: ItemUseDefinition | null;
+  use: ItemUseProfile | null;
 }
 
-export interface StarterWorldItemDefinition {
-  archetypeId: number;
+export interface PickupSpawnDefinition {
+  definitionId: number;
   quantity: number;
   x: number;
   y: number;
   z: number;
+  persistencePolicy: PickupPersistencePolicy;
 }
 
-export interface InventoryItemEntry {
+export interface ItemInstance {
   itemInstanceId: number;
-  archetypeId: number;
+  definitionId: number;
   quantity: number;
   slotIndex: number;
 }
 
-export interface InventoryStateSnapshot {
+export interface InventorySnapshot {
   maxSlots: number;
-  items: InventoryItemEntry[];
+  itemInstances: ItemInstance[];
   equipment: Partial<Record<EquipmentSlot, number>>;
+  hotbarSlots: Array<HotbarSlotPayload | null>;
 }
 
-export interface WorldItemState {
+export interface PickupState {
   nid: number;
+  pickupId: number;
   modelId: number;
-  itemArchetypeId: number;
-  itemQuantity: number;
+  definitionId: number;
+  quantity: number;
+  persistencePolicy: PickupPersistencePolicy;
   x: number;
   y: number;
   z: number;
   rotation: { x: number; y: number; z: number; w: number };
 }
 
-export const ITEM_COMMAND_PICKUP = 1;
-export const ITEM_COMMAND_DROP = 2;
-export const ITEM_COMMAND_USE = 3;
-export const ITEM_COMMAND_EQUIP = 4;
-export const ITEM_COMMAND_UNEQUIP = 5;
+export const INVENTORY_OP_PICKUP = 1;
+export const INVENTORY_OP_DROP = 2;
+export const INVENTORY_OP_USE = 3;
+export const INVENTORY_OP_EQUIP = 4;
+export const INVENTORY_OP_UNEQUIP = 5;
+export const INVENTORY_OP_ASSIGN_HOTBAR_SLOT = 6;
+export const INVENTORY_OP_CLEAR_HOTBAR_SLOT = 7;
+export const INVENTORY_OP_MOVE_HOTBAR_SLOT = 8;
+export const INVENTORY_OP_EXECUTE_HOTBAR_SLOT = 9;
+export const INVENTORY_OP_DROP_HOTBAR_SLOT = 10;
+
+export const ITEM_ACTIVATION_CHANNEL_DEFAULT = 0;
+export const ITEM_ACTIVATION_CHANNEL_SECONDARY = 1;
+export const ITEM_ACTIVATION_CHANNEL_TERTIARY = 2;
+export const ITEM_ACTIVATION_CHANNEL_QUATERNARY = 3;
+export const ITEM_ACTIVATION_CHANNEL_QUINARY = 4;
+export const HOTBAR_PAYLOAD_KIND_NONE = 0;
+export const HOTBAR_PAYLOAD_KIND_ITEM_INSTANCE = 1;
+export const HOTBAR_PAYLOAD_KIND_ABILITY = 2;
+export const HOTBAR_PAYLOAD_KIND_ACTION = 3;
+
+export function hotbarPayloadKindToWireValue(kind: HotbarPayloadKind | null | undefined): number {
+  if (kind === "item_instance") return HOTBAR_PAYLOAD_KIND_ITEM_INSTANCE;
+  if (kind === "ability") return HOTBAR_PAYLOAD_KIND_ABILITY;
+  if (kind === "action") return HOTBAR_PAYLOAD_KIND_ACTION;
+  return HOTBAR_PAYLOAD_KIND_NONE;
+}
+
+export function hotbarPayloadKindFromWireValue(value: number): HotbarPayloadKind | null {
+  if (!Number.isFinite(value)) return null;
+  const normalized = Math.max(0, Math.floor(value));
+  if (normalized === HOTBAR_PAYLOAD_KIND_ITEM_INSTANCE) return "item_instance";
+  if (normalized === HOTBAR_PAYLOAD_KIND_ABILITY) return "ability";
+  if (normalized === HOTBAR_PAYLOAD_KIND_ACTION) return "action";
+  return null;
+}
 
 export const EQUIPMENT_SLOT_WIRE_VALUE: Readonly<Record<EquipmentSlot, number>> = Object.freeze({
   weapon: 1,
@@ -79,15 +128,15 @@ export type ItemCatalogRaw = {
     maxSlots?: unknown;
   };
   items: unknown;
+  starterPickupSpawns?: unknown;
   starterWorldItems?: unknown;
 };
 
-// Mutable catalog — populated by injectItemCatalog() which the game layer calls at startup.
-let ITEM_DEFINITIONS: ReadonlyArray<ItemArchetypeDefinition> = Object.freeze([]);
-let ITEM_DEFINITIONS_BY_ID = new Map<number, ItemArchetypeDefinition>();
-let ITEM_DEFINITIONS_BY_MODEL_ID = new Map<number, ItemArchetypeDefinition>();
+let ITEM_DEFINITIONS: ReadonlyArray<ItemDefinition> = Object.freeze([]);
+let ITEM_DEFINITIONS_BY_ID = new Map<number, ItemDefinition>();
+let ITEM_DEFINITIONS_BY_MODEL_ID = new Map<number, ItemDefinition>();
 export let INVENTORY_MAX_SLOTS = 32;
-export let STARTER_WORLD_ITEMS: ReadonlyArray<StarterWorldItemDefinition> = Object.freeze([]);
+export let STARTER_PICKUP_SPAWNS: ReadonlyArray<PickupSpawnDefinition> = Object.freeze([]);
 
 export function injectItemCatalog(raw: ItemCatalogRaw): void {
   const parsed = parseItemCatalog(raw);
@@ -95,21 +144,21 @@ export function injectItemCatalog(raw: ItemCatalogRaw): void {
   ITEM_DEFINITIONS_BY_ID = new Map(parsed.items.map((item) => [item.id, item]));
   ITEM_DEFINITIONS_BY_MODEL_ID = new Map(parsed.items.map((item) => [item.modelId, item]));
   INVENTORY_MAX_SLOTS = parsed.maxSlots;
-  STARTER_WORLD_ITEMS = Object.freeze(parsed.starterWorldItems);
+  STARTER_PICKUP_SPAWNS = Object.freeze(parsed.starterPickupSpawns);
 }
 
-export function getAllItemDefinitions(): ReadonlyArray<ItemArchetypeDefinition> {
+export function getAllItemDefinitions(): ReadonlyArray<ItemDefinition> {
   return ITEM_DEFINITIONS;
 }
 
-export function getItemDefinitionById(archetypeId: number): ItemArchetypeDefinition | null {
-  if (!Number.isFinite(archetypeId)) {
+export function getItemDefinitionById(definitionId: number): ItemDefinition | null {
+  if (!Number.isFinite(definitionId)) {
     return null;
   }
-  return ITEM_DEFINITIONS_BY_ID.get(Math.max(0, Math.floor(archetypeId))) ?? null;
+  return ITEM_DEFINITIONS_BY_ID.get(Math.max(0, Math.floor(definitionId))) ?? null;
 }
 
-export function getItemDefinitionByModelId(modelId: number): ItemArchetypeDefinition | null {
+export function getItemDefinitionByModelId(modelId: number): ItemDefinition | null {
   if (!Number.isFinite(modelId)) {
     return null;
   }
@@ -138,40 +187,65 @@ export function sanitizeInventoryQuantity(quantity: number, maxQuantity: number)
   return Math.max(0, Math.min(max, Math.floor(quantity)));
 }
 
-export function encodeInventoryStateSnapshot(snapshot: InventoryStateSnapshot): string {
+export function encodeInventorySnapshot(snapshot: InventorySnapshot): string {
   return JSON.stringify({
     maxSlots: Math.max(0, Math.floor(snapshot.maxSlots)),
-    items: snapshot.items.map((item) => ({
+    itemInstances: snapshot.itemInstances.map((item) => ({
       itemInstanceId: Math.max(0, Math.floor(item.itemInstanceId)),
-      archetypeId: Math.max(0, Math.floor(item.archetypeId)),
+      definitionId: Math.max(0, Math.floor(item.definitionId)),
       quantity: Math.max(0, Math.floor(item.quantity)),
       slotIndex: Math.max(0, Math.floor(item.slotIndex))
     })),
-    equipment: snapshot.equipment
+    equipment: snapshot.equipment,
+    hotbarSlots: Array.isArray(snapshot.hotbarSlots)
+      ? snapshot.hotbarSlots.map((entry) => {
+          if (!entry || typeof entry !== "object") {
+            return null;
+          }
+          const kind = entry.kind;
+          if (kind !== "item_instance" && kind !== "ability" && kind !== "action") {
+            return null;
+          }
+          return {
+            kind,
+            refId: Math.max(0, Math.floor(Number(entry.refId) || 0))
+          };
+        })
+      : []
   });
 }
 
-export function decodeInventoryStateSnapshot(rawJson: string): InventoryStateSnapshot | null {
+export function decodeInventorySnapshot(rawJson: string): InventorySnapshot | null {
   try {
-    const parsed = JSON.parse(rawJson) as Partial<InventoryStateSnapshot>;
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.items)) {
+    const parsed = JSON.parse(rawJson) as Partial<InventorySnapshot> & {
+      items?: Array<Partial<ItemInstance> & { archetypeId?: number }>;
+      itemInstances?: Array<Partial<ItemInstance>>;
+    };
+    const rawItems = Array.isArray(parsed.itemInstances)
+      ? parsed.itemInstances
+      : Array.isArray(parsed.items)
+        ? parsed.items
+        : null;
+    if (!parsed || typeof parsed !== "object" || !rawItems) {
       return null;
     }
     const maxSlots = Math.max(0, Math.floor(Number(parsed.maxSlots) || INVENTORY_MAX_SLOTS));
-    const items: InventoryItemEntry[] = [];
-    for (const rawItem of parsed.items) {
+    const itemInstances: ItemInstance[] = [];
+    for (const rawItem of rawItems) {
       if (!rawItem || typeof rawItem !== "object") {
         continue;
       }
-      const entry = rawItem as Partial<InventoryItemEntry>;
-      const itemInstanceId = Math.max(0, Math.floor(Number(entry.itemInstanceId) || 0));
-      const archetypeId = Math.max(0, Math.floor(Number(entry.archetypeId) || 0));
-      const quantity = Math.max(0, Math.floor(Number(entry.quantity) || 0));
-      const slotIndex = Math.max(0, Math.floor(Number(entry.slotIndex) || 0));
-      if (itemInstanceId <= 0 || !getItemDefinitionById(archetypeId) || quantity <= 0) {
+      const itemInstanceId = Math.max(0, Math.floor(Number(rawItem.itemInstanceId) || 0));
+      const definitionId = Math.max(
+        0,
+        Math.floor(Number((rawItem as { definitionId?: number }).definitionId ?? (rawItem as { archetypeId?: number }).archetypeId) || 0)
+      );
+      const quantity = Math.max(0, Math.floor(Number(rawItem.quantity) || 0));
+      const slotIndex = Math.max(0, Math.floor(Number(rawItem.slotIndex) || 0));
+      if (itemInstanceId <= 0 || !getItemDefinitionById(definitionId) || quantity <= 0) {
         continue;
       }
-      items.push({ itemInstanceId, archetypeId, quantity, slotIndex });
+      itemInstances.push({ itemInstanceId, definitionId, quantity, slotIndex });
     }
     const equipment: Partial<Record<EquipmentSlot, number>> = {};
     if (parsed.equipment && typeof parsed.equipment === "object") {
@@ -183,10 +257,30 @@ export function decodeInventoryStateSnapshot(rawJson: string): InventoryStateSna
         }
       }
     }
+    const hotbarSlots: Array<HotbarSlotPayload | null> = [];
+    if (Array.isArray((parsed as { hotbarSlots?: unknown[] }).hotbarSlots)) {
+      const entries = (parsed as { hotbarSlots: unknown[] }).hotbarSlots;
+      for (const entry of entries) {
+        if (!entry || typeof entry !== "object") {
+          hotbarSlots.push(null);
+          continue;
+        }
+        const typedEntry = entry as Partial<HotbarSlotPayload>;
+        const kind = typedEntry.kind;
+        const refId = Math.max(0, Math.floor(Number(typedEntry.refId) || 0));
+        if ((kind === "item_instance" || kind === "ability" || kind === "action") && refId > 0) {
+          hotbarSlots.push({ kind, refId });
+        } else {
+          hotbarSlots.push(null);
+        }
+      }
+    }
+
     return {
       maxSlots,
-      items,
-      equipment
+      itemInstances,
+      equipment,
+      hotbarSlots
     };
   } catch {
     return null;
@@ -195,44 +289,49 @@ export function decodeInventoryStateSnapshot(rawJson: string): InventoryStateSna
 
 function parseItemCatalog(raw: ItemCatalogRaw): {
   maxSlots: number;
-  items: ItemArchetypeDefinition[];
-  starterWorldItems: StarterWorldItemDefinition[];
+  items: ItemDefinition[];
+  starterPickupSpawns: PickupSpawnDefinition[];
 } {
   if (!raw || typeof raw !== "object") {
-    throw new Error("item-archetypes catalog must be an object.");
+    throw new Error("item catalog must be an object.");
   }
-  const version = parseFiniteInt(raw.version, "item-archetypes.version");
+  const version = parseFiniteInt(raw.version, "item-catalog.version");
   if (version !== 1) {
-    throw new Error(`Unsupported item-archetypes version: ${String(raw.version)}`);
+    throw new Error(`Unsupported item catalog version: ${String(raw.version)}`);
   }
   if (!Array.isArray(raw.items) || raw.items.length === 0) {
-    throw new Error("item-archetypes.items must be a non-empty array.");
+    throw new Error("item-catalog.items must be a non-empty array.");
   }
-  const items = raw.items.map((entry, index) => parseItemDefinition(entry, `item-archetypes.items[${index}]`));
+  const items = raw.items.map((entry, index) => parseItemDefinition(entry, `item-catalog.items[${index}]`));
   const ids = new Set<number>();
   const modelIds = new Set<number>();
   for (const item of items) {
     if (ids.has(item.id)) {
-      throw new Error(`item-archetypes contains duplicate item id ${item.id}.`);
+      throw new Error(`item-catalog contains duplicate item id ${item.id}.`);
     }
     if (modelIds.has(item.modelId)) {
-      throw new Error(`item-archetypes contains duplicate item model id ${item.modelId}.`);
+      throw new Error(`item-catalog contains duplicate item model id ${item.modelId}.`);
     }
     ids.add(item.id);
     modelIds.add(item.modelId);
   }
   const maxSlots = Math.max(1, Math.min(255, parseOptionalInt(raw.inventory?.maxSlots, 32)));
-  const starterWorldItems = Array.isArray(raw.starterWorldItems)
-    ? raw.starterWorldItems.map((entry, index) => parseStarterWorldItem(entry, ids, `item-archetypes.starterWorldItems[${index}]`))
-    : [];
+  const spawnSource = Array.isArray(raw.starterPickupSpawns)
+    ? raw.starterPickupSpawns
+    : Array.isArray(raw.starterWorldItems)
+      ? raw.starterWorldItems
+      : [];
+  const starterPickupSpawns = spawnSource.map((entry, index) =>
+    parseStarterPickupSpawn(entry, ids, `item-catalog.starterPickupSpawns[${index}]`)
+  );
   return {
     maxSlots,
     items,
-    starterWorldItems
+    starterPickupSpawns
   };
 }
 
-function parseItemDefinition(value: unknown, label: string): ItemArchetypeDefinition {
+function parseItemDefinition(value: unknown, label: string): ItemDefinition {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object.`);
   }
@@ -242,7 +341,7 @@ function parseItemDefinition(value: unknown, label: string): ItemArchetypeDefini
   const equipSlot = entry.equipSlot === undefined || entry.equipSlot === null
     ? null
     : parseEquipmentSlot(entry.equipSlot, `${label}.equipSlot`);
-  const use = entry.use === undefined || entry.use === null ? null : parseUseDefinition(entry.use, `${label}.use`);
+  const use = entry.use === undefined || entry.use === null ? null : parseUseProfile(entry.use, `${label}.use`);
   if (category === "equipment" && !equipSlot) {
     throw new Error(`${label}.equipSlot is required for equipment.`);
   }
@@ -259,33 +358,78 @@ function parseItemDefinition(value: unknown, label: string): ItemArchetypeDefini
   };
 }
 
-function parseUseDefinition(value: unknown, label: string): ItemUseDefinition {
+function parseUseProfile(value: unknown, label: string): ItemUseProfile {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object.`);
   }
   const entry = value as Record<string, unknown>;
+  if (Array.isArray(entry.actions)) {
+    const actions: ItemUseAction[] = entry.actions
+      .map((rawAction, index) => parseItemUseAction(rawAction, `${label}.actions[${index}]`))
+      .filter((rawAction): rawAction is ItemUseAction => Boolean(rawAction));
+    return { actions };
+  }
+  const consumeQuantity = entry.consumeQuantity === undefined
+    ? 1
+    : Math.max(1, parseFiniteInt(entry.consumeQuantity, `${label}.consumeQuantity`));
+  const restoreHealth =
+    entry.restoreHealth === undefined
+      ? undefined
+      : Math.max(0, parseFiniteNumber(entry.restoreHealth, `${label}.restoreHealth`));
   return {
-    restoreHealth:
-      entry.restoreHealth === undefined ? undefined : Math.max(0, parseFiniteNumber(entry.restoreHealth, `${label}.restoreHealth`)),
-    consumeQuantity: Math.max(1, parseFiniteInt(entry.consumeQuantity, `${label}.consumeQuantity`))
+    actions: [
+      {
+        key: "default",
+        label: typeof entry.label === "string" && entry.label.trim().length > 0 ? entry.label.trim() : "Use",
+        consumeQuantity,
+        restoreHealth
+      }
+    ]
   };
 }
 
-function parseStarterWorldItem(value: unknown, ids: Set<number>, label: string): StarterWorldItemDefinition {
+function parseItemUseAction(value: unknown, label: string): ItemUseAction | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  const key = typeof entry.key === "string" && entry.key.trim().length > 0 ? entry.key.trim() : "";
+  const actionLabel = typeof entry.label === "string" && entry.label.trim().length > 0 ? entry.label.trim() : "";
+  if (key.length <= 0 || actionLabel.length <= 0) {
+    return null;
+  }
+  const consumeQuantity = Math.max(1, parseFiniteInt(entry.consumeQuantity ?? 1, `${label}.consumeQuantity`));
+  const restoreHealth =
+    entry.restoreHealth === undefined
+      ? undefined
+      : Math.max(0, parseFiniteNumber(entry.restoreHealth, `${label}.restoreHealth`));
+  return {
+    key,
+    label: actionLabel,
+    consumeQuantity,
+    restoreHealth
+  };
+}
+
+function parseStarterPickupSpawn(value: unknown, ids: Set<number>, label: string): PickupSpawnDefinition {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object.`);
   }
   const entry = value as Record<string, unknown>;
-  const archetypeId = parseFiniteInt(entry.archetypeId, `${label}.archetypeId`);
-  if (!ids.has(archetypeId)) {
-    throw new Error(`${label}.archetypeId references unknown item id ${archetypeId}.`);
+  const definitionId = parseFiniteInt(
+    entry.definitionId === undefined ? entry.archetypeId : entry.definitionId,
+    `${label}.definitionId`
+  );
+  if (!ids.has(definitionId)) {
+    throw new Error(`${label}.definitionId references unknown item id ${definitionId}.`);
   }
   return {
-    archetypeId,
+    definitionId,
     quantity: Math.max(1, parseFiniteInt(entry.quantity, `${label}.quantity`)),
     x: parseFiniteNumber(entry.x, `${label}.x`),
     y: parseFiniteNumber(entry.y, `${label}.y`),
-    z: parseFiniteNumber(entry.z, `${label}.z`)
+    z: parseFiniteNumber(entry.z, `${label}.z`),
+    persistencePolicy: parsePickupPersistencePolicy(entry.persistencePolicy, `${label}.persistencePolicy`, "transient_bootstrap")
   };
 }
 
@@ -301,6 +445,20 @@ function parseEquipmentSlot(value: unknown, label: string): EquipmentSlot {
     return value;
   }
   throw new Error(`${label} must be one of weapon|head|body|legs|accessory.`);
+}
+
+function parsePickupPersistencePolicy(
+  value: unknown,
+  label: string,
+  fallback: PickupPersistencePolicy
+): PickupPersistencePolicy {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (value === "persistent" || value === "transient_bootstrap" || value === "transient_runtime") {
+    return value;
+  }
+  throw new Error(`${label} must be one of persistent|transient_bootstrap|transient_runtime.`);
 }
 
 function parseString(value: unknown, label: string): string {

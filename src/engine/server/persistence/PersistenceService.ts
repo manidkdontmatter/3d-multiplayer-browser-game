@@ -13,11 +13,15 @@ import {
   HOTBAR_SLOT_COUNT,
   INVENTORY_MAX_SLOTS,
   PLAYER_MAX_HEALTH,
+  DEFAULT_PLAYER_SETTINGS,
+  coercePlayerSettings,
+  type PlayerSettings,
   coerceBlueprintDefinition,
   type BlueprintAccessTag,
   type BlueprintDefinition,
   type EquipmentSlot,
-  type InventoryStateSnapshot
+  type InventorySnapshot,
+  type PickupPersistencePolicy
 } from "../../shared/index";
 
 const ACCESS_KEY_PATTERN = /^[A-Za-z0-9]{12}$/;
@@ -90,9 +94,25 @@ export interface PlayerSnapshotBatchEntry {
   snapshot: PlayerSnapshot;
   saveCharacter: boolean;
   saveAbilityState: boolean;
+  saveSettings?: boolean;
+  settings?: PlayerSettings | null;
 }
 
-export type PersistedInventoryState = InventoryStateSnapshot;
+export type PersistedInventoryState = InventorySnapshot;
+
+export interface PersistedPickupState {
+  pickupId: number;
+  definitionId: number;
+  modelId: number;
+  quantity: number;
+  persistencePolicy: PickupPersistencePolicy;
+  x: number;
+  y: number;
+  z: number;
+  rotation: { x: number; y: number; z: number; w: number };
+}
+
+export type PersistedPlayerSettings = PlayerSettings;
 
 export interface SaveBlueprintAndGrantAccessRequest {
   blueprint: BlueprintDefinition;
@@ -468,15 +488,16 @@ export class PersistenceService {
     if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
       return {
         maxSlots: INVENTORY_MAX_SLOTS,
-        items: [],
-        equipment: {}
+        itemInstances: [],
+        equipment: {},
+        hotbarSlots: []
       };
     }
 
     const itemRows = this.db
       .prepare(
         `SELECT item_instance_id AS itemInstanceId,
-                archetype_id AS archetypeId,
+                archetype_id AS definitionId,
                 quantity AS quantity,
                 slot_index AS slotIndex
          FROM player_inventory_items
@@ -485,7 +506,7 @@ export class PersistenceService {
       )
       .all(accountId) as Array<{
       itemInstanceId: number;
-      archetypeId: number;
+      definitionId: number;
       quantity: number;
       slotIndex: number;
     }>;
@@ -500,6 +521,20 @@ export class PersistenceService {
       equipSlot: string;
       itemInstanceId: number;
     }>;
+    const hotbarRows = this.db
+      .prepare(
+        `SELECT slot_index AS slotIndex,
+                payload_kind AS payloadKind,
+                ref_id AS refId
+         FROM player_inventory_hotbar_slots
+         WHERE player_id = ?
+         ORDER BY slot_index ASC`
+      )
+      .all(accountId) as Array<{
+      slotIndex: number;
+      payloadKind: string;
+      refId: number;
+    }>;
 
     const equipment: Partial<Record<EquipmentSlot, number>> = {};
     for (const row of equipmentRows) {
@@ -513,46 +548,105 @@ export class PersistenceService {
       }
     }
 
+    const hotbarSlots: InventorySnapshot["hotbarSlots"] = [];
+    for (const row of hotbarRows) {
+      const slotIndex = this.clampInteger(row.slotIndex, 0, HOTBAR_SLOT_COUNT - 1);
+      const kind = row.payloadKind === "item_instance" || row.payloadKind === "ability" || row.payloadKind === "action"
+        ? row.payloadKind
+        : null;
+      const refId = this.clampInteger(row.refId, 1, 0x7fffffff);
+      if (!kind || refId <= 0) {
+        continue;
+      }
+      while (hotbarSlots.length <= slotIndex) {
+        hotbarSlots.push(null);
+      }
+      hotbarSlots[slotIndex] = { kind, refId };
+    }
+
     return {
       maxSlots: INVENTORY_MAX_SLOTS,
-      items: itemRows
+      itemInstances: itemRows
         .map((row) => ({
           itemInstanceId: this.clampInteger(row.itemInstanceId, 1, 0x7fffffff),
-          archetypeId: this.clampInteger(row.archetypeId, 1, 0xffff),
+          definitionId: this.clampInteger(row.definitionId, 1, 0xffff),
           quantity: this.clampInteger(row.quantity, 1, 0xffff),
           slotIndex: this.clampInteger(row.slotIndex, 0, INVENTORY_MAX_SLOTS - 1)
         }))
-        .filter((item) => item.itemInstanceId > 0 && item.archetypeId > 0 && item.quantity > 0),
-      equipment
+        .filter((item) => item.itemInstanceId > 0 && item.definitionId > 0 && item.quantity > 0),
+      equipment,
+      hotbarSlots
     };
   }
 
-  public saveInventoryState(accountId: number, state: InventoryStateSnapshot): void {
+  public loadPlayerSettings(accountId: number): PersistedPlayerSettings {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return { ...DEFAULT_PLAYER_SETTINGS };
+    }
+    const row = this.db
+      .prepare(
+        `SELECT settings_json AS settingsJson
+         FROM player_settings
+         WHERE player_id = ?`
+      )
+      .get(accountId) as { settingsJson: string } | undefined;
+    if (!row || typeof row.settingsJson !== "string" || row.settingsJson.length === 0) {
+      return { ...DEFAULT_PLAYER_SETTINGS };
+    }
+    try {
+      return coercePlayerSettings(JSON.parse(row.settingsJson));
+    } catch {
+      return { ...DEFAULT_PLAYER_SETTINGS };
+    }
+  }
+
+  public savePlayerSettings(accountId: number, settings: PlayerSettings): void {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
+    }
+    const normalized = coercePlayerSettings(settings);
+    this.db
+      .prepare(
+        `INSERT INTO player_settings (player_id, settings_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(player_id) DO UPDATE SET
+           settings_json=excluded.settings_json,
+           updated_at=excluded.updated_at`
+      )
+      .run(
+        Math.max(1, this.clampInteger(accountId, 1, 0x7fffffff)),
+        JSON.stringify(normalized),
+        Date.now()
+      );
+  }
+
+  public saveInventoryState(accountId: number, state: InventorySnapshot): void {
     if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
       return;
     }
     const playerId = Math.max(1, this.clampInteger(accountId, 1, 0x7fffffff));
-    const tx = this.db.transaction((snapshot: InventoryStateSnapshot) => {
+    const tx = this.db.transaction((snapshot: InventorySnapshot) => {
       const now = Date.now();
       this.db.prepare("DELETE FROM player_inventory_items WHERE player_id = ?").run(playerId);
       this.db.prepare("DELETE FROM player_equipment_slots WHERE player_id = ?").run(playerId);
+      this.db.prepare("DELETE FROM player_inventory_hotbar_slots WHERE player_id = ?").run(playerId);
       const insertItem = this.db.prepare(
         `INSERT INTO player_inventory_items (
            player_id, item_instance_id, archetype_id, quantity, slot_index, custom_json, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?)`
       );
-      for (const item of snapshot.items) {
+      for (const item of snapshot.itemInstances) {
         insertItem.run(
           playerId,
           this.clampInteger(item.itemInstanceId, 1, 0x7fffffff),
-          this.clampInteger(item.archetypeId, 1, 0xffff),
+          this.clampInteger(item.definitionId, 1, 0xffff),
           this.clampInteger(item.quantity, 1, 0xffff),
           this.clampInteger(item.slotIndex, 0, INVENTORY_MAX_SLOTS - 1),
           "{}",
           now
         );
       }
-      const liveItemIds = new Set(snapshot.items.map((item) => this.clampInteger(item.itemInstanceId, 1, 0x7fffffff)));
+      const liveItemIds = new Set(snapshot.itemInstances.map((item) => this.clampInteger(item.itemInstanceId, 1, 0x7fffffff)));
       const insertEquipment = this.db.prepare(
         `INSERT INTO player_equipment_slots (player_id, equip_slot, item_instance_id, updated_at)
          VALUES (?, ?, ?, ?)`
@@ -564,6 +658,25 @@ export class PersistenceService {
           continue;
         }
         insertEquipment.run(playerId, equipmentSlot, itemInstanceId, now);
+      }
+      const insertHotbarSlot = this.db.prepare(
+        `INSERT INTO player_inventory_hotbar_slots (player_id, slot_index, payload_kind, ref_id, updated_at)
+         VALUES (?, ?, ?, ?, ?)`
+      );
+      const hotbarSlots = Array.isArray(snapshot.hotbarSlots) ? snapshot.hotbarSlots : [];
+      for (let slotIndex = 0; slotIndex < HOTBAR_SLOT_COUNT; slotIndex += 1) {
+        const entry = hotbarSlots[slotIndex] ?? null;
+        if (!entry) {
+          continue;
+        }
+        const kind = entry.kind === "item_instance" || entry.kind === "ability" || entry.kind === "action"
+          ? entry.kind
+          : null;
+        const refId = this.clampInteger(entry.refId, 1, 0x7fffffff);
+        if (!kind || refId <= 0) {
+          continue;
+        }
+        insertHotbarSlot.run(playerId, slotIndex, kind, refId, now);
       }
     });
     tx(state);
@@ -577,6 +690,128 @@ export class PersistenceService {
       .prepare("SELECT MAX(item_instance_id) AS maxItemInstanceId FROM player_inventory_items")
       .get() as { maxItemInstanceId: number | null };
     return Math.max(1, this.clampInteger((row.maxItemInstanceId ?? 0) + 1, 1, 0x7fffffff));
+  }
+
+  public loadPersistentPickups(instanceIdRaw: string): PersistedPickupState[] {
+    if (this.disablePersistenceWrites) {
+      return [];
+    }
+    const instanceId = this.normalizeInstanceId(instanceIdRaw);
+    if (instanceId.length === 0) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT pickup_id AS pickupId,
+                definition_id AS definitionId,
+                model_id AS modelId,
+                quantity AS quantity,
+                persistence_policy AS persistencePolicy,
+                x AS x,
+                y AS y,
+                z AS z,
+                rotation_x AS rotationX,
+                rotation_y AS rotationY,
+                rotation_z AS rotationZ,
+                rotation_w AS rotationW
+         FROM world_pickups
+         WHERE instance_id = ?
+         ORDER BY pickup_id ASC`
+      )
+      .all(instanceId) as Array<{
+      pickupId: number;
+      definitionId: number;
+      modelId: number;
+      quantity: number;
+      persistencePolicy: string;
+      x: number;
+      y: number;
+      z: number;
+      rotationX: number;
+      rotationY: number;
+      rotationZ: number;
+      rotationW: number;
+    }>;
+    const pickups: PersistedPickupState[] = [];
+    for (const row of rows) {
+      const pickupId = this.clampInteger(row.pickupId, 1, 0x7fffffff);
+      const definitionId = this.clampInteger(row.definitionId, 1, 0xffff);
+      const quantity = this.clampInteger(row.quantity, 1, 0xffff);
+      const persistencePolicy = this.parsePickupPersistencePolicy(row.persistencePolicy);
+      if (pickupId <= 0 || definitionId <= 0 || quantity <= 0 || persistencePolicy !== "persistent") {
+        continue;
+      }
+      pickups.push({
+        pickupId,
+        definitionId,
+        modelId: this.clampInteger(row.modelId, 0, 0xffff),
+        quantity,
+        persistencePolicy,
+        x: this.clampFiniteNumber(row.x),
+        y: this.clampFiniteNumber(row.y),
+        z: this.clampFiniteNumber(row.z),
+        rotation: {
+          x: this.clampFiniteNumber(row.rotationX),
+          y: this.clampFiniteNumber(row.rotationY),
+          z: this.clampFiniteNumber(row.rotationZ),
+          w: this.clampFiniteNumber(row.rotationW, 1)
+        }
+      });
+    }
+    return pickups;
+  }
+
+  public savePersistentPickups(instanceIdRaw: string, pickups: readonly PersistedPickupState[]): void {
+    if (this.disablePersistenceWrites) {
+      return;
+    }
+    const instanceId = this.normalizeInstanceId(instanceIdRaw);
+    if (instanceId.length === 0) {
+      return;
+    }
+    const tx = this.db.transaction((targetInstanceId: string, snapshot: readonly PersistedPickupState[]) => {
+      this.db.prepare("DELETE FROM world_pickups WHERE instance_id = ?").run(targetInstanceId);
+      if (snapshot.length <= 0) {
+        return;
+      }
+      const now = Date.now();
+      const insertPickup = this.db.prepare(
+        `INSERT INTO world_pickups (
+           instance_id, pickup_id, definition_id, model_id, quantity, persistence_policy,
+           x, y, z, rotation_x, rotation_y, rotation_z, rotation_w, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const pickup of snapshot) {
+        const pickupId = this.clampInteger(pickup.pickupId, 1, 0x7fffffff);
+        const definitionId = this.clampInteger(pickup.definitionId, 1, 0xffff);
+        const quantity = this.clampInteger(pickup.quantity, 1, 0xffff);
+        if (
+          pickupId <= 0 ||
+          definitionId <= 0 ||
+          quantity <= 0 ||
+          this.parsePickupPersistencePolicy(pickup.persistencePolicy) !== "persistent"
+        ) {
+          continue;
+        }
+        insertPickup.run(
+          targetInstanceId,
+          pickupId,
+          definitionId,
+          this.clampInteger(pickup.modelId, 0, 0xffff),
+          quantity,
+          "persistent",
+          this.clampFiniteNumber(pickup.x),
+          this.clampFiniteNumber(pickup.y),
+          this.clampFiniteNumber(pickup.z),
+          this.clampFiniteNumber(pickup.rotation.x),
+          this.clampFiniteNumber(pickup.rotation.y),
+          this.clampFiniteNumber(pickup.rotation.z),
+          this.clampFiniteNumber(pickup.rotation.w, 1),
+          now
+        );
+      }
+    });
+    tx(instanceId, pickups);
   }
 
   public savePlayerSnapshot(snapshot: PlayerSnapshot): void {
@@ -615,6 +850,13 @@ export class PersistenceService {
         `INSERT INTO player_loadout_slots (player_id, slot_index, ability_id)
          VALUES (?, ?, ?)`
       );
+      const upsertSettings = this.db.prepare(
+        `INSERT INTO player_settings (player_id, settings_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(player_id) DO UPDATE SET
+           settings_json=excluded.settings_json,
+           updated_at=excluded.updated_at`
+      );
       for (const entry of batch) {
         const snapshot = entry.snapshot;
         if (entry.saveCharacter) {
@@ -645,6 +887,10 @@ export class PersistenceService {
               Math.max(ABILITY_ID_NONE, Math.floor(abilityId))
             );
           }
+        }
+        if (entry.saveSettings) {
+          const settings = coercePlayerSettings(entry.settings);
+          upsertSettings.run(snapshot.accountId, JSON.stringify(settings), now);
         }
       }
     });
@@ -817,6 +1063,41 @@ export class PersistenceService {
         FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS player_inventory_hotbar_slots (
+        player_id INTEGER NOT NULL,
+        slot_index INTEGER NOT NULL,
+        payload_kind TEXT NOT NULL,
+        ref_id INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (player_id, slot_index),
+        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS world_pickups (
+        instance_id TEXT NOT NULL,
+        pickup_id INTEGER NOT NULL,
+        definition_id INTEGER NOT NULL,
+        model_id INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        persistence_policy TEXT NOT NULL,
+        x REAL NOT NULL,
+        y REAL NOT NULL,
+        z REAL NOT NULL,
+        rotation_x REAL NOT NULL,
+        rotation_y REAL NOT NULL,
+        rotation_z REAL NOT NULL,
+        rotation_w REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (instance_id, pickup_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS player_settings (
+        player_id INTEGER PRIMARY KEY,
+        settings_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS auth_audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts INTEGER NOT NULL,
@@ -842,6 +1123,9 @@ export class PersistenceService {
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_player_inventory_items_player_id ON player_inventory_items(player_id)"
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_world_pickups_instance_id ON world_pickups(instance_id)"
     );
     this.ensureCharacterColumn("active_hotbar_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("primary_mouse_slot", "INTEGER NOT NULL DEFAULT 0");
@@ -1068,6 +1352,14 @@ export class PersistenceService {
     return value.length > 0 ? value : "unknown";
   }
 
+  private normalizeInstanceId(instanceIdRaw: unknown): string {
+    const value = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
+    if (value.length <= 0) {
+      return "";
+    }
+    return value.slice(0, 96);
+  }
+
   private parseEquipmentSlot(rawSlot: unknown): EquipmentSlot | null {
     if (
       rawSlot === "weapon" ||
@@ -1081,6 +1373,17 @@ export class PersistenceService {
     return null;
   }
 
+  private parsePickupPersistencePolicy(rawPolicy: unknown): PickupPersistencePolicy {
+    return rawPolicy === "persistent" ? "persistent" : "transient_runtime";
+  }
+
+  private clampFiniteNumber(value: number, fallback = 0): number {
+    if (!Number.isFinite(value)) {
+      return fallback;
+    }
+    return value;
+  }
+
   private clampInteger(value: number, min: number, max: number): number {
     if (!Number.isFinite(value)) {
       return min;
@@ -1088,3 +1391,5 @@ export class PersistenceService {
     return Math.max(min, Math.min(max, Math.floor(value)));
   }
 }
+
+

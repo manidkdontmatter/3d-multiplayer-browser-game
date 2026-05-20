@@ -5,19 +5,22 @@
  */
 import type { PlayerSnapshot } from "./PersistenceService";
 import { GUEST_ACCOUNT_ID_BASE } from "./PersistenceService";
+import type { PlayerSettings } from "../../shared/playerSettings";
 
 type PendingOfflineSnapshot = {
   snapshot: PlayerSnapshot;
+  settings?: PlayerSettings;
 };
 
 export class PersistenceSyncSystem {
   private readonly dirtyCharacterAccountIds = new Set<number>();
   private readonly dirtyAbilityStateAccountIds = new Set<number>();
+  private readonly dirtySettingsAccountIds = new Set<number>();
   private readonly pendingOfflineSnapshots = new Map<number, PendingOfflineSnapshot>();
 
   public markAccountDirty(
     accountId: number,
-    options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean }
+    options?: { dirtyCharacter?: boolean; dirtyAbilityState?: boolean; dirtySettings?: boolean }
   ): void {
     if (accountId >= GUEST_ACCOUNT_ID_BASE) {
       return;
@@ -25,11 +28,15 @@ export class PersistenceSyncSystem {
     const normalizedAccountId = Math.max(1, Math.floor(Number.isFinite(accountId) ? accountId : 1));
     const dirtyCharacter = options?.dirtyCharacter ?? true;
     const dirtyAbilityState = options?.dirtyAbilityState ?? true;
+    const dirtySettings = options?.dirtySettings ?? false;
     if (dirtyCharacter) {
       this.dirtyCharacterAccountIds.add(normalizedAccountId);
     }
     if (dirtyAbilityState) {
       this.dirtyAbilityStateAccountIds.add(normalizedAccountId);
+    }
+    if (dirtySettings) {
+      this.dirtySettingsAccountIds.add(normalizedAccountId);
     }
   }
 
@@ -59,11 +66,14 @@ export class PersistenceSyncSystem {
   public flushDirtyPlayerState(
     resolveOnlineSnapshotByAccountId: (accountId: number) => PlayerSnapshot | null,
     saveCharacterSnapshot: (snapshot: PlayerSnapshot) => void,
-    saveAbilityStateSnapshot: (snapshot: PlayerSnapshot) => void
+    saveAbilityStateSnapshot: (snapshot: PlayerSnapshot) => void,
+    resolveOnlineSettingsByAccountId: (accountId: number) => PlayerSettings | null,
+    savePlayerSettings: (accountId: number, settings: PlayerSettings) => void
   ): void {
     const dirtyAccounts = new Set<number>([
       ...this.dirtyCharacterAccountIds,
-      ...this.dirtyAbilityStateAccountIds
+      ...this.dirtyAbilityStateAccountIds,
+      ...this.dirtySettingsAccountIds
     ]);
 
     for (const accountId of dirtyAccounts) {
@@ -77,6 +87,8 @@ export class PersistenceSyncSystem {
         this.dirtyCharacterAccountIds.has(accountId);
       const shouldSaveAbilityState =
         this.dirtyAbilityStateAccountIds.has(accountId);
+      const shouldSaveSettings =
+        this.dirtySettingsAccountIds.has(accountId);
 
       if (shouldSaveCharacter) {
         saveCharacterSnapshot(snapshot);
@@ -84,11 +96,18 @@ export class PersistenceSyncSystem {
       if (shouldSaveAbilityState) {
         saveAbilityStateSnapshot(snapshot);
       }
+      if (shouldSaveSettings) {
+        const settings = resolveOnlineSettingsByAccountId(accountId) ?? pendingOfflineSnapshot?.settings;
+        if (settings) {
+          savePlayerSettings(accountId, settings);
+        }
+      }
 
       this.pendingOfflineSnapshots.delete(accountId);
     }
     this.dirtyCharacterAccountIds.clear();
     this.dirtyAbilityStateAccountIds.clear();
+    this.dirtySettingsAccountIds.clear();
   }
 
   public getPendingOfflineSnapshotCount(): number {

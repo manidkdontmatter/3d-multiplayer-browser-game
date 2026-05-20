@@ -23,6 +23,7 @@ export class SimulationEcsStore {
       Health: { value: [] as number[], max: [] as number[] },
       ItemArchetypeId: { value: [] as number[] },
       ItemQuantity: { value: [] as number[] },
+      LocationPid: { value: [] as number[] },
       LocationKind: { value: [] as number[] },
       LocationArchetypeId: { value: [] as number[] },
       LocationSeed: { value: [] as number[] },

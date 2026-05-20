@@ -43,9 +43,10 @@ export interface EntityFactoryOverrides {
   hotbarAbilityIds?: number[];
   unlockedAbilityIds?: number[];
   // Item
-  itemArchetypeId?: number;
+  pickupDefinitionId?: number;
   itemQuantity?: number;
   // Location
+  locationPid?: number;
   locationKind?: number;
   locationArchetypeId?: number;
   locationSeed?: number;
@@ -121,8 +122,9 @@ export class EntityFactory {
     c.MovementMode.value[eid] = overrides?.movementMode ?? MOVEMENT_MODE_GROUNDED;
     c.Health.value[eid] = overrides?.health ?? 0;
     c.Health.max[eid] = overrides?.maxHealth ?? 0;
-    c.ItemArchetypeId.value[eid] = overrides?.itemArchetypeId ?? 0;
+    c.ItemArchetypeId.value[eid] = overrides?.pickupDefinitionId ?? 0;
     c.ItemQuantity.value[eid] = overrides?.itemQuantity ?? 0;
+    c.LocationPid.value[eid] = overrides?.locationPid ?? 0;
     c.LocationKind.value[eid] = overrides?.locationKind ?? 0;
     c.LocationArchetypeId.value[eid] = overrides?.locationArchetypeId ?? 0;
     c.LocationSeed.value[eid] = overrides?.locationSeed ?? 0;
@@ -183,3 +185,4 @@ export class EntityFactory {
     if (overrides?.projectileDespawnOnWorldHit !== undefined) c.ProjectileDespawnOnWorldHit.value[eid] = overrides.projectileDespawnOnWorldHit ? 1 : 0;
   }
 }
+

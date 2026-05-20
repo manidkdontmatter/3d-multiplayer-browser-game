@@ -911,7 +911,10 @@ export class NpcAiSystem {
         .capsule(archetype.capsuleHalfHeight, archetype.capsuleRadius)
         .setFriction(0)
         .setCollisionGroups(PHYSICS_GROUP_CHARACTER)
-        .setSolverGroups(PHYSICS_GROUP_CHARACTER),
+        .setSolverGroups(PHYSICS_GROUP_CHARACTER)
+        .setActiveCollisionTypes(
+          RAPIER.ActiveCollisionTypes.DEFAULT | RAPIER.ActiveCollisionTypes.KINEMATIC_KINEMATIC
+        ),
       body
     );
 

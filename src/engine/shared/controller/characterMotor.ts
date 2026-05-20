@@ -188,8 +188,7 @@ export function resolveGroundSupportColliderHandle(options: {
     undefined,
     PHYSICS_QUERY_GROUP_CHARACTER_SOLIDS,
     options.collider,
-    options.body,
-    (collider) => collider.handle !== options.collider.handle && !collider.isSensor()
+    options.body
   );
   if (!hit) {
     return { hit: false, colliderHandle: null };
@@ -272,8 +271,7 @@ export function stepKinematicCharacterController(options: {
     options.collider,
     desired,
     undefined,
-    PHYSICS_QUERY_GROUP_CHARACTER_MOVEMENT,
-    (collider) => collider.handle !== options.collider.handle && !collider.isSensor()
+    PHYSICS_QUERY_GROUP_CHARACTER_MOVEMENT
   );
   const corrected = options.characterController.computedMovement();
 

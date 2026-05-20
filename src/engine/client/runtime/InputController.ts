@@ -4,6 +4,11 @@
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
 import type { MovementInput } from "./types";
+import {
+  DEFAULT_MOUSE_SENSITIVITY,
+  MAX_MOUSE_SENSITIVITY,
+  MIN_MOUSE_SENSITIVITY
+} from "../../shared/playerSettings";
 
 export type MouseBindingTarget = "primary" | "secondary";
 
@@ -11,6 +16,11 @@ export interface MouseBindingIntent {
   slot: number;
   target: MouseBindingTarget;
 }
+
+export type DigitHotbarIntent =
+  | { kind: "none" }
+  | { kind: "bind"; target: MouseBindingTarget; slot: number }
+  | { kind: "activate"; slot: number };
 
 export class InputController {
   private readonly heldKeys = new Set<string>();
@@ -29,8 +39,12 @@ export class InputController {
   private queuedCastSlot: number | null = null;
   private yaw = 0;
   private pitch = 0;
-  private readonly sensitivity = 0.0025;
+  private mouseSensitivity = DEFAULT_MOUSE_SENSITIVITY;
+  private mouseSmoothing = false;
+  private smoothedMouseDeltaX = 0;
+  private smoothedMouseDeltaY = 0;
   private mainUiOpen = false;
+  private digitKeysActivateHotbar = false;
 
   public constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -61,6 +75,26 @@ export class InputController {
     if (open) {
       this.primaryActionHeld = false;
       this.secondaryActionHeld = false;
+    }
+  }
+
+  public setDigitKeysActivateHotbar(enabled: boolean): void {
+    this.digitKeysActivateHotbar = enabled;
+  }
+
+  public setMouseSensitivity(value: number): void {
+    if (!Number.isFinite(value)) {
+      this.mouseSensitivity = DEFAULT_MOUSE_SENSITIVITY;
+      return;
+    }
+    this.mouseSensitivity = Math.max(MIN_MOUSE_SENSITIVITY, Math.min(MAX_MOUSE_SENSITIVITY, value));
+  }
+
+  public setMouseSmoothingEnabled(enabled: boolean): void {
+    this.mouseSmoothing = Boolean(enabled);
+    if (!this.mouseSmoothing) {
+      this.smoothedMouseDeltaX = 0;
+      this.smoothedMouseDeltaY = 0;
     }
   }
 
@@ -220,24 +254,21 @@ export class InputController {
       return;
     }
 
-    const slot = this.mapDigitCodeToHotbarSlot(event.code);
-    if (slot === null) {
+    const digitIntent = resolveDigitHotbarIntent({
+      keyCode: event.code,
+      altKey: event.altKey,
+      digitKeysActivateHotbar: this.digitKeysActivateHotbar
+    });
+    if (digitIntent.kind === "none") {
       return;
     }
-
-    if (event.shiftKey) {
-      this.queuedBindingIntents.push({ slot, target: "primary" });
+    if (digitIntent.kind === "bind") {
+      this.queuedBindingIntents.push({ slot: digitIntent.slot, target: digitIntent.target });
       event.preventDefault();
       return;
     }
-
-    if (event.altKey) {
-      this.queuedBindingIntents.push({ slot, target: "secondary" });
-      event.preventDefault();
-      return;
-    }
-
-    this.queuedCastSlot = slot;
+    this.queuedCastSlot = digitIntent.slot;
+    event.preventDefault();
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -249,8 +280,22 @@ export class InputController {
       return;
     }
 
-    this.yaw -= event.movementX * this.sensitivity;
-    this.pitch -= event.movementY * this.sensitivity;
+    let deltaX = event.movementX;
+    let deltaY = event.movementY;
+    if (this.mouseSmoothing) {
+      const smoothingAlpha = 0.34;
+      this.smoothedMouseDeltaX += (deltaX - this.smoothedMouseDeltaX) * smoothingAlpha;
+      this.smoothedMouseDeltaY += (deltaY - this.smoothedMouseDeltaY) * smoothingAlpha;
+      deltaX = this.smoothedMouseDeltaX;
+      deltaY = this.smoothedMouseDeltaY;
+    } else {
+      this.smoothedMouseDeltaX = 0;
+      this.smoothedMouseDeltaY = 0;
+    }
+
+    const radiansPerPixel = 0.0025 * this.mouseSensitivity;
+    this.yaw -= deltaX * radiansPerPixel;
+    this.pitch -= deltaY * radiansPerPixel;
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
   };
 
@@ -300,35 +345,10 @@ export class InputController {
     this.diagnosticsToggleQueued = false;
     this.interactQueued = false;
     this.toggleFlyQueued = false;
+    this.smoothedMouseDeltaX = 0;
+    this.smoothedMouseDeltaY = 0;
     this.heldKeys.clear();
   };
-
-  private mapDigitCodeToHotbarSlot(code: string): number | null {
-    switch (code) {
-      case "Digit1":
-        return 0;
-      case "Digit2":
-        return 1;
-      case "Digit3":
-        return 2;
-      case "Digit4":
-        return 3;
-      case "Digit5":
-        return 4;
-      case "Digit6":
-        return 5;
-      case "Digit7":
-        return 6;
-      case "Digit8":
-        return 7;
-      case "Digit9":
-        return 8;
-      case "Digit0":
-        return 9;
-      default:
-        return null;
-    }
-  }
 
   private isTypingTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) {
@@ -339,5 +359,50 @@ export class InputController {
       return true;
     }
     return target.isContentEditable;
+  }
+}
+
+export function resolveDigitHotbarIntent(params: {
+  keyCode: string;
+  altKey: boolean;
+  digitKeysActivateHotbar: boolean;
+}): DigitHotbarIntent {
+  const slot = mapDigitCodeToHotbarSlot(params.keyCode);
+  if (slot === null) {
+    return { kind: "none" };
+  }
+  if (params.altKey) {
+    return { kind: "bind", target: "secondary", slot };
+  }
+  if (params.digitKeysActivateHotbar) {
+    return { kind: "activate", slot };
+  }
+  return { kind: "bind", target: "primary", slot };
+}
+
+function mapDigitCodeToHotbarSlot(code: string): number | null {
+  switch (code) {
+    case "Digit1":
+      return 0;
+    case "Digit2":
+      return 1;
+    case "Digit3":
+      return 2;
+    case "Digit4":
+      return 3;
+    case "Digit5":
+      return 4;
+    case "Digit6":
+      return 5;
+    case "Digit7":
+      return 6;
+    case "Digit8":
+      return 7;
+    case "Digit9":
+      return 8;
+    case "Digit0":
+      return 9;
+    default:
+      return null;
   }
 }

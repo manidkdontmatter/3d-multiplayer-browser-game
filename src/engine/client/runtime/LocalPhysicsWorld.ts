@@ -336,9 +336,27 @@ export class LocalPhysicsWorld {
       return 0;
     }
     const dt = this.clampStepDelta(delta);
+    const bodyPos = this.playerBody.translation();
     const previousPose = sampleLocationTransform(location.definition, this.simulationSeconds);
+    const previousFrame = {
+      x: previousPose.x,
+      y: previousPose.y,
+      z: previousPose.z,
+      yaw: previousPose.yaw
+    };
+    if (
+      !hasCarrierVolumesContainingPoint(
+        location.definition.carrierVolumes,
+        previousFrame,
+        bodyPos,
+        CARRIER_FRAME_STICKY_MARGIN
+      )
+    ) {
+      return 0;
+    }
     const currentPose = sampleLocationTransform(location.definition, this.simulationSeconds + dt);
-    return normalizeYaw(currentPose.yaw - previousPose.yaw);
+    const carry = getReferenceFrameCarryDelta(previousFrame, currentPose, bodyPos);
+    return normalizeYaw(carry.yaw);
   }
 
   public getPose(): PlayerPose {

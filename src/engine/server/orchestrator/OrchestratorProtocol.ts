@@ -3,7 +3,8 @@
  * Scope: It belongs to the engine authoritative server layer.
  * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
  */
-import type { InventoryStateSnapshot } from "../../shared/items";
+import type { InventorySnapshot, PickupPersistencePolicy } from "../../shared/items";
+import type { PlayerSettings } from "../../shared/playerSettings";
 import type { RuntimeMapConfig } from "../../shared/world";
 
 export interface PersistedPlayerSnapshot {
@@ -32,7 +33,8 @@ export interface ValidateJoinTicketResponse {
   authKey: string | null;
   accountId?: number;
   playerSnapshot?: PersistedPlayerSnapshot | null;
-  inventoryState?: InventoryStateSnapshot | null;
+  inventoryState?: InventorySnapshot | null;
+  playerSettings?: PlayerSettings | null;
   transferId?: string | null;
   error?: string;
 }
@@ -64,7 +66,8 @@ export interface TransferRequest {
   fromMapInstanceId: string;
   toMapInstanceId: string;
   playerSnapshot: PersistedPlayerSnapshot | null;
-  inventoryState?: InventoryStateSnapshot | null;
+  inventoryState?: InventorySnapshot | null;
+  playerSettings?: PlayerSettings | null;
 }
 
 export interface TransferResponse {
@@ -81,6 +84,8 @@ export interface PersistSnapshotRequest {
   snapshot: PersistedPlayerSnapshot;
   saveCharacter: boolean;
   saveAbilityState: boolean;
+  saveSettings?: boolean;
+  settings?: PlayerSettings | null;
 }
 
 export interface PersistSnapshotBatchRequest {
@@ -100,9 +105,36 @@ export interface PersistInventoryMutationRequest {
   accountId: number;
   instanceId: string;
   action: number;
-  snapshot: InventoryStateSnapshot;
+  snapshot: InventorySnapshot;
   eventId: string;
   eventAtMs: number;
+}
+
+export interface PersistentPickupRecord {
+  pickupId: number;
+  definitionId: number;
+  modelId: number;
+  quantity: number;
+  persistencePolicy: PickupPersistencePolicy;
+  x: number;
+  y: number;
+  z: number;
+  rotation: { x: number; y: number; z: number; w: number };
+}
+
+export interface LoadPersistentPickupsRequest {
+  instanceId: string;
+}
+
+export interface LoadPersistentPickupsResponse {
+  ok: boolean;
+  pickups: PersistentPickupRecord[];
+  error?: string;
+}
+
+export interface PersistPersistentPickupsRequest {
+  instanceId: string;
+  pickups: PersistentPickupRecord[];
 }
 
 export interface TransferResultRequest {
@@ -110,3 +142,4 @@ export interface TransferResultRequest {
   stage: "source_released" | "aborted" | "completed";
   reason?: string;
 }
+

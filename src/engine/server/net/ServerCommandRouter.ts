@@ -9,7 +9,8 @@ import type {
   CreatorCommandWire,
   InputCommand as InputWireCommand,
   ItemCommand as ItemWireCommand,
-  MapTransferCommand as MapTransferWireCommand
+  MapTransferCommand as MapTransferWireCommand,
+  PlayerSettingsCommand as PlayerSettingsWireCommand
 } from "../../shared/netcode";
 
 export interface ServerCommandRouterHandlers<TUser> {
@@ -18,6 +19,7 @@ export interface ServerCommandRouterHandlers<TUser> {
   readonly onCreatorCommand: (user: TUser, command: CreatorCommandWire) => void;
   readonly onItemCommand: (user: TUser, command: Partial<ItemWireCommand>) => void;
   readonly onMapTransferCommand: (user: TUser, command: Partial<MapTransferWireCommand>) => void;
+  readonly onPlayerSettingsCommand: (user: TUser, command: PlayerSettingsWireCommand) => void;
 }
 
 export class ServerCommandRouter<TUser> {
@@ -43,6 +45,10 @@ export class ServerCommandRouter<TUser> {
 
       if (ntype === NType.ItemCommand) {
         handlers.onItemCommand(user, rawCommand as Partial<ItemWireCommand>);
+        continue;
+      }
+      if (ntype === NType.PlayerSettingsCommand) {
+        handlers.onPlayerSettingsCommand(user, rawCommand as PlayerSettingsWireCommand);
         continue;
       }
 

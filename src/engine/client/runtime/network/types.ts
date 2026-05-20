@@ -4,12 +4,14 @@
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
 import type {
+  AlertSeverity,
   AbilityDefinition,
   AbilityCreatorType,
   MovementMode,
   RuntimeMapConfig
 } from "../../../shared/index";
-import type { InventoryStateSnapshot } from "../../../shared/index";
+import type { InventorySnapshot } from "../../../shared/index";
+import type { PlayerSettings } from "../../../shared/index";
 import type {
   MovementInput,
   AbilityUseEvent
@@ -84,4 +86,20 @@ export interface MapTransferInstruction {
   mapConfig: RuntimeMapConfig;
 }
 
-export type InventoryState = InventoryStateSnapshot;
+export type InventoryState = InventorySnapshot;
+
+export interface InventoryActionFeedback {
+  action: number;
+  ok: boolean;
+  reason: string;
+}
+
+export interface SettingsState {
+  settings: PlayerSettings;
+}
+
+export interface ServerAlertState {
+  text: string;
+  severity: AlertSeverity;
+}
+

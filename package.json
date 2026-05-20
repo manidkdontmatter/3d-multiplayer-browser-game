@@ -35,14 +35,22 @@
     "test:network-client:regression": "tsx scripts/network-client-regression.ts",
     "test:tick": "tsx scripts/tick-consistency.ts",
     "test:npc:ai": "tsx scripts/npc-ai-regression.ts",
+    "test:item-pickup:regression": "tsx scripts/item-pickup-regression.ts",
+    "test:hotbar-payload:regression": "tsx scripts/hotbar-payload-regression.ts",
+    "test:hotbar-input:regression": "tsx scripts/hotbar-input-regression.ts",
+    "test:settings-save:regression": "tsx scripts/settings-save-regression.ts",
     "test:procedural:determinism": "tsx scripts/procedural-world-determinism.ts",
-    "test:load:network": "node --experimental-websocket --import tsx scripts/network-load-test.ts",
+    "test:load:network": "node --import tsx scripts/network-load-split-profile.ts",
     "test:multiplayer:mode": "node scripts/multiplayer-mode.js",
-    "test:ci": "npm run check:boundaries && npm run check:cycles && npm run typecheck:client && npm run typecheck:server && npm run test:tick && npm run test:network-client:regression && npm run test:procedural:determinism && npm run test:smoke:fast",
+    "test:ci": "npm run check:boundaries && npm run check:cycles && npm run typecheck:client && npm run typecheck:server && npm run test:tick && npm run test:network-client:regression && npm run test:hotbar-input:regression && npm run test:settings-save:regression && npm run test:procedural:determinism && npm run test:smoke:fast",
     "test:full": "npm run test:ci && npm run test:smoke && npm run test:melee && npm run test:projectile:damage && npm run test:transfer && npm run test:multiplayer:csp && npm run test:multiplayer:chaos && npm run test:orchestrator:hardening && npm run test:npc:ai && npm run test:load:network",
     "check:cycles": "madge --circular --extensions ts --ts-config tsconfig.base.json src/engine src/game src/orchestrator",
     "check:unused": "knip --config knip.json --no-progress",
-    "perf:gate:load:smoke": "node --max-old-space-size=12288 --experimental-websocket --import tsx scripts/network-load-test.ts"
+    "test:network:full": "npm run test:network-client:regression && npm run test:multiplayer && npm run test:multiplayer:csp && npm run test:multiplayer:chaos && npm run test:load:network",
+    "perf:load:100:sparse": "node --import tsx -e \"process.env.LOAD_PROFILE_CPU='0'; process.env.LOAD_CLIENTS='100'; process.env.LOAD_TOPOLOGY='sparse'; await import('./scripts/network-load-split-profile.ts');\"",
+    "perf:load:100:clustered": "node --import tsx -e \"process.env.LOAD_PROFILE_CPU='0'; process.env.LOAD_CLIENTS='100'; process.env.LOAD_TOPOLOGY='clustered'; await import('./scripts/network-load-split-profile.ts');\"",
+    "perf:load:100:profile:split": "node --import tsx -e \"process.env.LOAD_PROFILE_CPU='1'; process.env.LOAD_CLIENTS='100'; process.env.LOAD_TOPOLOGY='sparse'; await import('./scripts/network-load-split-profile.ts');\"",
+    "perf:load:100:split": "node --import tsx -e \"process.env.LOAD_PROFILE_CPU='0'; process.env.LOAD_CLIENTS='100'; process.env.LOAD_TOPOLOGY='sparse'; await import('./scripts/network-load-split-profile.ts');\""
   },
   "engines": {
     "node": ">=20.19.0",
@@ -66,11 +74,11 @@
     "nengi": "2.0.0-alpha.173",
     "nengi-buffers": "0.5.0",
     "nengi-dataviews": "0.4.0",
-    "nengi-uws-instance-adapter": "0.6.0",
     "nengi-websocket-client-adapter": "0.7.0",
     "recast-navigation": "0.43.1",
     "simplex-noise": "4.0.3",
-    "three": "0.182.0"
+    "three": "0.182.0",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.47.0"
   },
   "devDependencies": {
     "@gltf-transform/cli": "4.3.0",

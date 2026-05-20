@@ -93,4 +93,12 @@ export class ServerReplicationCoordinator<TUser extends ReplicationUser> {
   public queueIdentityMessage(user: TUser, playerNid: number): void {
     user.queueMessage({ ntype: NType.IdentityMessage, playerNid });
   }
+
+  public queueCarrierVolumeEntered(userId: number, framePid: number, volumeId: string): void {
+    this.replicationMessaging.queueCarrierVolumeEntered(userId, framePid, volumeId);
+  }
+
+  public queueCarrierVolumeExited(userId: number, framePid: number, volumeId: string): void {
+    this.replicationMessaging.queueCarrierVolumeExited(userId, framePid, volumeId);
+  }
 }

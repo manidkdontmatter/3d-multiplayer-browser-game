@@ -5,6 +5,7 @@
  */
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
+  type AlertSeverity,
   ABILITY_ID_NONE, ABILITY_ID_PUNCH,
   buildAbilityDefinitionFromBlueprint,
   clampHotbarSlotIndex, configurePlayerCharacterController,
@@ -13,11 +14,13 @@ import {
   HOTBAR_SLOT_COUNT, PLAYER_BODY_CENTER_HEIGHT, MOVEMENT_MODE_GROUNDED,
   PLAYER_CHARACTER_CONTROLLER_OFFSET, PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS,
-  encodeInventoryStateSnapshot, getAbilityDefinitionById,
+  encodeInventorySnapshot, getAbilityDefinitionById,
   quaternionFromYawPitchRoll,
+  DEFAULT_PLAYER_SETTINGS,
+  coercePlayerSettings,
   sanitizeMovementMode,
   type BlueprintAccessTag,
-  type InventoryStateSnapshot, type MovementMode, SERVER_TICK_SECONDS
+  type InventorySnapshot, type MovementMode, type PlayerSettings, SERVER_TICK_SECONDS
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
 import { sortedUniqueContains } from "../shared/sortedNumberList";
@@ -25,7 +28,8 @@ import {
   NType,
   type AbilityCommand as AbilityWireCommand,
   type ItemCommand as ItemWireCommand,
-  type InputCommand as InputWireCommand
+  type InputCommand as InputWireCommand,
+  type PlayerSettingsCommand as PlayerSettingsWireCommand
 } from "../shared/netcode";
 import { PersistenceService, type PlayerSnapshot } from "./persistence/PersistenceService";
 import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
@@ -39,6 +43,7 @@ import { PlayerLifecycleSystem, type PlayerSpawnContext } from "./lifecycle/Play
 import { LocationRootSystem, type LocationFrameActor } from "./location/LocationRootSystem";
 import { PlayerMovementSystem } from "./movement/PlayerMovementSystem";
 import { AbilityCommandHandler } from "./net/AbilityCommandHandler";
+import { ServerAlertDispatcher } from "./net/ServerAlertDispatcher";
 import { CreatorSystem } from "./creator/CreatorSystem";
 import { ItemInventorySystem } from "./items/ItemInventorySystem";
 import { ServerReplicationCoordinator } from "./net/ServerReplicationCoordinator";
@@ -77,6 +82,21 @@ type FarSpatialChannelLike = {
 };
 type CreateUserView = (p: { x: number; y: number; z: number; halfWidth: number; halfHeight: number; halfDepth: number }) => NonNullable<UserLike["view"]>;
 
+interface PortalTransferZone {
+  sourceMapInstanceId: string;
+  targetMapInstanceId: string;
+  centerX: number;
+  centerY: number;
+  centerZ: number;
+  sensorRadius: number;
+}
+
+const PORTAL_TRANSFER_RETRIGGER_SECONDS = 2.0;
+const PORTAL_TRANSFER_ZONES: readonly PortalTransferZone[] = Object.freeze([
+  { sourceMapInstanceId: "map-a", targetMapInstanceId: "map-b", centerX: 12, centerY: 34, centerZ: 0, sensorRadius: 2.2 },
+  { sourceMapInstanceId: "map-b", targetMapInstanceId: "map-a", centerX: 0, centerY: 4, centerZ: 0, sensorRadius: 2.2 }
+]);
+
 export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
   private readonly world: RAPIER.World;
@@ -103,6 +123,7 @@ export class GameSimulation {
   private readonly npcMovementSystem: CharacterMovementSystem;
   private readonly npcAiSystem: NpcAiSystem;
   private readonly playerLifecycleSystem: PlayerLifecycleSystem<UserLike>;
+  private readonly alertDispatcher: ServerAlertDispatcher<UserLike>;
   private readonly archetypes: ServerArchetypeCatalog;
   private readonly loadTestSpawnMode: "default" | "grid";
   private readonly loadTestGridSpacing: number; private readonly loadTestGridColumns: number; private readonly loadTestGridRows: number;
@@ -117,6 +138,10 @@ export class GameSimulation {
   private readonly platformEidByPid = new Map<number, number>();
   private readonly locationEidByPid = new Map<number, number>();
   private readonly dummyEidByObject = new WeakMap<object, number>();
+  private readonly carrierMembershipByUserId = new Map<number, Set<string>>();
+  private readonly autoTransferRequestByUserId = new Map<number, string>();
+  private readonly portalTriggerCooldownByUserId = new Map<number, number>();
+  private readonly playerSettingsByAccountId = new Map<number, PlayerSettings>();
   private nextNpcPlayerAlertAtSeconds = 0; private elapsedSeconds = 0; private tickNumber = 0;
 
   public constructor(
@@ -136,6 +161,7 @@ export class GameSimulation {
     this.npcPlayerAlertIntervalSeconds = this.resolvePositiveEnvNumber("NPC_PLAYER_ALERT_INTERVAL", 0.5);
     this.npcPlayerAlertMemorySeconds = this.resolvePositiveEnvNumber("NPC_PLAYER_ALERT_MEMORY", 1.25);
     this.npcPlayerAlertShape = new RAPIER.Ball(this.resolvePositiveEnvNumber("NPC_PLAYER_ALERT_RADIUS", 220));
+    this.alertDispatcher = new ServerAlertDispatcher<UserLike>(() => this.usersById.values());
     this.creatorSystem = new CreatorSystem();
     this.replication = new ServerReplicationCoordinator<UserLike>({
       nearChannel: this.nearChannel, farChannel: this.farChannel,
@@ -148,11 +174,13 @@ export class GameSimulation {
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
     this.characterController = this.world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
     configurePlayerCharacterController(this.characterController);
+    const mapInstanceId = process.env.MAP_INSTANCE_ID ?? "default-1";
 
     // ── Item inventory ────────────────────────────────────────────────────
     this.itemInventorySystem = new ItemInventorySystem<UserLike>({
       world: this.world,
       ecs: this.simulationEcs,
+      mapInstanceId,
       replication: this.replication,
       persistence: this.persistence,
       getUserById: (userId) => this.usersById.get(userId),
@@ -162,12 +190,12 @@ export class GameSimulation {
           this.persistence.saveInventoryState(accountId, snapshot);
           this.persistence.saveCriticalEvent({
             eventId,
-            instanceId: process.env.MAP_INSTANCE_ID ?? "default-1",
+            instanceId: mapInstanceId,
             accountId,
             eventType: "inventory_mutation",
             eventPayloadJson: JSON.stringify({
               action,
-              itemCount: snapshot.items.length,
+              itemCount: snapshot.itemInstances.length,
               equipmentSlots: Object.keys(snapshot.equipment)
             }),
             eventAtMs
@@ -177,7 +205,7 @@ export class GameSimulation {
         void this.ipcChannel
           .request("PersistInventoryMutation", {
             accountId,
-            instanceId: process.env.MAP_INSTANCE_ID ?? "default-1",
+            instanceId: mapInstanceId,
             action,
             snapshot,
             eventId,
@@ -192,6 +220,66 @@ export class GameSimulation {
             console.error("[server] critical inventory persistence failed", error);
             throw error;
           });
+      },
+      loadPersistentPickups: (instanceId) => {
+        if (!this.ipcChannel?.isAvailable()) {
+          return this.persistence.loadPersistentPickups(instanceId);
+        }
+        return this.ipcChannel
+          .request("LoadPersistentPickups", {
+            instanceId
+          })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(response.error ?? "LoadPersistentPickups rejected.");
+            }
+            return Array.isArray(response.pickups) ? response.pickups : [];
+          })
+          .catch((error) => {
+            console.error("[server] load persistent pickups failed", error);
+            return [];
+          });
+      },
+      savePersistentPickups: (instanceId, pickups) => {
+        if (!this.ipcChannel?.isAvailable()) {
+          this.persistence.savePersistentPickups(instanceId, pickups);
+          return;
+        }
+        void this.ipcChannel
+          .request("PersistPersistentPickups", {
+            instanceId,
+            pickups: pickups.map((pickup) => ({
+              pickupId: pickup.pickupId,
+              definitionId: pickup.definitionId,
+              modelId: pickup.modelId,
+              quantity: pickup.quantity,
+              persistencePolicy: pickup.persistencePolicy,
+              x: pickup.x,
+              y: pickup.y,
+              z: pickup.z,
+              rotation: {
+                x: pickup.rotation.x,
+                y: pickup.rotation.y,
+                z: pickup.rotation.z,
+                w: pickup.rotation.w
+              }
+            }))
+          })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(response.error ?? "PersistPersistentPickups rejected.");
+            }
+          })
+          .catch((error) => {
+            console.error("[server] persist persistent pickups failed", error);
+          });
+      },
+      executeHotbarAbility: (userId, abilityId) => {
+        const eid = this.simulationEcs.getPlayerEidByUserId(userId);
+        if (typeof eid !== "number") {
+          return false;
+        }
+        return this.abilityExecutionSystem.tryUseAbilityByIdByEid(eid, abilityId);
       }
     });
 
@@ -308,6 +396,7 @@ export class GameSimulation {
       onLocationAdded: (location) => {
         const eid = this.simulationEcs.createEntityFromPreset("location", {
           position: location.position, rotation: location.rotation, modelId: location.modelId,
+          locationPid: location.pid,
           locationKind: location.locationKind, locationArchetypeId: location.locationArchetypeId,
           locationSeed: location.locationSeed, locationEnvironmentId: location.locationEnvironmentId,
           locationStreamingRadius: location.locationStreamingRadius, locationInfluenceRadius: location.locationInfluenceRadius
@@ -423,9 +512,12 @@ export class GameSimulation {
       });
       const aid = this.simulationEcs.getPlayerAccountIdByUserId(payload.userId);
       if (aid !== null) this.persistenceSyncSystem.markAccountDirty(aid, { dirtyCharacter: true, dirtyAbilityState: false });
+      this.syncCarrierMembershipMessagesForPlayer(payload.userId, payload.eid);
     });
 
     this.events.on<PlayerSpawnedPayload>(GameEvent.PLAYER_SPAWNED, (payload) => {
+      this.carrierMembershipByUserId.set(payload.userId, new Set<string>());
+      this.syncCarrierMembershipMessagesForPlayer(payload.userId, payload.eid);
       this.replication.queueIdentityMessage(
         { id: payload.userId, queueMessage: (msg) => { const u = this.usersById.get(payload.userId); if (u) u.queueMessage(msg); } } as UserLike,
         this.simulationEcs.world.components.NetworkId.value[payload.eid] ?? 0
@@ -527,7 +619,10 @@ export class GameSimulation {
 
   // ── User management ───────────────────────────────────────────────────────
   public addUser(user: UserLike): void { this.playerLifecycleSystem.addUser(user); }
-  public removeUser(user: UserLike): void { this.playerLifecycleSystem.removeUser(user); }
+  public removeUser(user: UserLike): void {
+    this.carrierMembershipByUserId.delete(user.id);
+    this.playerLifecycleSystem.removeUser(user);
+  }
 
   // ── Command handlers ──────────────────────────────────────────────────────
   public applyInputCommands(userId: number, commands: Partial<InputWireCommand>[]): void {
@@ -598,6 +693,30 @@ export class GameSimulation {
     this.itemInventorySystem.applyCommand(user.id, command);
   }
 
+  public applyPlayerSettingsCommand(user: UserLike, command: Partial<PlayerSettingsWireCommand>): void {
+    if (typeof user.accountId !== "number" || typeof command.settingsJson !== "string") {
+      return;
+    }
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(command.settingsJson);
+    } catch {
+      return;
+    }
+    const settings = coercePlayerSettings(parsed);
+    const accountId = Math.max(1, Math.floor(user.accountId));
+    this.playerSettingsByAccountId.set(accountId, settings);
+    user.queueMessage({
+      ntype: NType.PlayerSettingsMessage,
+      settingsJson: JSON.stringify(settings)
+    });
+    this.persistenceSyncSystem.markAccountDirty(accountId, {
+      dirtyCharacter: false,
+      dirtyAbilityState: false,
+      dirtySettings: true
+    });
+  }
+
   private applyForgetAbilityIntent(user: UserLike, command: Partial<AbilityWireCommand>): void {
     if (!command.applyForgetAbility) return;
     const before = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
@@ -638,9 +757,46 @@ export class GameSimulation {
     this.tickAiIntentPhase();
     this.tickAbilityIntentPhase();
     this.tickMovementPhase(delta);
+    this.tickPortalTransferPhase();
     this.tickCombatPhase(delta);
     this.tickReplicationPhase();
     this.tickPhysicsFinalizePhase();
+  }
+
+  private tickPortalTransferPhase(): void {
+    const mapInstanceId = (process.env.MAP_INSTANCE_ID ?? "").trim();
+    if (mapInstanceId.length <= 0) {
+      return;
+    }
+    const zone = PORTAL_TRANSFER_ZONES.find((candidate) => candidate.sourceMapInstanceId === mapInstanceId);
+    if (!zone) {
+      return;
+    }
+    const c = this.simulationEcs.world.components;
+    for (const userId of this.simulationEcs.getOnlinePlayerUserIds()) {
+      if (this.autoTransferRequestByUserId.has(userId)) {
+        continue;
+      }
+      const cooldownUntil = this.portalTriggerCooldownByUserId.get(userId) ?? 0;
+      if (this.elapsedSeconds < cooldownUntil) {
+        continue;
+      }
+      const eid = this.simulationEcs.getPlayerEidByUserId(userId);
+      if (typeof eid !== "number") {
+        continue;
+      }
+      const x = c.Position.x[eid] ?? 0;
+      const y = c.Position.y[eid] ?? 0;
+      const z = c.Position.z[eid] ?? 0;
+      const dx = x - zone.centerX;
+      const dy = y - zone.centerY;
+      const dz = z - zone.centerZ;
+      if (dx * dx + dy * dy + dz * dz > zone.sensorRadius * zone.sensorRadius) {
+        continue;
+      }
+      this.autoTransferRequestByUserId.set(userId, zone.targetMapInstanceId);
+      this.portalTriggerCooldownByUserId.set(userId, this.elapsedSeconds + PORTAL_TRANSFER_RETRIGGER_SECONDS);
+    }
   }
 
   private tickKinematicWorldFrames(prevElapsed: number): void {
@@ -690,25 +846,54 @@ export class GameSimulation {
     this.maybeBroadcastServerPopulation();
   }
 
-  public flushDirtyPlayerState(overrides?: { saveCharacterSnapshot?: (s: PlayerSnapshot) => void; saveAbilityStateSnapshot?: (s: PlayerSnapshot) => void }): void {
+  public flushDirtyPlayerState(overrides?: {
+    saveCharacterSnapshot?: (s: PlayerSnapshot) => void;
+    saveAbilityStateSnapshot?: (s: PlayerSnapshot) => void;
+    savePlayerSettings?: (accountId: number, settings: PlayerSettings) => void;
+  }): void {
     this.persistenceSyncSystem.flushDirtyPlayerState(
       (accountId) => this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(accountId),
       (snap) => { if (overrides?.saveCharacterSnapshot) overrides.saveCharacterSnapshot(snap); else this.persistence.saveCharacterSnapshot(snap); },
-      (snap) => { if (overrides?.saveAbilityStateSnapshot) overrides.saveAbilityStateSnapshot(snap); else this.persistence.saveAbilityStateSnapshot(snap); }
+      (snap) => { if (overrides?.saveAbilityStateSnapshot) overrides.saveAbilityStateSnapshot(snap); else this.persistence.saveAbilityStateSnapshot(snap); },
+      (accountId) => this.getPlayerSettingsByAccountId(accountId),
+      (accountId, settings) => {
+        if (overrides?.savePlayerSettings) {
+          overrides.savePlayerSettings(accountId, settings);
+          return;
+        }
+        this.persistence.savePlayerSettings(accountId, settings);
+      }
     );
   }
 
   public injectPendingLoginSnapshot(accountId: number, snapshot: PlayerSnapshot): void { this.persistenceSyncSystem.queueOfflineSnapshot(accountId, snapshot); }
-  public injectPendingInventorySnapshot(accountId: number, snapshot: InventoryStateSnapshot): void {
+  public injectPendingInventorySnapshot(accountId: number, snapshot: InventorySnapshot): void {
     this.itemInventorySystem.queuePendingInventorySnapshot(accountId, snapshot);
+  }
+  public injectPendingPlayerSettings(accountId: number, settings: PlayerSettings): void {
+    this.playerSettingsByAccountId.set(Math.max(1, Math.floor(accountId)), coercePlayerSettings(settings));
   }
   public getPlayerSnapshotByUserId(userId: number): PlayerSnapshot | null {
     const aid = this.simulationEcs.getPlayerAccountIdByUserId(userId);
     if (aid === null) return null;
     return this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(aid);
   }
-  public getInventorySnapshotByAccountId(accountId: number): InventoryStateSnapshot {
+  public getInventorySnapshotByAccountId(accountId: number): InventorySnapshot {
     return this.itemInventorySystem.ensureInventoryLoaded(accountId);
+  }
+  public getPlayerSettingsSnapshotByAccountId(accountId: number): PlayerSettings {
+    return this.getPlayerSettingsByAccountId(accountId);
+  }
+  public consumeAutoMapTransferRequests(): ReadonlyArray<{ userId: number; targetMapInstanceId: string }> {
+    if (this.autoTransferRequestByUserId.size <= 0) {
+      return [];
+    }
+    const requests: Array<{ userId: number; targetMapInstanceId: string }> = [];
+    for (const [userId, targetMapInstanceId] of this.autoTransferRequestByUserId) {
+      requests.push({ userId, targetMapInstanceId });
+    }
+    this.autoTransferRequestByUserId.clear();
+    return requests;
   }
 
   public getRuntimeStats(): { onlinePlayers: number; activeProjectiles: number; pendingOfflineSnapshots: number; ecsEntities: number; activeNpcs: number; inactiveNpcs: number; hibernatingNpcs: number } {
@@ -718,6 +903,56 @@ export class GameSimulation {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  private syncCarrierMembershipMessagesForPlayer(userId: number, eid: number): void {
+    const collider = this.simulationEcs.getPlayerCollider(eid);
+    if (!collider) {
+      this.carrierMembershipByUserId.delete(userId);
+      return;
+    }
+    const overlaps = this.locationRootSystem.collectCarrierVolumeMembershipsForCollider(collider);
+    const nextKeys = new Set<string>();
+    for (let i = 0; i < overlaps.length; i += 1) {
+      const membership = overlaps[i];
+      if (!membership) continue;
+      nextKeys.add(this.toCarrierMembershipKey(membership.framePid, membership.volumeId));
+    }
+    const previousKeys = this.carrierMembershipByUserId.get(userId) ?? new Set<string>();
+    for (const key of previousKeys) {
+      if (!nextKeys.has(key)) {
+        const parsed = this.parseCarrierMembershipKey(key);
+        if (parsed) {
+          this.replication.queueCarrierVolumeExited(userId, parsed.framePid, parsed.volumeId);
+        }
+      }
+    }
+    for (const key of nextKeys) {
+      if (!previousKeys.has(key)) {
+        const parsed = this.parseCarrierMembershipKey(key);
+        if (parsed) {
+          this.replication.queueCarrierVolumeEntered(userId, parsed.framePid, parsed.volumeId);
+        }
+      }
+    }
+    this.carrierMembershipByUserId.set(userId, nextKeys);
+  }
+
+  private toCarrierMembershipKey(framePid: number, volumeId: string): string {
+    return `${Math.floor(framePid)}:${volumeId}`;
+  }
+
+  private parseCarrierMembershipKey(key: string): { framePid: number; volumeId: string } | null {
+    const separator = key.indexOf(":");
+    if (separator <= 0 || separator >= key.length - 1) {
+      return null;
+    }
+    const framePid = Number(key.slice(0, separator));
+    const volumeId = key.slice(separator + 1);
+    if (!Number.isFinite(framePid) || volumeId.length === 0) {
+      return null;
+    }
+    return { framePid: Math.floor(framePid), volumeId };
+  }
+
   private ensureBlueprintAccessLoaded(
     accountId: number,
     accessTag: BlueprintAccessTag,
@@ -972,6 +1207,41 @@ export class GameSimulation {
     }
   }
 
+  public queueServerAlertForUser(userId: number, text: string, severity: AlertSeverity = "info"): void {
+    this.alertDispatcher.queueForUserId(userId, text, severity);
+  }
+
+  public queueServerAlertForAccount(accountId: number, text: string, severity: AlertSeverity = "info"): void {
+    this.alertDispatcher.queueForAccountId(accountId, text, severity);
+  }
+
+  public broadcastServerAlert(text: string, severity: AlertSeverity = "info"): void {
+    this.alertDispatcher.broadcast(text, severity);
+  }
+
+  public getServerAlertDispatcher(): ServerAlertDispatcher<UserLike> {
+    return this.alertDispatcher;
+  }
+
+  private ensurePlayerSettingsLoaded(accountId: number): PlayerSettings {
+    const normalizedAccountId = Math.max(1, Math.floor(accountId));
+    const existing = this.playerSettingsByAccountId.get(normalizedAccountId);
+    if (existing) {
+      return existing;
+    }
+    const loaded = this.persistence.loadPlayerSettings(normalizedAccountId);
+    this.playerSettingsByAccountId.set(normalizedAccountId, loaded);
+    return loaded;
+  }
+
+  private getPlayerSettingsByAccountId(accountId: number): PlayerSettings {
+    const existing = this.playerSettingsByAccountId.get(accountId);
+    if (existing) {
+      return existing;
+    }
+    return { ...DEFAULT_PLAYER_SETTINGS };
+  }
+
   // ── Player lifecycle ──────────────────────────────────────────────────────
   private createPlayerLifecycleSystem(): PlayerLifecycleSystem<UserLike> {
     return new PlayerLifecycleSystem<UserLike>({
@@ -1015,6 +1285,7 @@ export class GameSimulation {
       },
       despawnPlayer: (user, eid) => {
         const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id) ?? 0;
+        this.carrierMembershipByUserId.delete(user.id);
         this.creatorSystem.removeSession(user.id);
         this.controllerSystem.detachUser(user.id);
         this.simulationEcs.unbindPlayerIndexes(user.id, eid);
@@ -1023,6 +1294,12 @@ export class GameSimulation {
         this.events.emit<PlayerDespawnedPayload>(GameEvent.PLAYER_DESPAWNED, { userId: user.id, eid, accountId });
       },
       sendInitialReplicationState: (user, accountId) => {
+        const settings = this.ensurePlayerSettingsLoaded(accountId);
+        user.queueMessage({
+          ntype: NType.PlayerSettingsMessage,
+          settingsJson: JSON.stringify(settings)
+        });
+        this.queueServerAlertForUser(user.id, "Connected to authoritative server.", "success");
         const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
         if (!abilityState) return;
         this.replication.sendInitialAbilityStateFromSnapshot(user, abilityState);
@@ -1059,8 +1336,10 @@ export class GameSimulation {
       markPlayerDirty: (aid, opts) => this.persistenceSyncSystem.markAccountDirty(aid, opts),
       unregisterPlayerCollider: (h) => this.damageSystem.unregisterCollider(h),
       removeProjectilesByOwner: (nid) => this.projectileSystem.removeByOwner(nid),
-      viewHalfWidth: 256, viewHalfHeight: 128, viewHalfDepth: 256,
+      viewHalfWidth: 128, viewHalfHeight: 128, viewHalfDepth: 128,
       farViewHalfWidth: 3200, farViewHalfHeight: 1600, farViewHalfDepth: 3200
     });
   }
 }
+
+

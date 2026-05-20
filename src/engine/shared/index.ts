@@ -4,7 +4,9 @@
  * Human Summary: Shared by client and server so both sides use the same definitions where required.
  */
 export * from "./abilities";
+export * from "./alerts";
 export * from "./blueprint";
+export * from "./clientLocalSettings";
 export * from "./config";
 export * from "./creator";
 export * from "./controller/characterControllerConfig";
@@ -16,6 +18,7 @@ export * from "./movementMode";
 export * from "./movingReferenceFrames";
 export * from "./netcode";
 export * from "./physicsCollisionGroups";
+export * from "./playerSettings";
 export * from "./platforms";
 export * from "./rotation";
 export * from "./stats";

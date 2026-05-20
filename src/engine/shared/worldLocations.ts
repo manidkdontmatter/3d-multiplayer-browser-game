@@ -43,6 +43,7 @@ export const ENVIRONMENT_PRESET_VOID_DEEP = 5;
 
 export interface LocationRootDefinition {
   id: string;
+  mapInstanceIds?: readonly string[];
   pid: number;
   archetypeId: number;
   kind: LocationKind;

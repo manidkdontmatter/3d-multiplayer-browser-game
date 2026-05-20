@@ -4,7 +4,8 @@
  * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
  */
 import { GameSimulation } from "../GameSimulation";
-import type { InventoryStateSnapshot } from "../../shared/items";
+import type { InventorySnapshot } from "../../shared/items";
+import { coercePlayerSettings, type PlayerSettings } from "../../shared/playerSettings";
 import { NType } from "../../shared/netcode";
 import { MapProcessIpcChannel } from "../ipc/MapProcessIpcChannel";
 import { GUEST_ACCOUNT_ID_BASE, PersistenceService, type PlayerSnapshot } from "../persistence/PersistenceService";
@@ -15,6 +16,11 @@ import type { ServerNetworkUser } from "./ServerNetworkTypes";
 const MAP_TRANSFER_DISCONNECT_DELAY_MS = 800;
 const MAX_CREATOR_COMMAND_JSON_BYTES = 16384;
 const MAX_MAP_TRANSFER_TARGET_ID_CHARS = 256;
+const MAP_PORTAL_ARRIVAL_CAMERA_Y = 4;
+const MAP_PORTAL_ARRIVAL_OVERRIDES: Readonly<Record<string, { x: number; y: number; z: number; yaw: number }>> = Object.freeze({
+  "map-a->map-b": { x: 6, y: MAP_PORTAL_ARRIVAL_CAMERA_Y, z: 0, yaw: Math.PI },
+  "map-b->map-a": { x: 18, y: 34, z: 0, yaw: Math.PI }
+});
 
 export class ServerNetworkEventRouter {
   private readonly commandRouter = new ServerCommandRouter<ServerNetworkUser>();
@@ -45,6 +51,18 @@ export class ServerNetworkEventRouter {
         this.simulation.removeUser(user);
       }
     });
+    this.drainAutoPortalTransfers();
+  }
+
+  private drainAutoPortalTransfers(): void {
+    const requests = this.simulation.consumeAutoMapTransferRequests();
+    for (const request of requests) {
+      const user = this.networkHost.getConnectedUsers().find((entry) => entry.id === request.userId);
+      if (!user) {
+        continue;
+      }
+      void this.handleMapTransferCommand(user, request.targetMapInstanceId);
+    }
   }
 
   private handleCommandSet(user: ServerNetworkUser, commands: unknown[]): void {
@@ -55,6 +73,9 @@ export class ServerNetworkEventRouter {
         this.simulation.applyItemCommand(commandUser, command),
       onMapTransferCommand: (commandUser, command) =>
         void this.handleMapTransferCommand(commandUser, command.targetMapInstanceId),
+      onPlayerSettingsCommand: (commandUser, command) => {
+        this.simulation.applyPlayerSettingsCommand(commandUser, command);
+      },
       onCreatorCommand: (commandUser, command) => {
         if (typeof command.commandJson !== "string" || command.commandJson.length > MAX_CREATOR_COMMAND_JSON_BYTES) {
           console.warn("[server] creator command too large, dropped");
@@ -105,6 +126,7 @@ export class ServerNetworkEventRouter {
     const payloadAccountId = (payload as { accountId?: unknown } | undefined)?.accountId;
     const payloadSnapshot = (payload as { playerSnapshot?: unknown } | undefined)?.playerSnapshot;
     const payloadInventory = (payload as { inventoryState?: unknown } | undefined)?.inventoryState;
+    const payloadPlayerSettings = (payload as { playerSettings?: unknown } | undefined)?.playerSettings;
     const payloadTransferId = (payload as { transferId?: unknown } | undefined)?.transferId;
     if (typeof authKey === "string") {
       user.authKey = authKey;
@@ -119,6 +141,10 @@ export class ServerNetworkEventRouter {
       const inventoryState = this.normalizeInventorySnapshot(payloadInventory);
       if (inventoryState) {
         this.simulation.injectPendingInventorySnapshot(user.accountId, inventoryState);
+      }
+      const playerSettings = this.normalizePlayerSettings(payloadPlayerSettings);
+      if (playerSettings) {
+        this.simulation.injectPendingPlayerSettings(user.accountId, playerSettings);
       }
       this.simulation.addUser(user);
       if (typeof payloadTransferId === "string" && payloadTransferId.length > 0) {
@@ -148,6 +174,13 @@ export class ServerNetworkEventRouter {
     this.simulation.addUser(user);
   }
 
+  private normalizePlayerSettings(raw: unknown): PlayerSettings | null {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    return coercePlayerSettings(raw);
+  }
+
   private async handleMapTransferCommand(user: ServerNetworkUser, targetMapRaw: unknown): Promise<void> {
     const targetMapInstanceId =
       typeof targetMapRaw === "string" ? targetMapRaw.trim() : "";
@@ -166,14 +199,17 @@ export class ServerNetworkEventRouter {
       return;
     }
     const snapshot = this.simulation.getPlayerSnapshotByUserId(user.id);
+    const adjustedSnapshot = this.applyPortalArrivalOverride(fromMapInstanceId, targetMapInstanceId, snapshot);
     const inventoryState = this.simulation.getInventorySnapshotByAccountId(accountId);
+    const playerSettings = this.simulation.getPlayerSettingsSnapshotByAccountId(accountId);
     const transfer = await this.ipcChannel.request("RequestTransfer", {
         authKey: user.authKey ?? null,
         accountId,
         fromMapInstanceId,
         toMapInstanceId: targetMapInstanceId,
-        playerSnapshot: snapshot,
-        inventoryState
+        playerSnapshot: adjustedSnapshot,
+        inventoryState,
+        playerSettings
       });
     if (!transfer.ok || !transfer.wsUrl || !transfer.joinTicket || !transfer.mapConfig) {
       return;
@@ -193,6 +229,31 @@ export class ServerNetworkEventRouter {
       cubeCount: transfer.mapConfig.cubeCount
     });
     this.scheduleTransferDisconnect(user, targetMapInstanceId);
+  }
+
+  private applyPortalArrivalOverride(
+    fromMapInstanceId: string,
+    toMapInstanceId: string,
+    snapshot: PlayerSnapshot | null
+  ): PlayerSnapshot | null {
+    if (!snapshot) {
+      return null;
+    }
+    const key = `${fromMapInstanceId}->${toMapInstanceId}`;
+    const override = MAP_PORTAL_ARRIVAL_OVERRIDES[key];
+    if (!override) {
+      return snapshot;
+    }
+    return {
+      ...snapshot,
+      x: override.x,
+      y: override.y,
+      z: override.z,
+      yaw: override.yaw,
+      vx: 0,
+      vy: 0,
+      vz: 0
+    };
   }
 
   private normalizePlayerSnapshot(raw: unknown, fallbackAccountId: number): PlayerSnapshot | null {
@@ -228,12 +289,12 @@ export class ServerNetworkEventRouter {
     };
   }
 
-  private normalizeInventorySnapshot(raw: unknown): InventoryStateSnapshot | null {
+  private normalizeInventorySnapshot(raw: unknown): InventorySnapshot | null {
     if (!raw || typeof raw !== "object") {
       return null;
     }
-    const value = raw as InventoryStateSnapshot;
-    if (!Array.isArray(value.items)) {
+    const value = raw as InventorySnapshot;
+    if (!Array.isArray(value.itemInstances)) {
       return null;
     }
     return value;
@@ -302,3 +363,5 @@ export class ServerNetworkEventRouter {
     return true;
   }
 }
+
+

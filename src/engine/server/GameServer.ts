@@ -5,7 +5,7 @@
  */
 import { performance } from "node:perf_hooks";
 import type { Context } from "nengi";
-import type { InventoryStateSnapshot } from "../shared/items";
+import type { InventorySnapshot } from "../shared/items";
 import { NType, SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
 import { GameSimulation } from "./GameSimulation";
 import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
@@ -32,6 +32,18 @@ const MAX_TICK_INTERVAL_SAMPLES = 6000;
 const DEFAULT_PERSIST_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_HEALTH_LOG_INTERVAL_MS = 30000;
 const DEFAULT_NET_DIAGNOSTICS_BROADCAST_INTERVAL_MS = 1000;
+
+export interface TickPhaseMetrics {
+  readonly samples: number;
+  readonly drainQueueMeanMs: number;
+  readonly drainQueueMaxMs: number;
+  readonly simulationMeanMs: number;
+  readonly simulationMaxMs: number;
+  readonly postSimulationMeanMs: number;
+  readonly postSimulationMaxMs: number;
+  readonly networkMeanMs: number;
+  readonly networkMaxMs: number;
+}
 
 export class GameServer {
   private readonly netDiagnostics: ServerNetDiagnosticsCollector;
@@ -65,6 +77,14 @@ export class GameServer {
   private tickIntervalSampleWriteIndex = 0;
   private tickIntervalTotalSamples = 0;
   private lastLiveMetricsSampleCount = 0;
+  private tickPhaseDrainQueueAccumMs = 0;
+  private tickPhaseDrainQueueMaxMs = 0;
+  private tickPhaseSimulationAccumMs = 0;
+  private tickPhaseSimulationMaxMs = 0;
+  private tickPhasePostSimulationAccumMs = 0;
+  private tickPhasePostSimulationMaxMs = 0;
+  private tickPhaseNetworkAccumMs = 0;
+  private tickPhaseNetworkMaxMs = 0;
 
   public constructor(context: Context, private readonly ipcChannel: MapProcessIpcChannel | null = null) {
     this.netDiagnostics = new ServerNetDiagnosticsCollector();
@@ -129,7 +149,7 @@ export class GameServer {
     authKey?: string;
     accountId?: number;
     playerSnapshot?: unknown;
-    inventoryState?: InventoryStateSnapshot | null;
+    inventoryState?: InventorySnapshot | null;
     transferId?: string | null;
   }> {
     if (!handshake || typeof handshake !== "object") {
@@ -163,7 +183,7 @@ export class GameServer {
       json.playerSnapshot && typeof json.playerSnapshot === "object" ? json.playerSnapshot : undefined;
     const inventoryState =
       json.inventoryState && typeof json.inventoryState === "object"
-        ? (json.inventoryState as InventoryStateSnapshot)
+        ? (json.inventoryState as InventorySnapshot)
         : null;
     return {
       ...(validatedAuthKey ? { authKey: validatedAuthKey } : {}),
@@ -215,6 +235,36 @@ export class GameServer {
     this.tickIntervalTotalSamples = 0;
     this.lastTickStartMs = null;
     this.lastLiveMetricsSampleCount = 0;
+    this.tickPhaseDrainQueueAccumMs = 0;
+    this.tickPhaseDrainQueueMaxMs = 0;
+    this.tickPhaseSimulationAccumMs = 0;
+    this.tickPhaseSimulationMaxMs = 0;
+    this.tickPhasePostSimulationAccumMs = 0;
+    this.tickPhasePostSimulationMaxMs = 0;
+    this.tickPhaseNetworkAccumMs = 0;
+    this.tickPhaseNetworkMaxMs = 0;
+  }
+
+  public getTickPhaseMetrics(): TickPhaseMetrics | null {
+    const samples = this.tickDurationCount;
+    if (samples <= 0) {
+      return null;
+    }
+    return {
+      samples,
+      drainQueueMeanMs: this.tickPhaseDrainQueueAccumMs / samples,
+      drainQueueMaxMs: this.tickPhaseDrainQueueMaxMs,
+      simulationMeanMs: this.tickPhaseSimulationAccumMs / samples,
+      simulationMaxMs: this.tickPhaseSimulationMaxMs,
+      postSimulationMeanMs: this.tickPhasePostSimulationAccumMs / samples,
+      postSimulationMaxMs: this.tickPhasePostSimulationMaxMs,
+      networkMeanMs: this.tickPhaseNetworkAccumMs / samples,
+      networkMaxMs: this.tickPhaseNetworkMaxMs
+    };
+  }
+
+  public getNetDiagnosticsSnapshot(nowMs = Date.now()): ServerNetDiagnosticsSnapshot {
+    return this.captureNetDiagnostics(nowMs);
   }
 
   public getRuntimeStats(): {
@@ -249,12 +299,38 @@ export class GameServer {
     }
     this.lastTickStartMs = now;
 
+    const phaseDrainStart = performance.now();
     this.networkEventRouter.drainQueue();
+    const phaseDrainMs = performance.now() - phaseDrainStart;
+    this.tickPhaseDrainQueueAccumMs += phaseDrainMs;
+    if (phaseDrainMs > this.tickPhaseDrainQueueMaxMs) {
+      this.tickPhaseDrainQueueMaxMs = phaseDrainMs;
+    }
 
+    const phaseSimulationStart = performance.now();
     this.simulation.step(SERVER_TICK_SECONDS);
+    const phaseSimulationMs = performance.now() - phaseSimulationStart;
+    this.tickPhaseSimulationAccumMs += phaseSimulationMs;
+    if (phaseSimulationMs > this.tickPhaseSimulationMaxMs) {
+      this.tickPhaseSimulationMaxMs = phaseSimulationMs;
+    }
+
+    const phasePostSimulationStart = performance.now();
     this.maybeFlushPersistence(performance.now());
     this.maybeBroadcastNetDiagnostics(performance.now());
+    const phasePostSimulationMs = performance.now() - phasePostSimulationStart;
+    this.tickPhasePostSimulationAccumMs += phasePostSimulationMs;
+    if (phasePostSimulationMs > this.tickPhasePostSimulationMaxMs) {
+      this.tickPhasePostSimulationMaxMs = phasePostSimulationMs;
+    }
+
+    const phaseNetworkStart = performance.now();
     this.networkHost.step();
+    const phaseNetworkMs = performance.now() - phaseNetworkStart;
+    this.tickPhaseNetworkAccumMs += phaseNetworkMs;
+    if (phaseNetworkMs > this.tickPhaseNetworkMaxMs) {
+      this.tickPhaseNetworkMaxMs = phaseNetworkMs;
+    }
 
     const tickDurationMs = performance.now() - tickStart;
     this.lastTickDurationMs = tickDurationMs;
@@ -327,7 +403,9 @@ export class GameServer {
             this.orchestratorPersistenceBridge?.enqueue(snapshot, {
               saveCharacter: false,
               saveAbilityState: true
-            })
+            }),
+          savePlayerSettings: (accountId, settings) =>
+            this.orchestratorPersistenceBridge?.enqueueSettings(accountId, settings)
         });
         void this.orchestratorPersistenceBridge.flushPending().catch((error) => {
           console.error("[server] orchestrator persistence flush failed", error);
@@ -529,3 +607,4 @@ export class GameServer {
     return parts.join(", ");
   }
 }
+

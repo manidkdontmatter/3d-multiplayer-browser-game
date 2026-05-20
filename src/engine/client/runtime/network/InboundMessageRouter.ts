@@ -6,9 +6,14 @@
 import { NType } from "../../../shared/netcode";
 import type {
   AbilityUseMessage,
+  CarrierVolumeEnteredMessage,
+  CarrierVolumeExitedMessage,
   IdentityMessage,
   InputAckMessage,
   InventoryStateMessage,
+  InventoryActionResultMessage,
+  PlayerSettingsMessage,
+  ServerAlertMessage,
   MapTransferMessage,
   ServerNetDiagnosticsMessage,
   ServerPopulationMessage
@@ -21,6 +26,11 @@ export interface InboundMessageRouterHandlers {
   readonly onServerNetDiagnosticsMessage: (message: ServerNetDiagnosticsMessage) => void;
   readonly onMapTransferMessage: (message: MapTransferMessage) => void;
   readonly onInventoryStateMessage: (message: InventoryStateMessage) => void;
+  readonly onCarrierVolumeEnteredMessage: (message: CarrierVolumeEnteredMessage) => void;
+  readonly onCarrierVolumeExitedMessage: (message: CarrierVolumeExitedMessage) => void;
+  readonly onInventoryActionResultMessage: (message: InventoryActionResultMessage) => void;
+  readonly onPlayerSettingsMessage: (message: PlayerSettingsMessage) => void;
+  readonly onServerAlertMessage: (message: ServerAlertMessage) => void;
   readonly onUnhandledMessage: (message: unknown) => void;
 }
 
@@ -35,6 +45,11 @@ export class InboundMessageRouter {
         | ServerNetDiagnosticsMessage
         | ServerPopulationMessage
         | MapTransferMessage
+        | CarrierVolumeEnteredMessage
+        | CarrierVolumeExitedMessage
+        | InventoryActionResultMessage
+        | PlayerSettingsMessage
+        | ServerAlertMessage
         | undefined;
 
       if (typed?.ntype === NType.IdentityMessage) {
@@ -64,6 +79,29 @@ export class InboundMessageRouter {
 
       if (typed?.ntype === NType.InventoryStateMessage) {
         handlers.onInventoryStateMessage(typed);
+        continue;
+      }
+
+      if (typed?.ntype === NType.CarrierVolumeEnteredMessage) {
+        handlers.onCarrierVolumeEnteredMessage(typed);
+        continue;
+      }
+
+      if (typed?.ntype === NType.CarrierVolumeExitedMessage) {
+        handlers.onCarrierVolumeExitedMessage(typed);
+        continue;
+      }
+
+      if (typed?.ntype === NType.InventoryActionResultMessage) {
+        handlers.onInventoryActionResultMessage(typed);
+        continue;
+      }
+      if (typed?.ntype === NType.PlayerSettingsMessage) {
+        handlers.onPlayerSettingsMessage(typed);
+        continue;
+      }
+      if (typed?.ntype === NType.ServerAlertMessage) {
+        handlers.onServerAlertMessage(typed);
         continue;
       }
 

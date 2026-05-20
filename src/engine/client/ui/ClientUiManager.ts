@@ -4,7 +4,10 @@
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
 import type { AbilityDefinition } from "../../shared/abilities";
-import type { InventoryStateSnapshot } from "../../shared/items";
+import type { AlertSeverity } from "../../shared/alerts";
+import type { ClientLocalSettings } from "../../shared/clientLocalSettings";
+import type { InventorySnapshot } from "../../shared/items";
+import type { PlayerSettings } from "../../shared/playerSettings";
 import type { CreatorClientState } from "../runtime/network/CreatorStateStore";
 import { AbilityHud, type AbilityHudOptions } from "./AbilityHud";
 import {
@@ -15,6 +18,7 @@ import { TooltipSystem } from "./TooltipSystem";
 import { UiRuntime } from "./UiRuntime";
 import { PlayerCountPanel } from "./PlayerCountPanel";
 import { InteractPrompt } from "./InteractPrompt";
+import { AlertFeed } from "./AlertFeed";
 
 export class ClientUiManager {
   private readonly runtime: UiRuntime;
@@ -22,6 +26,7 @@ export class ClientUiManager {
   private readonly diagnosticsPanel: NetworkDiagnosticsPanel;
   private readonly playerCountPanel: PlayerCountPanel;
   private readonly interactPrompt: InteractPrompt;
+  private readonly alertFeed: AlertFeed;
   private diagnosticsVisible = false;
 
   private constructor(documentRef: Document, abilityHudOptions: AbilityHudOptions) {
@@ -41,6 +46,7 @@ export class ClientUiManager {
     );
     this.playerCountPanel = PlayerCountPanel.mount(this.runtime.getLayer("gameplay"), documentRef);
     this.interactPrompt = InteractPrompt.mount(this.runtime.getLayer("gameplay"), documentRef);
+    this.alertFeed = AlertFeed.mount(this.runtime.getLayer("gameplay"), documentRef);
     this.diagnosticsPanel.setVisible(false);
   }
 
@@ -68,6 +74,14 @@ export class ClientUiManager {
     this.abilityHud.setMouseBindings(primarySlot, secondarySlot);
   }
 
+  public setPlayerSettings(settings: PlayerSettings): void {
+    this.abilityHud.setPlayerSettings(settings);
+  }
+
+  public setClientLocalSettings(settings: ClientLocalSettings): void {
+    this.abilityHud.setClientLocalSettings(settings);
+  }
+
   public setOwnedAbilityIds(ownedAbilityIds: ReadonlyArray<number>): void {
     this.abilityHud.setOwnedAbilityIds(ownedAbilityIds);
   }
@@ -76,7 +90,7 @@ export class ClientUiManager {
     this.abilityHud.setCreatorState(state);
   }
 
-  public setInventoryState(state: InventoryStateSnapshot): void {
+  public setInventoryState(state: InventorySnapshot): void {
     this.abilityHud.setInventoryState(state);
   }
 
@@ -104,4 +118,9 @@ export class ClientUiManager {
   public showInteractPrompt(text: string): void {
     this.interactPrompt.show(text);
   }
+
+  public showAlert(message: string, severity: AlertSeverity = "info"): void {
+    this.alertFeed.enqueue(message, severity);
+  }
 }
+

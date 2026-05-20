@@ -7,8 +7,12 @@ import { createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   type GenericOrchestratorResponse,
+  type LoadPersistentPickupsRequest,
+  type LoadPersistentPickupsResponse,
   type MapHeartbeatRequest,
   type MapRegistrationRequest,
+  type PersistentPickupRecord,
+  type PersistPersistentPickupsRequest,
   type PersistCriticalEventRequest,
   type PersistInventoryMutationRequest,
   type PersistSnapshotBatchRequest,
@@ -21,7 +25,8 @@ import {
   type ValidateJoinTicketResponse
 } from "../engine/server/orchestrator/OrchestratorProtocol";
 import type { BootstrapRequest, BootstrapResponse } from "../engine/shared/bootstrapProtocol";
-import type { InventoryStateSnapshot } from "../engine/shared/items";
+import type { InventorySnapshot } from "../engine/shared/items";
+import type { PlayerSettings } from "../engine/shared/playerSettings";
 import {
   type FinalizeSourceReleaseRequest,
   type OrchestratorIpcEnvelope,
@@ -34,6 +39,7 @@ import { MapProcessSupervisor, type MapProcessSpec } from "./MapProcessSuperviso
 import {
   GUEST_ACCOUNT_ID_BASE,
   PersistenceService,
+  type PersistedPickupState,
   type PlayerSnapshot
 } from "../engine/server/persistence/PersistenceService";
 
@@ -42,7 +48,8 @@ interface JoinTicketRecord {
   authKey: string | null;
   accountId: number;
   playerSnapshot: PlayerSnapshot | null;
-  inventoryState: InventoryStateSnapshot | null;
+  inventoryState: InventorySnapshot | null;
+  playerSettings: PlayerSettings | null;
   targetInstanceId: string;
   issuedAtMs: number;
   expiresAtMs: number;
@@ -109,9 +116,16 @@ const mapSpecs: MapProcessSpec[] = [
   },
   {
     instanceId: "map-b",
-    mapId: DEFAULT_MAP_ID,
+    mapId: "void-transfer",
     wsPort: MAP_B_PORT,
-    mapConfig: defaultMapConfig("map-b", 7331)
+    mapConfig: coerceRuntimeMapConfig({
+      mapId: "void-transfer",
+      instanceId: "map-b",
+      seed: 7331,
+      groundHalfExtent: 96,
+      groundHalfThickness: 0.5,
+      cubeCount: 0
+    })
   }
 ];
 const mapSpecsByInstance = new Map<string, MapProcessSpec>();
@@ -312,6 +326,13 @@ async function dispatchMapProcessRequest(
     persistInventoryMutation(payload as PersistInventoryMutationRequest);
     return { ok: true } satisfies GenericOrchestratorResponse;
   }
+  if (messageType === "LoadPersistentPickups") {
+    return loadPersistentPickups(payload as LoadPersistentPickupsRequest);
+  }
+  if (messageType === "PersistPersistentPickups") {
+    persistPersistentPickups(payload as PersistPersistentPickupsRequest);
+    return { ok: true } satisfies GenericOrchestratorResponse;
+  }
   throw new Error(`Unhandled map IPC request ${messageType} from ${instanceId}`);
 }
 
@@ -425,7 +446,8 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     const identity = resolveIdentity(payload.authKey ?? null, req.socket.remoteAddress ?? "unknown");
     const playerSnapshot = loadSnapshot(identity.accountId);
     const inventoryState = loadInventorySnapshot(identity.accountId);
-    const ticket = issueJoinTicket(identity.authKey, identity.accountId, playerSnapshot, inventoryState, selected.instanceId, {
+    const playerSettings = loadPlayerSettings(identity.accountId);
+    const ticket = issueJoinTicket(identity.authKey, identity.accountId, playerSnapshot, inventoryState, playerSettings, selected.instanceId, {
       kind: "bootstrap",
       transferId: null
     });
@@ -774,6 +796,9 @@ async function handleTransferRequest(payload: TransferRequest): Promise<Transfer
   if (payload.inventoryState && normalizedAccountId < GUEST_ACCOUNT_ID_BASE) {
     persistence.saveInventoryState(normalizedAccountId, payload.inventoryState);
   }
+  if (payload.playerSettings && normalizedAccountId < GUEST_ACCOUNT_ID_BASE) {
+    persistence.savePlayerSettings(normalizedAccountId, payload.playerSettings);
+  }
   transferRecords.set(transferId, {
     transferId,
     accountId: normalizedAccountId,
@@ -806,6 +831,7 @@ async function handleTransferRequest(payload: TransferRequest): Promise<Transfer
     normalizedAccountId,
     payload.playerSnapshot ? toPlayerSnapshot(payload.playerSnapshot) : null,
     payload.inventoryState ?? null,
+    payload.playerSettings ?? null,
     payload.toMapInstanceId,
     {
       kind: "transfer",
@@ -876,18 +902,26 @@ function loadSnapshot(accountId: number): PlayerSnapshot | null {
   return persistence.loadPlayerState(accountId);
 }
 
-function loadInventorySnapshot(accountId: number): InventoryStateSnapshot | null {
+function loadInventorySnapshot(accountId: number): InventorySnapshot | null {
   if (accountId >= GUEST_ACCOUNT_ID_BASE) {
     return null;
   }
   return persistence.loadInventoryState(accountId);
 }
 
+function loadPlayerSettings(accountId: number): PlayerSettings | null {
+  if (accountId >= GUEST_ACCOUNT_ID_BASE) {
+    return null;
+  }
+  return persistence.loadPlayerSettings(accountId);
+}
+
 function issueJoinTicket(
   authKey: string | null,
   accountId: number,
   playerSnapshot: PlayerSnapshot | null,
-  inventoryState: InventoryStateSnapshot | null,
+  inventoryState: InventorySnapshot | null,
+  playerSettings: PlayerSettings | null,
   targetInstanceId: string,
   meta: { kind: "bootstrap" | "transfer"; transferId: string | null }
 ): string {
@@ -903,6 +937,7 @@ function issueJoinTicket(
     accountId,
     playerSnapshot,
     inventoryState,
+    playerSettings,
     targetInstanceId,
     issuedAtMs,
     expiresAtMs,
@@ -1014,6 +1049,7 @@ async function validateJoinTicket(joinTicket: string, mapInstanceId: string): Pr
     accountId: ticket.accountId,
     playerSnapshot: ticket.playerSnapshot,
     inventoryState: ticket.inventoryState,
+    playerSettings: ticket.playerSettings,
     transferId: ticket.transferId
   };
 }
@@ -1078,14 +1114,18 @@ function enqueuePersistSnapshot(payload: PersistSnapshotRequest): void {
       accountId,
       snapshot: payload.snapshot,
       saveCharacter: existing.saveCharacter || payload.saveCharacter,
-      saveAbilityState: existing.saveAbilityState || payload.saveAbilityState
+      saveAbilityState: existing.saveAbilityState || payload.saveAbilityState,
+      saveSettings: Boolean(existing.saveSettings || payload.saveSettings),
+      settings: payload.settings ?? existing.settings ?? null
     });
   } else {
     persistenceQueue.set(accountId, {
       accountId,
       snapshot: payload.snapshot,
       saveCharacter: payload.saveCharacter,
-      saveAbilityState: payload.saveAbilityState
+      saveAbilityState: payload.saveAbilityState,
+      saveSettings: Boolean(payload.saveSettings),
+      settings: payload.settings ?? null
     });
   }
   persistenceMetrics.enqueued += 1;
@@ -1106,7 +1146,9 @@ async function flushPersistenceQueue(): Promise<void> {
     persistence.savePlayerSnapshotBatch(entries.map((payload) => ({
       snapshot: toPlayerSnapshot(payload.snapshot),
       saveCharacter: payload.saveCharacter,
-      saveAbilityState: payload.saveAbilityState
+      saveAbilityState: payload.saveAbilityState,
+      saveSettings: Boolean(payload.saveSettings),
+      settings: payload.settings ?? null
     })));
     persistenceMetrics.flushed += entries.length;
     persistenceMetrics.lastFlushEntryCount = entries.length;
@@ -1197,11 +1239,93 @@ function persistInventoryMutation(payload: PersistInventoryMutationRequest): voi
     eventType: "inventory_mutation",
     eventPayload: {
       action: payload.action,
-      itemCount: payload.snapshot.items.length,
+      itemCount: payload.snapshot.itemInstances.length,
       equipmentSlots: Object.keys(payload.snapshot.equipment)
     },
     eventAtMs: payload.eventAtMs
   });
+}
+
+function loadPersistentPickups(payload: LoadPersistentPickupsRequest): LoadPersistentPickupsResponse {
+  const instanceId = typeof payload.instanceId === "string" ? payload.instanceId.trim() : "";
+  if (instanceId.length <= 0) {
+    return {
+      ok: false,
+      pickups: [],
+      error: "instanceId required"
+    };
+  }
+  const pickups = persistence.loadPersistentPickups(instanceId).map((pickup) => toPersistentPickupRecord(pickup));
+  return {
+    ok: true,
+    pickups
+  };
+}
+
+function persistPersistentPickups(payload: PersistPersistentPickupsRequest): void {
+  const instanceId = typeof payload.instanceId === "string" ? payload.instanceId.trim() : "";
+  if (instanceId.length <= 0) {
+    return;
+  }
+  const pickups = Array.isArray(payload.pickups)
+    ? payload.pickups
+        .map((pickup) => toPersistedPickupState(pickup))
+        .filter((pickup): pickup is PersistedPickupState => pickup !== null)
+    : [];
+  persistence.savePersistentPickups(instanceId, pickups);
+}
+
+function toPersistentPickupRecord(pickup: PersistedPickupState): PersistentPickupRecord {
+  return {
+    pickupId: pickup.pickupId,
+    definitionId: pickup.definitionId,
+    modelId: pickup.modelId,
+    quantity: pickup.quantity,
+    persistencePolicy: pickup.persistencePolicy,
+    x: pickup.x,
+    y: pickup.y,
+    z: pickup.z,
+    rotation: {
+      x: pickup.rotation.x,
+      y: pickup.rotation.y,
+      z: pickup.rotation.z,
+      w: pickup.rotation.w
+    }
+  };
+}
+
+function toPersistedPickupState(raw: unknown): PersistedPickupState | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const pickup = raw as Partial<PersistedPickupState>;
+  const rotation = pickup.rotation;
+  if (!rotation || typeof rotation !== "object") {
+    return null;
+  }
+  const pickupId = Math.max(1, Math.floor(Number(pickup.pickupId)));
+  const definitionId = Math.max(1, Math.floor(Number(pickup.definitionId)));
+  const modelId = Math.max(0, Math.floor(Number(pickup.modelId)));
+  const quantity = Math.max(1, Math.floor(Number(pickup.quantity)));
+  if (!Number.isFinite(pickupId) || !Number.isFinite(definitionId) || !Number.isFinite(modelId) || !Number.isFinite(quantity)) {
+    return null;
+  }
+  return {
+    pickupId,
+    definitionId,
+    modelId,
+    quantity,
+    persistencePolicy: pickup.persistencePolicy === "persistent" ? "persistent" : "transient_runtime",
+    x: Number.isFinite(pickup.x) ? Number(pickup.x) : 0,
+    y: Number.isFinite(pickup.y) ? Number(pickup.y) : 0,
+    z: Number.isFinite(pickup.z) ? Number(pickup.z) : 0,
+    rotation: {
+      x: Number.isFinite(rotation.x) ? Number(rotation.x) : 0,
+      y: Number.isFinite(rotation.y) ? Number(rotation.y) : 0,
+      z: Number.isFinite(rotation.z) ? Number(rotation.z) : 0,
+      w: Number.isFinite(rotation.w) ? Number(rotation.w) : 1
+    }
+  };
 }
 
 function safeJsonStringify(value: unknown): string {
@@ -1248,3 +1372,5 @@ function applyCorsHeaders(res: ServerResponse): void {
 }
 
 bootstrap();
+
+

@@ -4,10 +4,12 @@
  * Human Summary: Used as an offline/developer script rather than in the realtime gameplay loop.
  */
 import fs from "node:fs";
+import inspector from "node:inspector";
 import path from "node:path";
 import process from "node:process";
-import { performance } from "node:perf_hooks";
+import { PerformanceObserver, constants, performance } from "node:perf_hooks";
 import { createHash } from "node:crypto";
+import net from "node:net";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { init as initNavigation } from "recast-navigation";
 import { Client, type Context } from "nengi";
@@ -25,6 +27,7 @@ import { initializeSharedGameData } from "../src/game/shared/index";
 import { initServerArchetypes } from "../src/game/server/serverArchetypes";
 
 type Mode = "benchmark" | "hosted";
+type Topology = "auto" | "sparse" | "clustered";
 
 type ScenarioConfig = {
   clients: number;
@@ -38,6 +41,10 @@ type ScenarioConfig = {
   gridSpacing: number;
   gridColumns: number;
   mode: Mode;
+  topology: Topology;
+  useExistingServer: boolean;
+  clientsOnly: boolean;
+  serverUrl: string;
 };
 
 type ScenarioResult = {
@@ -55,6 +62,33 @@ type ScenarioResult = {
   samples: number;
   rssMb: number;
   heapUsedMb: number;
+  netAvgOutBytesPerSecondPerPlayer: number;
+  netP95OutBytesPerSecondPerPlayer: number;
+  netAvgInBytesPerSecondPerPlayer: number;
+  netP95InBytesPerSecondPerPlayer: number;
+  netAvgOutMessagesPerSecondPerPlayer: number;
+  netP95OutMessagesPerSecondPerPlayer: number;
+  netAvgInMessagesPerSecondPerPlayer: number;
+  netP95InMessagesPerSecondPerPlayer: number;
+  netWarningMask: number;
+  phaseSamples: number;
+  phaseDrainQueueMeanMs: number;
+  phaseDrainQueueMaxMs: number;
+  phaseSimulationMeanMs: number;
+  phaseSimulationMaxMs: number;
+  phasePostSimulationMeanMs: number;
+  phasePostSimulationMaxMs: number;
+  phaseNetworkMeanMs: number;
+  phaseNetworkMaxMs: number;
+  gcEvents: number;
+  gcMajorEvents: number;
+  gcTotalMs: number;
+  gcMaxMs: number;
+  gcP95Ms: number;
+  heapUsedStartMb: number;
+  heapUsedEndMb: number;
+  heapUsedDeltaMb: number;
+  heapUsedPeakMb: number;
   pass: boolean;
 };
 
@@ -79,6 +113,13 @@ class LoadClient {
     });
     this.client.setWebsocketErrorHandler(() => {
       this.connected = false;
+    });
+    this.client.setWebsocketErrorHandler((event: unknown) => {
+      this.connected = false;
+      const details = formatConnectError(event);
+      if (details.length > 0) {
+        console.warn(`[load] websocket_error client=${this.id} ${details}`);
+      }
     });
   }
 
@@ -183,11 +224,16 @@ async function main(): Promise<void> {
   const clients = createClients(config.clients, `load-${runTag}`);
   let commandTimer: NodeJS.Timeout | null = null;
   let hostedLogTimer: NodeJS.Timeout | null = null;
+  let cpuProfiler: CpuProfilerSession | null = null;
+  let gcMonitor: GcAndHeapMonitor | null = null;
 
   try {
-    await server.start(config.serverPort);
+    if (!config.useExistingServer) {
+      await server.start(config.serverPort);
+      await waitForPortOpen("127.0.0.1", config.serverPort, 10_000, "load test nengi ws");
+    }
     server.resetTickMetrics();
-    const wsUrl = `ws://127.0.0.1:${config.serverPort}`;
+    const wsUrl = config.serverUrl;
     const connectStart = performance.now();
     const connectResult = await connectClients(
       clients,
@@ -230,14 +276,39 @@ async function main(): Promise<void> {
       return;
     }
 
+    gcMonitor = createGcAndHeapMonitor(true);
+    gcMonitor.start();
     await sleep(config.warmupSeconds * 1000);
     server.resetTickMetrics();
+    cpuProfiler = createCpuProfilerSession({
+      enabled: process.env.LOAD_PROFILE_CPU === "1",
+      outputDir: reportDir,
+      label: `network-load-c${config.clients}`
+    });
+    await cpuProfiler.start();
     await sleep(config.durationSeconds * 1000);
+    await cpuProfiler.stop();
+    cpuProfiler = null;
+    const gcStats = gcMonitor.stop();
+    gcMonitor = null;
 
     const metrics = server.getTickMetrics();
+    if (config.clientsOnly) {
+      if (connectResult.connected !== config.clients) {
+        throw new Error(
+          `clients-only connection baseline failed: connected=${connectResult.connected}/${config.clients}`
+        );
+      }
+      console.log(
+        `[load] clients-only complete connected=${connectResult.connected}/${config.clients} failed=${connectResult.failed}`
+      );
+      return;
+    }
     if (!metrics) {
       throw new Error("No tick metrics captured in benchmark window.");
     }
+    const phaseMetrics = server.getTickPhaseMetrics();
+    const netSnapshot = server.getNetDiagnosticsSnapshot(Date.now());
 
     const mem = process.memoryUsage();
     const achievedTps = metrics.mean_ms > 0 ? 1000 / metrics.mean_ms : 0;
@@ -256,6 +327,33 @@ async function main(): Promise<void> {
       samples: metrics.samples,
       rssMb: round3(mem.rss / (1024 * 1024)),
       heapUsedMb: round3(mem.heapUsed / (1024 * 1024)),
+      netAvgOutBytesPerSecondPerPlayer: round3(netSnapshot.avgOutboundBytesPerSecond),
+      netP95OutBytesPerSecondPerPlayer: round3(netSnapshot.p95OutboundBytesPerSecond),
+      netAvgInBytesPerSecondPerPlayer: round3(netSnapshot.avgInboundBytesPerSecond),
+      netP95InBytesPerSecondPerPlayer: round3(netSnapshot.p95InboundBytesPerSecond),
+      netAvgOutMessagesPerSecondPerPlayer: round3(netSnapshot.avgOutboundMessagesPerSecond),
+      netP95OutMessagesPerSecondPerPlayer: round3(netSnapshot.p95OutboundMessagesPerSecond),
+      netAvgInMessagesPerSecondPerPlayer: round3(netSnapshot.avgInboundMessagesPerSecond),
+      netP95InMessagesPerSecondPerPlayer: round3(netSnapshot.p95InboundMessagesPerSecond),
+      netWarningMask: netSnapshot.warningMask,
+      phaseSamples: phaseMetrics?.samples ?? 0,
+      phaseDrainQueueMeanMs: round3(phaseMetrics?.drainQueueMeanMs ?? 0),
+      phaseDrainQueueMaxMs: round3(phaseMetrics?.drainQueueMaxMs ?? 0),
+      phaseSimulationMeanMs: round3(phaseMetrics?.simulationMeanMs ?? 0),
+      phaseSimulationMaxMs: round3(phaseMetrics?.simulationMaxMs ?? 0),
+      phasePostSimulationMeanMs: round3(phaseMetrics?.postSimulationMeanMs ?? 0),
+      phasePostSimulationMaxMs: round3(phaseMetrics?.postSimulationMaxMs ?? 0),
+      phaseNetworkMeanMs: round3(phaseMetrics?.networkMeanMs ?? 0),
+      phaseNetworkMaxMs: round3(phaseMetrics?.networkMaxMs ?? 0),
+      gcEvents: gcStats.events,
+      gcMajorEvents: gcStats.majorEvents,
+      gcTotalMs: round3(gcStats.totalDurationMs),
+      gcMaxMs: round3(gcStats.maxDurationMs),
+      gcP95Ms: round3(gcStats.p95DurationMs),
+      heapUsedStartMb: round3(gcStats.heapUsedStartMb),
+      heapUsedEndMb: round3(gcStats.heapUsedEndMb),
+      heapUsedDeltaMb: round3(gcStats.heapUsedEndMb - gcStats.heapUsedStartMb),
+      heapUsedPeakMb: round3(gcStats.heapUsedPeakMb),
       pass: connectResult.connected === config.clients && achievedTps >= SERVER_TICK_RATE * 0.98
     };
     enforceScenarioBudgets(result);
@@ -282,7 +380,24 @@ async function main(): Promise<void> {
     console.log(
       `[load] result clients=${result.clients} connected=${result.connected}/${config.clients} tps=${result.achievedTps.toFixed(2)}/${result.targetTps.toFixed(2)} mean=${result.meanTickMs.toFixed(3)}ms p95=${result.p95TickMs.toFixed(3)}ms max=${result.maxTickMs.toFixed(3)}ms pass=${String(result.pass)}`
     );
+    console.log(
+      `[load] net avg_out_bytes_s_pp=${result.netAvgOutBytesPerSecondPerPlayer.toFixed(2)} p95_out_bytes_s_pp=${result.netP95OutBytesPerSecondPerPlayer.toFixed(2)} avg_in_bytes_s_pp=${result.netAvgInBytesPerSecondPerPlayer.toFixed(2)} p95_in_bytes_s_pp=${result.netP95InBytesPerSecondPerPlayer.toFixed(2)} avg_out_msgs_s_pp=${result.netAvgOutMessagesPerSecondPerPlayer.toFixed(2)} p95_out_msgs_s_pp=${result.netP95OutMessagesPerSecondPerPlayer.toFixed(2)} avg_in_msgs_s_pp=${result.netAvgInMessagesPerSecondPerPlayer.toFixed(2)} p95_in_msgs_s_pp=${result.netP95InMessagesPerSecondPerPlayer.toFixed(2)} warn_mask=${result.netWarningMask}`
+    );
+    console.log(
+      `[load] phase_ms drain(mean/max)=${result.phaseDrainQueueMeanMs.toFixed(3)}/${result.phaseDrainQueueMaxMs.toFixed(3)} sim(mean/max)=${result.phaseSimulationMeanMs.toFixed(3)}/${result.phaseSimulationMaxMs.toFixed(3)} post(mean/max)=${result.phasePostSimulationMeanMs.toFixed(3)}/${result.phasePostSimulationMaxMs.toFixed(3)} net(mean/max)=${result.phaseNetworkMeanMs.toFixed(3)}/${result.phaseNetworkMaxMs.toFixed(3)} samples=${result.phaseSamples}`
+    );
+    console.log(
+      `[load] gc events=${result.gcEvents} major=${result.gcMajorEvents} total_ms=${result.gcTotalMs.toFixed(3)} p95_ms=${result.gcP95Ms.toFixed(3)} max_ms=${result.gcMaxMs.toFixed(3)} heap_mb(start/end/delta/peak)=${result.heapUsedStartMb.toFixed(2)}/${result.heapUsedEndMb.toFixed(2)}/${result.heapUsedDeltaMb.toFixed(2)}/${result.heapUsedPeakMb.toFixed(2)}`
+    );
   } finally {
+    if (gcMonitor) {
+      gcMonitor.stop();
+      gcMonitor = null;
+    }
+    if (cpuProfiler) {
+      await cpuProfiler.stop();
+      cpuProfiler = null;
+    }
     if (hostedLogTimer) {
       clearInterval(hostedLogTimer);
     }
@@ -293,7 +408,9 @@ async function main(): Promise<void> {
       client.disconnect();
     }
     await sleep(150);
-    server.stop();
+    if (!config.useExistingServer) {
+      server.stop();
+    }
   }
 }
 
@@ -317,10 +434,14 @@ function resolveConfig(): ScenarioConfig {
     0,
     Math.floor(parsePositiveNumber(process.env.LOAD_CONNECT_SETTLE_MS, defaultSettleMs))
   );
+  const useExistingServer = process.env.LOAD_USE_EXISTING_SERVER === "1";
+  const clientsOnly = process.env.LOAD_CLIENTS_ONLY === "1";
+  const topology = resolveTopology(process.env.LOAD_TOPOLOGY);
   const gridColumns = Math.max(1, Math.ceil(Math.sqrt(clients)));
   const gridRows = Math.max(1, Math.ceil(clients / gridColumns));
-  const autoSpacing = computeGridSpacing(clients, gridColumns, gridRows);
+  const autoSpacing = computeGridSpacing(clients, gridColumns, gridRows, topology);
   const gridSpacing = Math.max(6, parsePositiveNumber(process.env.LOAD_GRID_SPACING, autoSpacing));
+  const serverUrl = process.env.LOAD_SERVER_URL?.trim() || `ws://127.0.0.1:${serverPort}`;
 
   return {
     clients,
@@ -333,7 +454,11 @@ function resolveConfig(): ScenarioConfig {
     serverPort,
     gridSpacing,
     gridColumns,
-    mode
+    mode,
+    topology,
+    useExistingServer,
+    clientsOnly,
+    serverUrl
   };
 }
 
@@ -342,7 +467,20 @@ function resolveMode(raw: string | undefined): Mode {
   return value === "hosted" ? "hosted" : "benchmark";
 }
 
-function computeGridSpacing(clients: number, columns: number, rows: number): number {
+function resolveTopology(raw: string | undefined): Topology {
+  const value = String(raw ?? "auto").trim().toLowerCase();
+  if (value === "sparse") return "sparse";
+  if (value === "clustered") return "clustered";
+  return "auto";
+}
+
+function computeGridSpacing(clients: number, columns: number, rows: number, topology: Topology): number {
+  if (topology === "clustered") {
+    return 10;
+  }
+  if (topology === "sparse") {
+    return 40;
+  }
   const usableSpan = WORLD_GROUND_HALF_EXTENT * 2 * 0.85;
   const spacingX = columns <= 1 ? usableSpan : usableSpan / (columns - 1);
   const spacingZ = rows <= 1 ? usableSpan : usableSpan / (rows - 1);
@@ -369,6 +507,7 @@ async function connectClients(
 ): Promise<{ connected: number; failed: number }> {
   let connected = 0;
   let failed = 0;
+  const errorCounts = new Map<string, number>();
   for (const client of clients) {
     try {
       await withTimeout(client.connect(wsUrl), timeoutMs, "client connect timeout");
@@ -378,14 +517,55 @@ async function connectClients(
       } else {
         failed += 1;
       }
-    } catch {
+    } catch (error) {
       failed += 1;
+      const message = formatConnectError(error);
+      errorCounts.set(message, (errorCounts.get(message) ?? 0) + 1);
     }
     if (staggerMs > 0) {
       await sleep(staggerMs);
     }
   }
+  if (errorCounts.size > 0) {
+    const summary = [...errorCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([message, count]) => `${count}x ${message}`)
+      .join(" | ");
+    console.warn(`[load] connect_failures ${summary}`);
+  }
   return { connected, failed };
+}
+
+function formatConnectError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.length > 0 ? error.message : error.name;
+  }
+  if (typeof error === "object" && error !== null) {
+    const event = error as {
+      type?: unknown;
+      message?: unknown;
+      reason?: unknown;
+      error?: unknown;
+      target?: { readyState?: unknown; url?: unknown };
+    };
+    const type = typeof event.type === "string" ? event.type : "unknown";
+    const message = typeof event.message === "string" ? event.message : "";
+    const reason = typeof event.reason === "string" ? event.reason : "";
+    const nested = event.error instanceof Error ? event.error.message : "";
+    const readyState =
+      typeof event.target?.readyState === "number" ? String(event.target.readyState) : "n/a";
+    const targetUrl = typeof event.target?.url === "string" ? event.target.url : "";
+    const parts = [
+      `event:${type}`,
+      message.length > 0 ? `message:${message}` : "",
+      reason.length > 0 ? `reason:${reason}` : "",
+      nested.length > 0 ? `error:${nested}` : "",
+      `readyState:${readyState}`,
+      targetUrl.length > 0 ? `url:${targetUrl}` : ""
+    ].filter((part) => part.length > 0);
+    return parts.join(" ");
+  }
+  return String(error ?? "unknown connect error");
 }
 
 function ensureExperimentalWebSocketEnabled(): void {
@@ -455,6 +635,37 @@ function round3(value: number): number {
   return Number(value.toFixed(3));
 }
 
+async function waitForPortOpen(
+  host: string,
+  port: number,
+  timeoutMs: number,
+  label: string
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isPortOpen(host, port, 600)) {
+      return;
+    }
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for ${label} on ${host}:${port}`);
+}
+
+async function isPortOpen(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = new net.Socket();
+    const finish = (ok: boolean): void => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    socket.connect(port, host);
+  });
+}
+
 function makeValidAuthKey(seed: string, index: number): string {
   const hash = createHash("sha256").update(`${seed}:${index}`).digest("hex");
   const alnum = hash.replace(/[^a-z0-9]/gi, "").toUpperCase();
@@ -465,6 +676,171 @@ function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+type CpuProfilerSession = {
+  start: () => Promise<void>;
+  stop: () => Promise<void>;
+};
+
+type GcAndHeapSnapshot = {
+  events: number;
+  majorEvents: number;
+  totalDurationMs: number;
+  p95DurationMs: number;
+  maxDurationMs: number;
+  heapUsedStartMb: number;
+  heapUsedEndMb: number;
+  heapUsedPeakMb: number;
+};
+
+type GcAndHeapMonitor = {
+  start: () => void;
+  stop: () => GcAndHeapSnapshot;
+};
+
+function createGcAndHeapMonitor(enabled: boolean): GcAndHeapMonitor {
+  if (!enabled) {
+    const zero: GcAndHeapSnapshot = {
+      events: 0,
+      majorEvents: 0,
+      totalDurationMs: 0,
+      p95DurationMs: 0,
+      maxDurationMs: 0,
+      heapUsedStartMb: 0,
+      heapUsedEndMb: 0,
+      heapUsedPeakMb: 0
+    };
+    return {
+      start: () => undefined,
+      stop: () => zero
+    };
+  }
+  const gcDurations: number[] = [];
+  let events = 0;
+  let majorEvents = 0;
+  let totalDurationMs = 0;
+  let maxDurationMs = 0;
+  let heapUsedStartMb = 0;
+  let heapUsedEndMb = 0;
+  let heapUsedPeakMb = 0;
+  let samplingHandle: NodeJS.Timeout | null = null;
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      const duration = Number(entry.duration);
+      if (!Number.isFinite(duration)) continue;
+      events += 1;
+      totalDurationMs += duration;
+      gcDurations.push(duration);
+      if (duration > maxDurationMs) {
+        maxDurationMs = duration;
+      }
+      const detailKind = Number((entry as { detail?: { kind?: number } }).detail?.kind ?? 0);
+      if (detailKind === constants.NODE_PERFORMANCE_GC_MAJOR) {
+        majorEvents += 1;
+      }
+    }
+  });
+
+  return {
+    start: () => {
+      heapUsedStartMb = process.memoryUsage().heapUsed / (1024 * 1024);
+      heapUsedPeakMb = heapUsedStartMb;
+      observer.observe({ entryTypes: ["gc"], buffered: true });
+      samplingHandle = setInterval(() => {
+        const heapUsed = process.memoryUsage().heapUsed / (1024 * 1024);
+        if (heapUsed > heapUsedPeakMb) {
+          heapUsedPeakMb = heapUsed;
+        }
+      }, 250);
+    },
+    stop: () => {
+      if (samplingHandle) {
+        clearInterval(samplingHandle);
+        samplingHandle = null;
+      }
+      observer.disconnect();
+      heapUsedEndMb = process.memoryUsage().heapUsed / (1024 * 1024);
+      if (heapUsedEndMb > heapUsedPeakMb) {
+        heapUsedPeakMb = heapUsedEndMb;
+      }
+      const p95DurationMs = computeP95(gcDurations);
+      return {
+        events,
+        majorEvents,
+        totalDurationMs,
+        p95DurationMs,
+        maxDurationMs,
+        heapUsedStartMb,
+        heapUsedEndMb,
+        heapUsedPeakMb
+      };
+    }
+  };
+}
+
+function computeP95(values: readonly number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * 0.95)));
+  return sorted[index] ?? 0;
+}
+
+function createCpuProfilerSession(options: {
+  enabled: boolean;
+  outputDir: string;
+  label: string;
+}): CpuProfilerSession {
+  if (!options.enabled) {
+    return {
+      start: async () => undefined,
+      stop: async () => undefined
+    };
+  }
+
+  const session = new inspector.Session();
+  let started = false;
+  let stopped = false;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const profilePath = path.join(options.outputDir, `${options.label}-${stamp}.cpuprofile`);
+  const post = (method: string, params: Record<string, unknown> = {}) =>
+    new Promise<Record<string, unknown>>((resolve, reject) => {
+      session.post(method, params, (error, result = {}) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(result as Record<string, unknown>);
+      });
+    });
+
+  return {
+    start: async () => {
+      if (started) {
+        return;
+      }
+      session.connect();
+      await post("Profiler.enable");
+      await post("Profiler.start");
+      started = true;
+    },
+    stop: async () => {
+      if (!started || stopped) {
+        return;
+      }
+      try {
+        const result = await post("Profiler.stop");
+        fs.writeFileSync(profilePath, JSON.stringify(result.profile ?? {}, null, 2), "utf8");
+        console.log(`[load] cpu_profile=${profilePath}`);
+      } finally {
+        await post("Profiler.disable").catch(() => undefined);
+        session.disconnect();
+        stopped = true;
+      }
+    }
+  };
+}
+
 function enforceScenarioBudgets(result: ScenarioResult): void {
   if (process.env.LOAD_ENFORCE_PASS !== "1") {
     return;
@@ -473,6 +849,25 @@ function enforceScenarioBudgets(result: ScenarioResult): void {
   const maxP95TickMs = parsePositiveNumber(process.env.LOAD_MAX_P95_TICK_MS, Number.POSITIVE_INFINITY);
   const maxMeanTickMs = parsePositiveNumber(process.env.LOAD_MAX_MEAN_TICK_MS, Number.POSITIVE_INFINITY);
   const minConnectedRatio = parsePositiveNumber(process.env.LOAD_MIN_CONNECTED_RATIO, 1);
+  const maxAvgOutBytesPerSecondPerPlayer = parsePositiveNumber(
+    process.env.LOAD_MAX_AVG_OUT_BYTES_PER_SECOND_PER_PLAYER,
+    Number.POSITIVE_INFINITY
+  );
+  const maxP95OutBytesPerSecondPerPlayer = parsePositiveNumber(
+    process.env.LOAD_MAX_P95_OUT_BYTES_PER_SECOND_PER_PLAYER,
+    Number.POSITIVE_INFINITY
+  );
+  const maxAvgOutMessagesPerSecondPerPlayer = parsePositiveNumber(
+    process.env.LOAD_MAX_AVG_OUT_MESSAGES_PER_SECOND_PER_PLAYER,
+    Number.POSITIVE_INFINITY
+  );
+  const maxP95OutMessagesPerSecondPerPlayer = parsePositiveNumber(
+    process.env.LOAD_MAX_P95_OUT_MESSAGES_PER_SECOND_PER_PLAYER,
+    Number.POSITIVE_INFINITY
+  );
+  const maxHeapDeltaMb = parsePositiveNumber(process.env.LOAD_MAX_HEAP_DELTA_MB, Number.POSITIVE_INFINITY);
+  const maxGcP95Ms = parsePositiveNumber(process.env.LOAD_MAX_GC_P95_MS, Number.POSITIVE_INFINITY);
+  const maxGcTotalMs = parsePositiveNumber(process.env.LOAD_MAX_GC_TOTAL_MS, Number.POSITIVE_INFINITY);
   const achievedRatio = result.targetTps > 0 ? result.achievedTps / result.targetTps : 0;
   const connectedRatio = result.clients > 0 ? result.connected / result.clients : 0;
 
@@ -499,6 +894,41 @@ function enforceScenarioBudgets(result: ScenarioResult): void {
   if (connectedRatio < minConnectedRatio) {
     throw new Error(
       `Connected ratio below budget: actual=${connectedRatio.toFixed(3)} min=${minConnectedRatio.toFixed(3)}`
+    );
+  }
+  if (result.netAvgOutBytesPerSecondPerPlayer > maxAvgOutBytesPerSecondPerPlayer) {
+    throw new Error(
+      `Avg outbound bytes/s/player above budget: actual=${result.netAvgOutBytesPerSecondPerPlayer.toFixed(2)} max=${maxAvgOutBytesPerSecondPerPlayer.toFixed(2)}`
+    );
+  }
+  if (result.netP95OutBytesPerSecondPerPlayer > maxP95OutBytesPerSecondPerPlayer) {
+    throw new Error(
+      `P95 outbound bytes/s/player above budget: actual=${result.netP95OutBytesPerSecondPerPlayer.toFixed(2)} max=${maxP95OutBytesPerSecondPerPlayer.toFixed(2)}`
+    );
+  }
+  if (result.netAvgOutMessagesPerSecondPerPlayer > maxAvgOutMessagesPerSecondPerPlayer) {
+    throw new Error(
+      `Avg outbound messages/s/player above budget: actual=${result.netAvgOutMessagesPerSecondPerPlayer.toFixed(2)} max=${maxAvgOutMessagesPerSecondPerPlayer.toFixed(2)}`
+    );
+  }
+  if (result.netP95OutMessagesPerSecondPerPlayer > maxP95OutMessagesPerSecondPerPlayer) {
+    throw new Error(
+      `P95 outbound messages/s/player above budget: actual=${result.netP95OutMessagesPerSecondPerPlayer.toFixed(2)} max=${maxP95OutMessagesPerSecondPerPlayer.toFixed(2)}`
+    );
+  }
+  if (result.heapUsedDeltaMb > maxHeapDeltaMb) {
+    throw new Error(
+      `Heap delta above budget: actual=${result.heapUsedDeltaMb.toFixed(2)}MB max=${maxHeapDeltaMb.toFixed(2)}MB`
+    );
+  }
+  if (result.gcP95Ms > maxGcP95Ms) {
+    throw new Error(
+      `GC p95 above budget: actual=${result.gcP95Ms.toFixed(3)}ms max=${maxGcP95Ms.toFixed(3)}ms`
+    );
+  }
+  if (result.gcTotalMs > maxGcTotalMs) {
+    throw new Error(
+      `GC total above budget: actual=${result.gcTotalMs.toFixed(3)}ms max=${maxGcTotalMs.toFixed(3)}ms`
     );
   }
 }

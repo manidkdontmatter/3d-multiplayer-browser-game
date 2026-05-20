@@ -5,29 +5,31 @@
  */
 import {
   INVENTORY_MAX_SLOTS,
-  decodeInventoryStateSnapshot,
-  type InventoryStateSnapshot
+  decodeInventorySnapshot,
+  type InventorySnapshot
 } from "../../../shared/index";
 
 export class InventoryStateStore {
-  private currentState: InventoryStateSnapshot = {
+  private currentState: InventorySnapshot = {
     maxSlots: INVENTORY_MAX_SLOTS,
-    items: [],
-    equipment: {}
+    itemInstances: [],
+    equipment: {},
+    hotbarSlots: []
   };
   private dirty = false;
 
   public reset(): void {
     this.currentState = {
       maxSlots: INVENTORY_MAX_SLOTS,
-      items: [],
-      equipment: {}
+      itemInstances: [],
+      equipment: {},
+      hotbarSlots: []
     };
     this.dirty = true;
   }
 
   public processInventoryJson(rawJson: string): void {
-    const decoded = decodeInventoryStateSnapshot(rawJson);
+    const decoded = decodeInventorySnapshot(rawJson);
     if (!decoded) {
       return;
     }
@@ -35,7 +37,7 @@ export class InventoryStateStore {
     this.dirty = true;
   }
 
-  public consumeState(): InventoryStateSnapshot | null {
+  public consumeState(): InventorySnapshot | null {
     if (!this.dirty) {
       return null;
     }
@@ -43,11 +45,14 @@ export class InventoryStateStore {
     return this.getState();
   }
 
-  public getState(): InventoryStateSnapshot {
+  public getState(): InventorySnapshot {
     return {
       maxSlots: this.currentState.maxSlots,
-      items: this.currentState.items.map((item) => ({ ...item })),
-      equipment: { ...this.currentState.equipment }
+      itemInstances: this.currentState.itemInstances.map((item) => ({ ...item })),
+      equipment: { ...this.currentState.equipment },
+      hotbarSlots: this.currentState.hotbarSlots.map((entry) => (entry ? { ...entry } : null))
     };
   }
 }
+
+

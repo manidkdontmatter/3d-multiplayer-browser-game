@@ -7,7 +7,7 @@ import { Binary, Context, defineSchema } from "nengi";
 
 export enum NType {
   InputCommand = 1,
-  BaseEntity = 2,
+  RuntimeEntity = 2,
   IdentityMessage = 3,
   InputAckMessage = 5,
   AbilityDefinitionMessage = 8,
@@ -18,12 +18,18 @@ export enum NType {
   AbilityOwnershipMessage = 15,
   MapTransferCommand = 18,
   MapTransferMessage = 19,
-  LocationRootEntity = 20,
+  WorldAnchorEntity = 20,
   ItemCommand = 21,
   InventoryStateMessage = 22,
   CreatorCommand = 23,
   CreatorStateMessage = 24,
-  ServerNetDiagnosticsMessage = 25
+  ServerNetDiagnosticsMessage = 25,
+  CarrierVolumeEnteredMessage = 26,
+  CarrierVolumeExitedMessage = 27,
+  InventoryActionResultMessage = 28,
+  PlayerSettingsCommand = 29,
+  PlayerSettingsMessage = 30,
+  ServerAlertMessage = 31
 }
 
 export const inputCommandSchema = defineSchema({
@@ -62,13 +68,17 @@ export const mapTransferCommandSchema = defineSchema({
 
 export const itemCommandSchema = defineSchema({
   action: Binary.UInt8,
-  worldItemNid: Binary.UInt16,
+  pickupNid: Binary.UInt16,
   itemInstanceId: Binary.UInt32,
   quantity: Binary.UInt16,
-  equipmentSlot: Binary.UInt8
+  equipmentSlot: Binary.UInt8,
+  sourceSlot: Binary.UInt8,
+  targetSlot: Binary.UInt8,
+  activationChannel: Binary.UInt8,
+  payloadKind: Binary.UInt8
 });
 
-export const baseEntitySchema = defineSchema({
+export const runtimeEntitySchema = defineSchema({
   modelId: Binary.UInt16,
   position: { type: Binary.Vector3, interp: true },
   rotation: { type: Binary.Quaternion, interp: true },
@@ -76,12 +86,13 @@ export const baseEntitySchema = defineSchema({
   movementMode: Binary.UInt8,
   health: Binary.UInt8,
   maxHealth: Binary.UInt8,
-  itemArchetypeId: Binary.UInt16,
+  pickupDefinitionId: Binary.UInt16,
   itemQuantity: Binary.UInt16
 });
 
-export const locationRootEntitySchema = defineSchema({
+export const worldAnchorEntitySchema = defineSchema({
   modelId: Binary.UInt16,
+  locationPid: Binary.Int32,
   locationKind: Binary.UInt8,
   locationArchetypeId: Binary.UInt16,
   locationSeed: Binary.Int32,
@@ -182,6 +193,11 @@ export const mapTransferMessageSchema = defineSchema({
 export const inventoryStateMessageSchema = defineSchema({
   inventoryJson: Binary.String
 });
+export const inventoryActionResultMessageSchema = defineSchema({
+  action: Binary.UInt8,
+  ok: Binary.Boolean,
+  reason: Binary.String
+});
 
 export const creatorCommandSchema = defineSchema({
   commandJson: Binary.String
@@ -189,6 +205,16 @@ export const creatorCommandSchema = defineSchema({
 
 export const creatorStateMessageSchema = defineSchema({
   stateJson: Binary.String
+});
+export const playerSettingsCommandSchema = defineSchema({
+  settingsJson: Binary.String
+});
+export const playerSettingsMessageSchema = defineSchema({
+  settingsJson: Binary.String
+});
+export const serverAlertMessageSchema = defineSchema({
+  text: Binary.String,
+  severity: Binary.UInt8
 });
 
 export const serverNetDiagnosticsMessageSchema = defineSchema({
@@ -205,12 +231,22 @@ export const serverNetDiagnosticsMessageSchema = defineSchema({
   warningMask: Binary.UInt8
 });
 
+export const carrierVolumeEnteredMessageSchema = defineSchema({
+  framePid: Binary.Int32,
+  volumeId: Binary.String
+});
+
+export const carrierVolumeExitedMessageSchema = defineSchema({
+  framePid: Binary.Int32,
+  volumeId: Binary.String
+});
+
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCommand, abilityCommandSchema);
 ncontext.register(NType.ItemCommand, itemCommandSchema);
-ncontext.register(NType.BaseEntity, baseEntitySchema);
-ncontext.register(NType.LocationRootEntity, locationRootEntitySchema);
+ncontext.register(NType.RuntimeEntity, runtimeEntitySchema);
+ncontext.register(NType.WorldAnchorEntity, worldAnchorEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
 ncontext.register(NType.InputAckMessage, inputAckMessageSchema);
 ncontext.register(NType.AbilityDefinitionMessage, abilityDefinitionMessageSchema);
@@ -221,9 +257,15 @@ ncontext.register(NType.AbilityOwnershipMessage, abilityOwnershipMessageSchema);
 ncontext.register(NType.MapTransferCommand, mapTransferCommandSchema);
 ncontext.register(NType.MapTransferMessage, mapTransferMessageSchema);
 ncontext.register(NType.InventoryStateMessage, inventoryStateMessageSchema);
+ncontext.register(NType.InventoryActionResultMessage, inventoryActionResultMessageSchema);
 ncontext.register(NType.CreatorCommand, creatorCommandSchema);
 ncontext.register(NType.CreatorStateMessage, creatorStateMessageSchema);
+ncontext.register(NType.PlayerSettingsCommand, playerSettingsCommandSchema);
+ncontext.register(NType.PlayerSettingsMessage, playerSettingsMessageSchema);
+ncontext.register(NType.ServerAlertMessage, serverAlertMessageSchema);
 ncontext.register(NType.ServerNetDiagnosticsMessage, serverNetDiagnosticsMessageSchema);
+ncontext.register(NType.CarrierVolumeEnteredMessage, carrierVolumeEnteredMessageSchema);
+ncontext.register(NType.CarrierVolumeExitedMessage, carrierVolumeExitedMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -265,15 +307,19 @@ export interface MapTransferCommand {
 export interface ItemCommand {
   ntype: NType.ItemCommand;
   action: number;
-  worldItemNid: number;
+  pickupNid: number;
   itemInstanceId: number;
   quantity: number;
   equipmentSlot: number;
+  sourceSlot: number;
+  targetSlot: number;
+  activationChannel: number;
+  payloadKind: number;
 }
 
-export interface BaseEntity {
+export interface RuntimeEntity {
   nid: number;
-  ntype: NType.BaseEntity;
+  ntype: NType.RuntimeEntity;
   modelId: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
@@ -281,14 +327,15 @@ export interface BaseEntity {
   movementMode: number;
   health: number;
   maxHealth: number;
-  itemArchetypeId: number;
+  pickupDefinitionId: number;
   itemQuantity: number;
 }
 
-export interface LocationRootEntity {
+export interface WorldAnchorEntity {
   nid: number;
-  ntype: NType.LocationRootEntity;
+  ntype: NType.WorldAnchorEntity;
   modelId: number;
+  locationPid: number;
   locationKind: number;
   locationArchetypeId: number;
   locationSeed: number;
@@ -398,6 +445,12 @@ export interface InventoryStateMessage {
   ntype: NType.InventoryStateMessage;
   inventoryJson: string;
 }
+export interface InventoryActionResultMessage {
+  ntype: NType.InventoryActionResultMessage;
+  action: number;
+  ok: boolean;
+  reason: string;
+}
 
 // ── Generalized creator network messages ───────────────────────────────────────
 
@@ -409,6 +462,22 @@ export interface CreatorCommandWire {
 export interface CreatorStateMessageWire {
   ntype: NType.CreatorStateMessage;
   stateJson: string;
+}
+
+export interface PlayerSettingsCommand {
+  ntype: NType.PlayerSettingsCommand;
+  settingsJson: string;
+}
+
+export interface PlayerSettingsMessage {
+  ntype: NType.PlayerSettingsMessage;
+  settingsJson: string;
+}
+
+export interface ServerAlertMessage {
+  ntype: NType.ServerAlertMessage;
+  text: string;
+  severity: number;
 }
 
 export type CreatorCommandAction =
@@ -451,6 +520,18 @@ export interface ServerNetDiagnosticsMessage {
   warningMask: number;
 }
 
+export interface CarrierVolumeEnteredMessage {
+  ntype: NType.CarrierVolumeEnteredMessage;
+  framePid: number;
+  volumeId: string;
+}
+
+export interface CarrierVolumeExitedMessage {
+  ntype: NType.CarrierVolumeExitedMessage;
+  framePid: number;
+  volumeId: string;
+}
+
 export const NET_DIAGNOSTICS_WARNING_AVG_OUT_BYTES = 1 << 0;
 export const NET_DIAGNOSTICS_WARNING_AVG_IN_BYTES = 1 << 1;
 export const NET_DIAGNOSTICS_WARNING_AVG_OUT_MESSAGES = 1 << 2;
@@ -459,3 +540,4 @@ export const NET_DIAGNOSTICS_WARNING_P95_OUT_BYTES = 1 << 4;
 export const NET_DIAGNOSTICS_WARNING_P95_IN_BYTES = 1 << 5;
 export const NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES = 1 << 6;
 export const NET_DIAGNOSTICS_WARNING_P95_IN_MESSAGES = 1 << 7;
+

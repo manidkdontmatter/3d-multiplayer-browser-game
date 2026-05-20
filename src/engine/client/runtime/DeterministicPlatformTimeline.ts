@@ -36,10 +36,11 @@ export class DeterministicPlatformTimeline {
         rotationW: yawHalfCos,
         health: 0,
         maxHealth: 0,
-        itemArchetypeId: 0,
+        pickupDefinitionId: 0,
         itemQuantity: 0
       });
     }
     return states;
   }
 }
+

@@ -11,28 +11,38 @@ This repository is a production quality first-person authoritative server multip
 - ecs via bitecs
 - sqlite
 
+## Project Invariants
+- this is a 3d first person open world multiplayer sandbox game with an authoritative server intended to be player hosted on one vps which the player owns
+- the closest games i can imagine that this one is similar in gameplay mechanics to is Rust and Ark Survival Evolved
+- each map runs on its own thread and answers to an orchestrator
+- the game must have features typical of its genre, that genre being 3d first person open world multiplayer sandbox games, it requires all the essential features if it lacks them
+- maps are procedurally generated, not human authored
+- players create almost everything in the game from items, abilities, characters, and more. all creation uses a unified underlying system utilizing ecs and blueprints, to create a game where "anything can be anything" instead of being bound to preset inflexible types. at runtime, an object can go from being considered an item to being considered a character, or a door can even become a character, the underlying system must be that flexible. the players use various UI that lets them create things, the most notable is the item creator ui, ability creator ui, and character creator ui, but those are just presentation layers, not enforcers of types, as the underlying system has no preset types, the ui just only displays to the player relevant stats/components/whatever that the ui will allow them to use, but the underlying system does not enforce any such limits, the ui is doing it purely as presentation, to give the player structure to create the loose concept of certain types of things purely by only allowing them to use certain features in that particular ui, whereas the other creator ui present other options, for example ability creator ui has different options than item creator ui.
+
 ## Architecture Rules
 
-- prefer zero allocation solutions when feasible especially in the hot path, or solutions that are easy on the garbage collector at least
-- add automated enforcement of rules in this document where feasible and appropriate
+- do not let existing code hold us back from creating the most correct end result. we are not interested in compatibility if if stops us from having the most correct systems and code.
+- do not let legacy systems hold back progress and correctness, only have one canonical system. you may unify them, get rid of the legacy one, or whatever else results in the most correct and best end result. do not patch bad systems, correct them. no hacky solutions.
+- always name things with clarity in mind. it really sucks to look at something with an obscure or hard to understand name that makes its purpose hard to understand. if you notice something is named not as well as it could be, pick a better name.
+- prefer zero allocation solutions when feasible especially in the hot path, or solutions that are easy on the garbage collector at least. high CCU multiplayer games can not handle it
+- add automated enforcement of rules in this document where feasible and appropriate, meaning guard rails, tests, quality gates, invariants, and so on
 - existing tests may represent outdated assumptions and should be reported
 - do not abuse abstraction, abstraction must have a purpose
-- code and systems must be high performance
+- code and systems must be high performance, because this is a high CCU multiplayer game hosted on one vps
 - Engine/game separation is mandatory: `src/engine/` provides capabilities and never imports from `src/game/`. `src/game/` is made using engine and the APIs it provides. The engine is a specialized runtime for server authoritative multiplayer first-person sandbox games; the game is a replaceable layer defining what this specific game is, this allows us to eventually make multiple games using the underlying engine.
 - Maintain authoritative server multiplayer fundamentals: server-authoritative simulation, client intent-only input, client should be as much of a graphical dummy as possible, simply rendering what the server told it should appear where, what it looks like, the size it should be, etc, appearance related data. client side prediction for player, deterministic tick/order, strict client/server separation with anything shared going in shared as appropriate.
-- Heavily favor composition over inheritance where applicable. This is one of those "anything can be anything" games like Caves of Qud or Dwarf Fortress where for example a door could become a hostile npc, or for example you could transfer your mind from your character into the door and play as the door. So we must have ultimate flexibility in this sandbox game.
+- Heavily favor composition over inheritance where applicable. This is one of those "anything can be anything" games like Caves of Qud or Dwarf Fortress where for example a door could become a hostile npc, or for example you could transfer your mind from your character into the door and play as the door. So we must have ultimate flexibility and generalization in this sandbox game.
 - Always put at the top of every script a comment explaining what it is, if an existing script doesn't have that yet, add it. This is to help humans understand the script's purpose, make the comment easy for them to understand.
 - Prefer Data Oriented Design and Data Driven Design. be against object oriented design and inheritance. prefer extreme composition, composition over inheritance
 - report near-duplicated systems
-- Prefer common game design patterns where appropriate
 - Prefer separation of concerns and proper decoupling where appropriate
 - Do not conflate multiple systems into one system improperly
-- Prefer general best practices for architecture, software design, and systems design
+- Adhere to best practices for architecture, software design, and systems design
 - Netcode must be optimized for supporting the most amount of players on a single VPS, we are scaling entirely vertically, there will be no sharding/etc. We must support the most amount of players at once on the same map on one vps because these servers are player hosted and they can't be asked to host on more than one vps.
 - Use game design patterns where appropriate: pooling, flyweight, ecs, state pattern, command pattern, observer pattern, factory pattern, component pattern, singletons, strategy pattern, goap, fluent builder pattern, blackboard, service locator, spatial partitioning
 - a big aspect of this project's architecture is top down design, multiple top level systems that govern their systems but other systems can communicate with other systems but if possible should not directly control things that are part of another system's system, aka avoid tight coupling
 - keep systems decoupled and self contained
-- prefer generalized features/systems/etc rather than overly specific
+- prefer generalized features/systems/etc rather than overly specific, therefore they can be flexible and reusable.
 - Interest management uses separate near and far spatial channels. Near spatial replication is for players, NPCs, projectiles, pickups, and normal interactables; far spatial replication is for large distant roots such as locations, landmarks, major ships, and other objects that should be visible from much farther away.
 
 ## Netcode
@@ -83,7 +93,7 @@ This repository is a production quality first-person authoritative server multip
 - Make existing systems align with the current task, do not make the current task align with existing systems.
 - All code is malleable; production-quality architecture is mandatory. Prefer implementing the correct end-state design directly, including large refactors if needed, instead of layering new features onto badly made existing systems. Do not build placeholder architectures, compatibility hacks, or timid partial systems when the proper structure is already known. 
 - If you do not know enough about what you are asked to do, use the internet to get accurate information, never just guess if your knowledge in a certain area is not extensive enough to do the task properly, because what happens if you often mess up the task instead of doing it correctly.
-- Do not be sycophantic ever. just be intelligent, a genius at proper architecture and systems design who always wants to do things the most objectively correct way, you are obsessed with doing things the most objectively correct way in regards to coding and architecture.
+- Do not be sycophantic ever. just be intelligent, a genius at proper architecture and systems design who always wants to do things the most objectively correct way in regards to coding and architecture and systems design, always considering the most correct way to implement systems and features.
 - If you notice a system, module, pattern, or piece of code that looks suspicious because it does not appear to follow known good solutions for known problems, does not adhere to these project guidelines, mixes responsibilities, hides architectural debt, or seems likely to become a production problem, bring it to the user's attention immediately.
 - If a system is fundamentally non-standard for its domain, do not keep patching it incrementally; explicitly flag it as unsound and propose replacement with a sane, standard implementation path.
 
@@ -95,11 +105,12 @@ This repository is a production quality first-person authoritative server multip
 
 ## General
 
+- when you finish a task always recommend what should be done next, in addition to whatever you were already going to say
 - do not use headless browser unless asked
 - do not create tests unless asked
 - running the server and checking for errors at the end of a task is something you can do if you want though
 - make sure to close terminals you opened when you are done with them. for example do not leave the game server running after you finished your task
-- Treat Rapier init-params deprecation warning (`using deprecated parameters for the initialization function; pass a single object instead`) as non-actionable because it originates from Rapier internal self-usage rather than project code.
+- Treat Rapier init-params deprecation warning (`using deprecated parameters for the initialization function; pass a single object instead`) as non-actionable because it originates from Rapier internal self-usage rather than project code. do not bother mentioning it to me, i already know.
 - Treat older/legacy tests as potentially stale: when a test fails, validate whether the test assumptions still match current game architecture/behavior before concluding the underlying game system is broken.
 - Get rid of tests that are no longer relevant or are nonsensical
 - For multiplayer browser automation tests, run each client in a separate browser window/process (not separate tabs in one window) to avoid inactive-tab throttling artifacts.
@@ -120,7 +131,17 @@ This repository is a production quality first-person authoritative server multip
   - `test:smoke:fast`
 - Architecture cycle detection is enforced by `npm run check:cycles` (madge).
 - Unused code/dependency audit is available via `npm run check:unused` (knip) and is currently audit-only, not blocking.
-- Performance smoke gate exists as `npm run perf:gate:load:smoke`; CI runs it as non-blocking initially.
+- Canonical network load/performance path is split-process (`scripts/network-load-split-profile.ts`), not the legacy unsplit path.
+- Primary network load commands:
+  - `npm run test:load:network` (default split-process gate entrypoint)
+  - `npm run perf:load:100:clustered` (100 clients, clustered AOI stress)
+  - `npm run perf:load:100:sparse` (100 clients, sparse fanout baseline)
+  - `npm run perf:load:100:profile:split` (split-process run with server CPU profile output)
+- Split-process interpretation rule:
+  - end-of-run `net connected=0 ... avg_* = 0` can be expected after clients disconnect.
+  - use `net_last_active` and `net_peak_active` lines for real per-player traffic during active load.
+- `npm run test:network:full` is the full network regression sweep (`network-client:regression`, multiplayer modes, plus split load test).
+- CI performance smoke should execute `npm run test:load:network` with explicit env budgets/topology, not deleted legacy scripts.
 - When a test/gate fails, first verify whether assumptions are stale relative to current architecture/content injection paths before treating it as a product bug.
 - If a gate is stale/non-representative, either update it to current architecture or remove it from blocking status; do not keep meaningless red gates.
 

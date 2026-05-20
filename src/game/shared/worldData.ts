@@ -32,6 +32,7 @@ import { ENVIRONMENT_PRIORITY_VOID_REGION } from "../../engine/shared/environmen
 const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
   {
     id: "verdant-test-island",
+    mapInstanceIds: ["map-a"],
     pid: 10_001,
     archetypeId: 1,
     kind: "terrainIsland",
@@ -69,6 +70,7 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
   },
   {
     id: "blackstone-test-castle",
+    mapInstanceIds: ["map-a"],
     pid: 10_002,
     archetypeId: 2,
     kind: "staticCastle",
@@ -112,6 +114,7 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
   },
   {
     id: "drifting-test-citadel",
+    mapInstanceIds: ["map-a"],
     pid: 10_003,
     archetypeId: 3,
     kind: "movingCastle",
@@ -185,6 +188,7 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
   },
   {
     id: "single-volume-moving-slab",
+    mapInstanceIds: ["map-a"],
     pid: 10_005,
     archetypeId: 5,
     kind: "movingTestPlatform",
@@ -218,6 +222,7 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
   },
   {
     id: "combat-test-ring",
+    mapInstanceIds: ["map-a"],
     pid: 10_004,
     archetypeId: 4,
     kind: "testArena",
@@ -243,6 +248,38 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
         halfY: 95,
         halfZ: 180,
         blendDistance: 80
+      }
+    ],
+    motion: "static"
+  },
+  {
+    id: "transfer-void-pad",
+    mapInstanceIds: ["map-b"],
+    pid: 20_001,
+    archetypeId: 4001,
+    kind: "testArena",
+    kindId: LOCATION_KIND_TEST_ARENA,
+    modelId: MODEL_ID_LOCATION_TEST_ARENA,
+    baseX: 0,
+    baseY: 0,
+    baseZ: 0,
+    baseYaw: 0,
+    streamingRadius: 280,
+    influenceRadius: 90,
+    environmentId: "void.deep",
+    environmentPresetId: ENVIRONMENT_PRESET_VOID_DEEP,
+    environmentVolumes: [
+      {
+        id: "transfer-void-pad.deep-void",
+        environmentId: "void.deep",
+        environmentPresetId: ENVIRONMENT_PRESET_VOID_DEEP,
+        localX: 0,
+        localY: 48,
+        localZ: 0,
+        halfX: 260,
+        halfY: 180,
+        halfZ: 260,
+        blendDistance: 120
       }
     ],
     motion: "static"

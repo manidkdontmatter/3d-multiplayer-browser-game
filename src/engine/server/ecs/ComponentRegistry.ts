@@ -37,7 +37,7 @@ export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
     "NetworkId", "ModelId", "Position", "Rotation",
     "Grounded", "MovementMode", "Health",
     "ItemArchetypeId", "ItemQuantity",
-    "LocationKind", "LocationArchetypeId", "LocationSeed",
+    "LocationPid", "LocationKind", "LocationArchetypeId", "LocationSeed",
     "LocationEnvironmentId", "LocationStreamingRadius", "LocationInfluenceRadius",
     "CharacterArchetypeId", "ControllerKind"
   ],
