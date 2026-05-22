@@ -5,7 +5,7 @@
  */
 const ACCESS_KEY_LENGTH = 12;
 const ACCESS_KEY_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-const ACCESS_KEY_FRAGMENT_PARAM = "k";
+const ACCESS_KEY_FRAGMENT_PARAM = "accessKey";
 const ACCESS_KEY_SESSION_PREFIX = "access_key_session:";
 const ACCESS_KEY_BACKUP_PREFIX = "access_key_backup:";
 
@@ -24,6 +24,20 @@ export function resolveAccessKey(serverUrl: string): {
     return { key: stored, source: "storage" };
   }
   return { key: "", source: "none" };
+}
+
+export function ensureAccessKey(serverUrl: string): {
+  key: string;
+  source: "fragment" | "storage" | "generated";
+} {
+  const resolved = resolveAccessKey(serverUrl);
+  if (resolved.source !== "none") {
+    return { key: resolved.key, source: resolved.source };
+  }
+  const generated = generateAccessKey();
+  writeAccessKeyToFragment(generated);
+  storeAccessKey(serverUrl, generated);
+  return { key: generated, source: "generated" };
 }
 
 export function readAccessKeyFromFragment(): string | null {
@@ -92,7 +106,7 @@ export function isValidAccessKey(value: string | null | undefined): value is str
   if (typeof value !== "string") {
     return false;
   }
-  return /^[A-Za-z0-9]{12}$/.test(value);
+  return /^[A-Za-z0-9]{10,30}$/.test(value);
 }
 
 export function generateAccessKey(): string {

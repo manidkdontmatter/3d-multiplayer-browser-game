@@ -68,7 +68,17 @@ export class WorldRenderer {
     this.localCharacter.syncLocalPlayer(snapshot.localPose, {
       frameDeltaSeconds: snapshot.frameDeltaSeconds,
       grounded: snapshot.localGrounded,
-      movementMode: snapshot.localMovementMode
+      movementMode: snapshot.localMovementMode,
+      equippedWeaponArchetypeId: snapshot.localEquippedWeaponArchetypeId,
+      equippedWeaponTintColorRgb: snapshot.localEquippedWeaponTintColorRgb,
+      equippedHeadArchetypeId: snapshot.localEquippedHeadArchetypeId,
+      equippedHeadTintColorRgb: snapshot.localEquippedHeadTintColorRgb,
+      equippedBodyArchetypeId: snapshot.localEquippedBodyArchetypeId,
+      equippedBodyTintColorRgb: snapshot.localEquippedBodyTintColorRgb,
+      equippedLegsArchetypeId: snapshot.localEquippedLegsArchetypeId,
+      equippedLegsTintColorRgb: snapshot.localEquippedLegsTintColorRgb,
+      equippedAccessoryArchetypeId: snapshot.localEquippedAccessoryArchetypeId,
+      equippedAccessoryTintColorRgb: snapshot.localEquippedAccessoryTintColorRgb
     });
     this.remoteCharacters.syncRemotePlayers(snapshot.remotePlayers, snapshot.frameDeltaSeconds);
     this.audioEventBridge.applyAbilityUseEvents(snapshot.abilityUseEvents);

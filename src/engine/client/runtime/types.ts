@@ -26,6 +26,16 @@ export interface PlayerPose {
 export interface RemotePlayerState {
   nid: number;
   modelId: number;
+  equippedWeaponArchetypeId: number;
+  equippedWeaponTintColorRgb: number;
+  equippedHeadArchetypeId: number;
+  equippedHeadTintColorRgb: number;
+  equippedBodyArchetypeId: number;
+  equippedBodyTintColorRgb: number;
+  equippedLegsArchetypeId: number;
+  equippedLegsTintColorRgb: number;
+  equippedAccessoryArchetypeId: number;
+  equippedAccessoryTintColorRgb: number;
   x: number;
   y: number;
   z: number;
@@ -36,21 +46,22 @@ export interface RemotePlayerState {
   maxHealth: number;
 }
 
-export interface LocationRootState {
+export interface WorldAnchorState {
   nid: number;
   modelId: number;
-  locationPid: number;
-  locationKind: number;
-  locationArchetypeId: number;
-  locationSeed: number;
-  locationEnvironmentId: number;
-  locationStreamingRadius: number;
-  locationInfluenceRadius: number;
+  worldAnchorId: number;
+  worldAnchorKind: number;
+  worldAnchorArchetypeId: number;
+  worldAnchorSeed: number;
+  worldAnchorEnvironmentId: number;
+  worldAnchorStreamingRadius: number;
+  worldAnchorInfluenceRadius: number;
   x: number;
   y: number;
   z: number;
   rotation: { x: number; y: number; z: number; w: number };
 }
+export type LocationRootState = WorldAnchorState;
 
 export interface ProjectileState {
   nid: number;
@@ -63,6 +74,10 @@ export interface ProjectileState {
 export interface WorldEntityState {
   nid: number;
   modelId: number;
+  renderArchetypeId: number;
+  materialVariantId: number;
+  tintColorRgb: number;
+  uniformScalePct: number;
   x: number;
   y: number;
   z: number;
@@ -90,9 +105,20 @@ export interface RenderFrameSnapshot {
   localGrounded: boolean;
   localMovementMode: MovementMode;
   localPlayerNid: number | null;
+  localEquippedWeaponArchetypeId: number;
+  localEquippedWeaponTintColorRgb: number;
+  localEquippedHeadArchetypeId: number;
+  localEquippedHeadTintColorRgb: number;
+  localEquippedBodyArchetypeId: number;
+  localEquippedBodyTintColorRgb: number;
+  localEquippedLegsArchetypeId: number;
+  localEquippedLegsTintColorRgb: number;
+  localEquippedAccessoryArchetypeId: number;
+  localEquippedAccessoryTintColorRgb: number;
   remotePlayers: RemotePlayerState[];
   abilityUseEvents: AbilityUseEvent[];
-  locationRoots: LocationRootState[];
+  worldAnchors: WorldAnchorState[];
+  locationRoots: WorldAnchorState[];
   worldEntities: WorldEntityState[];
   projectiles: ProjectileState[];
 }

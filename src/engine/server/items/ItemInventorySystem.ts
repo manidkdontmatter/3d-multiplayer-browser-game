@@ -9,6 +9,7 @@ import {
   INVENTORY_MAX_SLOTS,
   INVENTORY_OP_DROP,
   INVENTORY_OP_DROP_HOTBAR_SLOT,
+  INVENTORY_OP_CRAFT,
   INVENTORY_OP_EQUIP,
   INVENTORY_OP_EXECUTE_HOTBAR_SLOT,
   INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
@@ -31,6 +32,7 @@ import {
   encodeInventorySnapshot,
   equipmentSlotFromWireValue,
   getItemDefinitionById,
+  getCraftRecipeById,
   type EquipmentSlot,
   type ItemInstance,
   type InventorySnapshot,
@@ -38,16 +40,20 @@ import {
   type PickupPersistencePolicy,
   type PickupSpawnDefinition
 } from "../../shared/index";
+import { getBlueprintRuntimeActivationSpecsByBlueprintId } from "../../shared/index";
 import type { ItemCommand as ItemWireCommand } from "../../shared/netcode";
 import { NType } from "../../shared/netcode";
 import { GUEST_ACCOUNT_ID_BASE, type PersistedPickupState, type PersistenceService } from "../persistence/PersistenceService";
 import type { SimulationEcs } from "../ecs/SimulationEcs";
+import type { ActionEffectPipeline } from "../combat/actions/ActionEffectPipeline";
 
 const INTERACTION_MAX_DISTANCE = 3.35;
 const INTERACTION_MAX_DISTANCE_SQ = INTERACTION_MAX_DISTANCE * INTERACTION_MAX_DISTANCE;
 const DROP_FORWARD_DISTANCE = 1.35;
 const DROP_VERTICAL_OFFSET = -1.0;
 const WORLD_ITEM_INTERACTION_TARGET_Y_OFFSET = 0.85;
+const CRAFT_BENCH_PROXIMITY_SLACK = 0.75;
+const CRAFT_BENCH_SESSION_TIMEOUT_MS = 8_000;
 const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 
 export interface ItemInventoryPlayerState {
@@ -89,6 +95,19 @@ export interface ItemInventorySystemOptions<TUser> {
     pickups: ReadonlyArray<PersistedPickupState>
   ) => void;
   readonly executeHotbarAbility: (userId: number, abilityId: number, activationChannel: number) => boolean;
+  readonly applyEntityRenderAppearanceByEid?: (
+    eid: number,
+    patch: Partial<{ renderArchetypeId: number; materialVariantId: number; tintColorRgb: number; uniformScalePct: number }>
+  ) => boolean;
+  readonly findNearbyCraftBenchForPlayer: (
+    userId: number,
+    maxDistance: number
+  ) => { sessionId: string } | null;
+  readonly isUserWithinCraftBenchSession: (userId: number, sessionId: string, slack: number) => boolean;
+  readonly resolveCraftBenchDistanceLimit: () => number;
+  readonly actionEffects: ActionEffectPipeline;
+  readonly onItemEquipped?: (userId: number, itemInstanceId: number, slot: EquipmentSlot) => void;
+  readonly onItemUnequipped?: (userId: number, itemInstanceId: number, slot: EquipmentSlot) => void;
 }
 
 interface MutableInventoryState {
@@ -111,6 +130,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
   private nextInventoryItemInstanceId: number;
   private nextPickupId = 1;
   private criticalEventSequence = 1;
+  private readonly activeCraftBenchSessionByUserId = new Map<number, { sessionId: string; expiresAtMs: number }>();
 
   public constructor(private readonly options: ItemInventorySystemOptions<TUser>) {
     this.mapInstanceId = this.resolveMapInstanceId(options.mapInstanceId);
@@ -169,35 +189,76 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     let changed = false;
     let failureReason = "rejected";
     if (action === INVENTORY_OP_PICKUP) {
-      changed = this.tryPickupWorldItem(player, command.pickupNid);
+      changed = this.options.actionEffects.execute({
+        type: "pickup_world_item",
+        userId,
+        pickupNid: this.normalizeUInt(command.pickupNid, 0xffff)
+      });
       if (!changed) failureReason = "pickup_failed";
     } else if (action === INVENTORY_OP_DROP) {
-      changed = this.tryDropInventoryItem(player, command.itemInstanceId, command.quantity);
+      changed = this.options.actionEffects.execute({
+        type: "drop_item_instance",
+        userId,
+        itemInstanceId: this.normalizeUInt(command.itemInstanceId, 0x7fffffff),
+        quantity: this.normalizeUInt(command.quantity, 0xffff)
+      });
       if (!changed) failureReason = "drop_failed";
     } else if (action === INVENTORY_OP_USE) {
       changed = this.tryUseInventoryItem(userId, player, command.itemInstanceId, ITEM_ACTIVATION_CHANNEL_DEFAULT);
       if (!changed) failureReason = "use_failed";
     } else if (action === INVENTORY_OP_EQUIP) {
-      changed = this.tryEquipInventoryItem(player, command.itemInstanceId);
+      changed = this.options.actionEffects.execute({
+        type: "equip_item_instance",
+        userId,
+        itemInstanceId: this.normalizeUInt(command.itemInstanceId, 0x7fffffff)
+      });
       if (!changed) failureReason = "equip_failed";
     } else if (action === INVENTORY_OP_UNEQUIP) {
-      changed = this.tryUnequipSlot(player, equipmentSlotFromWireValue(Number(command.equipmentSlot)));
+      const slot = equipmentSlotFromWireValue(Number(command.equipmentSlot));
+      changed = Boolean(slot) && this.options.actionEffects.execute({
+        type: "unequip_slot",
+        userId,
+        slot: slot as EquipmentSlot
+      });
       if (!changed) failureReason = "unequip_failed";
     } else if (action === INVENTORY_OP_ASSIGN_HOTBAR_SLOT) {
-      changed = this.tryAssignHotbarSlot(player, command.itemInstanceId, command.targetSlot, command.payloadKind);
+      changed = this.options.actionEffects.execute({
+        type: "assign_hotbar_slot",
+        userId,
+        itemInstanceId: this.normalizeUInt(command.itemInstanceId, 0x7fffffff),
+        targetSlot: this.normalizeUInt(command.targetSlot, 0xff),
+        payloadKind: this.normalizeUInt(command.payloadKind, 0xff)
+      });
       if (!changed) failureReason = "assign_hotbar_failed";
     } else if (action === INVENTORY_OP_CLEAR_HOTBAR_SLOT) {
-      changed = this.tryClearHotbarSlot(player, command.sourceSlot);
+      changed = this.options.actionEffects.execute({
+        type: "clear_hotbar_slot",
+        userId,
+        sourceSlot: this.normalizeUInt(command.sourceSlot, 0xff)
+      });
       if (!changed) failureReason = "clear_hotbar_failed";
     } else if (action === INVENTORY_OP_MOVE_HOTBAR_SLOT) {
-      changed = this.tryMoveOrSwapHotbarSlot(player, command.sourceSlot, command.targetSlot);
+      changed = this.options.actionEffects.execute({
+        type: "move_hotbar_slot",
+        userId,
+        sourceSlot: this.normalizeUInt(command.sourceSlot, 0xff),
+        targetSlot: this.normalizeUInt(command.targetSlot, 0xff)
+      });
       if (!changed) failureReason = "move_hotbar_failed";
     } else if (action === INVENTORY_OP_EXECUTE_HOTBAR_SLOT) {
       changed = this.tryExecuteHotbarSlot(userId, player, command.sourceSlot, command.activationChannel);
       if (!changed) failureReason = "execute_hotbar_failed";
     } else if (action === INVENTORY_OP_DROP_HOTBAR_SLOT) {
-      changed = this.tryDropHotbarSlot(player, command.sourceSlot);
+      changed = this.options.actionEffects.execute({
+        type: "drop_hotbar_slot",
+        userId,
+        sourceSlot: this.normalizeUInt(command.sourceSlot, 0xff)
+      });
       if (!changed) failureReason = "drop_hotbar_failed";
+    } else if (action === INVENTORY_OP_CRAFT) {
+      const craftResult = this.tryCraftRecipe(userId, player, this.normalizeUInt(command.itemInstanceId, 0x7fffffff));
+      changed = craftResult.ok;
+      if (!changed) failureReason = craftResult.reason;
     }
 
     this.queueInventoryActionResult(userId, action, changed, changed ? "ok" : failureReason);
@@ -210,6 +271,40 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     const inventory = this.ensureMutableInventory(player.accountId);
     this.persistInventory(player.accountId, inventory, action);
     this.queueInventoryStateForUser(userId);
+  }
+
+  public beginCraftBenchSession(userId: number, sessionId: string): boolean {
+    if (!this.getPlayerStateByUserId(userId) || typeof sessionId !== "string" || sessionId.length <= 0) {
+      return false;
+    }
+    if (!this.options.isUserWithinCraftBenchSession(userId, sessionId, CRAFT_BENCH_PROXIMITY_SLACK)) {
+      return false;
+    }
+    this.activeCraftBenchSessionByUserId.set(userId, {
+      sessionId,
+      expiresAtMs: Date.now() + CRAFT_BENCH_SESSION_TIMEOUT_MS
+    });
+    return true;
+  }
+
+  public refreshCraftBenchSessions(): void {
+    if (this.activeCraftBenchSessionByUserId.size <= 0) {
+      return;
+    }
+    const now = Date.now();
+    for (const [userId, session] of this.activeCraftBenchSessionByUserId.entries()) {
+      if (session.expiresAtMs < now) {
+        this.activeCraftBenchSessionByUserId.delete(userId);
+        continue;
+      }
+      if (!this.getPlayerStateByUserId(userId)) {
+        this.activeCraftBenchSessionByUserId.delete(userId);
+        continue;
+      }
+      if (!this.options.isUserWithinCraftBenchSession(userId, session.sessionId, CRAFT_BENCH_PROXIMITY_SLACK)) {
+        this.activeCraftBenchSessionByUserId.delete(userId);
+      }
+    }
   }
 
   private getPlayerStateByUserId(userId: number): ItemInventoryPlayerState | null {
@@ -264,6 +359,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       this.options.replication.despawnEntity(eid);
       this.options.ecs.destroyEid(eid);
     } else {
+      this.applyPickupVisualAppearance(eid, definition, nextQuantity);
       this.options.replication.syncEntityFromEcs(eid);
     }
     if (pickupWasPersistent) {
@@ -319,23 +415,153 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     if (!action) {
       return false;
     }
+    const runtimeEffects = action.effects ?? [];
     const restoreHealth = action.restoreHealth ?? 0;
-    if (restoreHealth > 0 && player.health >= player.maxHealth) {
+    const effectRestoreHealth = runtimeEffects
+      ?.filter((effect) => effect.type === "restore_health")
+      .reduce((sum, effect) => sum + Math.max(0, Math.floor(effect.amount)), 0) ?? 0;
+    const totalRestoreHealth = restoreHealth + effectRestoreHealth;
+    if (totalRestoreHealth > 0 && player.health >= player.maxHealth) {
       return false;
     }
-    if (restoreHealth > 0) {
-      const nextHealth = Math.min(player.maxHealth, player.health + restoreHealth);
-      if (this.options.ecs.setPlayerHealthByUserId(userId, nextHealth)) {
-        this.options.markPlayerCharacterDirty(player.accountId);
+    if (totalRestoreHealth > 0) {
+      const changed = this.options.actionEffects.execute({
+        type: "restore_health",
+        userId,
+        amount: totalRestoreHealth
+      });
+      if (!changed) {
+        return false;
+      }
+      this.options.markPlayerCharacterDirty(player.accountId);
+    }
+    for (const effect of runtimeEffects) {
+      if (effect.type === "restore_health") {
+        continue;
+      }
+      if (effect.type === "set_player_render_appearance") {
+        const changed = this.options.actionEffects.execute({
+          type: "set_player_render_appearance",
+          userId,
+          patch: {
+            renderArchetypeId: effect.renderArchetypeId,
+            materialVariantId: effect.materialVariantId,
+            tintColorRgb: effect.tintColorRgb,
+            uniformScalePct: effect.uniformScalePct
+          }
+        });
+        if (!changed) {
+          return false;
+        }
+        continue;
+      }
+      if (effect.type === "set_equipped_slot_tint") {
+        const changed = this.options.actionEffects.execute({
+          type: "set_equipped_slot_tint",
+          userId,
+          slot: effect.slot,
+          tintColorRgb: effect.tintColorRgb
+        });
+        if (!changed) {
+          return false;
+        }
       }
     }
-    const consumeQuantity = Math.max(1, Math.floor(action.consumeQuantity));
-    item.quantity -= Math.min(item.quantity, consumeQuantity);
+    return this.options.actionEffects.execute({
+      type: "consume_item_quantity",
+      userId,
+      itemInstanceId: item.itemInstanceId,
+      amount: Math.max(1, Math.floor(action.consumeQuantity))
+    });
+  }
+
+  public applyEquipEffectByUserId(userId: number, rawItemInstanceId: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    const equipped = this.tryEquipInventoryItem(player, rawItemInstanceId);
+    if (!equipped) {
+      return false;
+    }
+    const inventory = this.ensureMutableInventory(player.accountId);
+    const itemInstanceId = this.normalizeUInt(rawItemInstanceId, 0x7fffffff);
+    const item = inventory.itemInstances.find((entry) => entry.itemInstanceId === itemInstanceId);
+    const definition = item ? getItemDefinitionById(item.definitionId) : null;
+    if (definition?.equipSlot) {
+      this.options.onItemEquipped?.(userId, itemInstanceId, definition.equipSlot);
+    }
+    return true;
+  }
+
+  public applyUnequipEffectByUserId(userId: number, slot: EquipmentSlot): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    const inventory = this.ensureMutableInventory(player.accountId);
+    const itemInstanceId = inventory.equipment[slot] ?? 0;
+    const unequipped = this.tryUnequipSlot(player, slot);
+    if (!unequipped) {
+      return false;
+    }
+    if (itemInstanceId > 0) {
+      this.options.onItemUnequipped?.(userId, itemInstanceId, slot);
+    }
+    return true;
+  }
+
+  public applyConsumeItemEffectByUserId(userId: number, rawItemInstanceId: number, rawAmount: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    const itemInstanceId = this.normalizeUInt(rawItemInstanceId, 0x7fffffff);
+    const amount = Math.max(1, this.normalizeUInt(rawAmount, 0xffff));
+    const inventory = this.ensureMutableInventory(player.accountId);
+    const item = inventory.itemInstances.find((entry) => entry.itemInstanceId === itemInstanceId);
+    if (!item) return false;
+    item.quantity -= Math.min(item.quantity, amount);
     if (item.quantity <= 0) {
       this.removeItemFromInventory(inventory, item.itemInstanceId);
     }
     this.compactInventorySlots(inventory);
     return true;
+  }
+
+  public applyPickupWorldItemEffectByUserId(userId: number, pickupNid: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    return this.tryPickupWorldItem(player, pickupNid);
+  }
+
+  public applyDropItemEffectByUserId(userId: number, rawItemInstanceId: number, rawQuantity: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    return this.tryDropInventoryItem(player, rawItemInstanceId, rawQuantity);
+  }
+
+  public applyAssignHotbarSlotEffectByUserId(
+    userId: number,
+    rawItemInstanceId: number,
+    rawTargetSlot: number,
+    rawPayloadKind: number
+  ): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    return this.tryAssignHotbarSlot(player, rawItemInstanceId, rawTargetSlot, rawPayloadKind);
+  }
+
+  public applyClearHotbarSlotEffectByUserId(userId: number, rawSourceSlot: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    return this.tryClearHotbarSlot(player, rawSourceSlot);
+  }
+
+  public applyMoveHotbarSlotEffectByUserId(userId: number, rawSourceSlot: number, rawTargetSlot: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    return this.tryMoveOrSwapHotbarSlot(player, rawSourceSlot, rawTargetSlot);
+  }
+
+  public applyDropHotbarSlotEffectByUserId(userId: number, rawSourceSlot: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    return this.tryDropHotbarSlot(player, rawSourceSlot);
   }
 
   private tryEquipInventoryItem(player: ItemInventoryPlayerState, rawItemInstanceId: unknown): boolean {
@@ -397,7 +623,21 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       pickupId,
       persistencePolicy
     });
+    this.applyPickupVisualAppearance(eid, definition, quantity);
     return eid;
+  }
+
+  private applyPickupVisualAppearance(eid: number, definition: ItemDefinition, quantity: number): void {
+    if (!this.options.applyEntityRenderAppearanceByEid) {
+      return;
+    }
+    const clampedQuantity = Math.max(1, Math.min(definition.stackMax, Math.floor(quantity)));
+    const ratio = definition.stackMax > 1 ? clampedQuantity / definition.stackMax : 1;
+    const uniformScalePct = Math.max(70, Math.min(125, Math.floor(70 + ratio * 55)));
+    this.options.applyEntityRenderAppearanceByEid(eid, {
+      renderArchetypeId: definition.modelId,
+      uniformScalePct
+    });
   }
 
   private spawnStarterPickups(spawns: ReadonlyArray<PickupSpawnDefinition>): void {
@@ -736,7 +976,8 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       action === INVENTORY_OP_CLEAR_HOTBAR_SLOT ||
       action === INVENTORY_OP_MOVE_HOTBAR_SLOT ||
       action === INVENTORY_OP_EXECUTE_HOTBAR_SLOT ||
-      action === INVENTORY_OP_DROP_HOTBAR_SLOT
+      action === INVENTORY_OP_DROP_HOTBAR_SLOT ||
+      action === INVENTORY_OP_CRAFT
     ) {
       return action;
     }
@@ -766,15 +1007,78 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     return slot;
   }
 
-  private resolveItemUseAction(definition: ItemDefinition, rawActivationChannel: unknown): { restoreHealth?: number; consumeQuantity: number } | null {
-    const profile = definition.use;
-    if (!profile || !Array.isArray(profile.actions) || profile.actions.length <= 0) {
+  private resolveItemUseAction(definition: ItemDefinition, rawActivationChannel: unknown): {
+    restoreHealth?: number;
+    consumeQuantity: number;
+    effects?: ReadonlyArray<
+      { type: "restore_health"; amount: number }
+      | {
+          type: "set_player_render_appearance";
+          renderArchetypeId?: number;
+          materialVariantId?: number;
+          tintColorRgb?: number;
+          uniformScalePct?: number;
+        }
+      | { type: "set_equipped_slot_tint"; slot: EquipmentSlot; tintColorRgb: number }
+    >;
+  } | null {
+    const channel = this.normalizeActivationChannel(this.normalizeUInt(rawActivationChannel, 0xff));
+    const runtimeSpecs = getBlueprintRuntimeActivationSpecsByBlueprintId(definition.id);
+    const runtimeSpec =
+      runtimeSpecs.find((entry) => entry.channel === channel && entry.source === "item")
+      ?? runtimeSpecs.find((entry) => entry.channel === channel);
+    if (!runtimeSpec) {
       return null;
     }
-    const channel = this.normalizeUInt(rawActivationChannel, 0xff);
-    const channelIndex = this.normalizeActivationChannel(channel);
-    const action = profile.actions[channelIndex] ?? null;
-    return action && action.consumeQuantity > 0 ? action : null;
+    return {
+      consumeQuantity: Math.max(1, runtimeSpec.consumeQuantity),
+      effects: runtimeSpec.effects
+        .filter((effect): effect is
+          | { type: "restore_health"; amount: number }
+          | {
+              type: "set_player_render_appearance";
+              renderArchetypeId?: number;
+              materialVariantId?: number;
+              tintColorRgb?: number;
+              uniformScalePct?: number;
+            }
+          | { type: "set_equipped_slot_tint"; slot: EquipmentSlot; tintColorRgb: number } =>
+          effect.type === "restore_health"
+          || effect.type === "set_player_render_appearance"
+          || effect.type === "set_equipped_slot_tint"
+        )
+        .map((effect) => {
+          if (effect.type === "restore_health") {
+            return { type: "restore_health", amount: Math.max(0, Math.floor(effect.amount)) } as const;
+          }
+          if (effect.type === "set_player_render_appearance") {
+            return {
+              type: "set_player_render_appearance",
+              renderArchetypeId:
+                typeof effect.renderArchetypeId === "number" && Number.isFinite(effect.renderArchetypeId)
+                  ? Math.max(0, Math.floor(effect.renderArchetypeId))
+                  : undefined,
+              materialVariantId:
+                typeof effect.materialVariantId === "number" && Number.isFinite(effect.materialVariantId)
+                  ? Math.max(0, Math.floor(effect.materialVariantId))
+                  : undefined,
+              tintColorRgb:
+                typeof effect.tintColorRgb === "number" && Number.isFinite(effect.tintColorRgb)
+                  ? Math.max(0, Math.min(0xffffff, Math.floor(effect.tintColorRgb)))
+                  : undefined,
+              uniformScalePct:
+                typeof effect.uniformScalePct === "number" && Number.isFinite(effect.uniformScalePct)
+                  ? Math.max(1, Math.min(1000, Math.floor(effect.uniformScalePct)))
+                  : undefined
+            } as const;
+          }
+          return {
+            type: "set_equipped_slot_tint",
+            slot: effect.slot,
+            tintColorRgb: Math.max(0, Math.min(0xffffff, Math.floor(effect.tintColorRgb)))
+          } as const;
+        })
+    };
   }
 
   private normalizeActivationChannel(channel: number): number {
@@ -913,5 +1217,109 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     }
     inventory.hotbarSlots[sourceSlot] = null;
     return true;
+  }
+
+  private tryCraftRecipe(
+    userId: number,
+    player: ItemInventoryPlayerState,
+    rawRecipeId: number
+  ): { ok: boolean; reason: string } {
+    const recipe = getCraftRecipeById(rawRecipeId);
+    if (!recipe) {
+      return { ok: false, reason: "craft_recipe_not_found" };
+    }
+    if (recipe.station === "bench") {
+      const session = this.activeCraftBenchSessionByUserId.get(userId) ?? null;
+      if (!session || session.expiresAtMs < Date.now()) {
+        return { ok: false, reason: "bench_session_missing" };
+      }
+      const bench = this.options.findNearbyCraftBenchForPlayer(userId, this.resolveCraftBenchDistanceLimit());
+      if (!bench) {
+        return { ok: false, reason: "bench_out_of_range" };
+      }
+      if (bench.sessionId !== session.sessionId) {
+        return { ok: false, reason: "bench_session_invalid" };
+      }
+    }
+    const inventory = this.ensureMutableInventory(player.accountId);
+    for (const ingredient of recipe.ingredients) {
+      const totalOwned = this.getTotalItemQuantityByDefinitionId(inventory, ingredient.definitionId);
+      if (totalOwned < ingredient.quantity) {
+        return { ok: false, reason: "missing_resources" };
+      }
+    }
+    for (const ingredient of recipe.ingredients) {
+      const removed = this.consumeItemDefinitionQuantity(inventory, ingredient.definitionId, ingredient.quantity);
+      if (!removed) {
+        return { ok: false, reason: "missing_resources" };
+      }
+    }
+    const outputDefinition = getItemDefinitionById(recipe.outputDefinitionId);
+    if (!outputDefinition) {
+      return { ok: false, reason: "craft_output_missing" };
+    }
+    if (!this.canAddCraftOutputAfterConsumption(inventory, recipe.outputDefinitionId, recipe.outputQuantity)) {
+      return { ok: false, reason: "inventory_full" };
+    }
+    const addedQuantity = this.addItemToInventory(inventory, outputDefinition, recipe.outputQuantity);
+    if (addedQuantity <= 0) {
+      return { ok: false, reason: "inventory_full" };
+    }
+    return { ok: true, reason: "ok" };
+  }
+
+  private getTotalItemQuantityByDefinitionId(inventory: MutableInventoryState, definitionId: number): number {
+    let total = 0;
+    for (const item of inventory.itemInstances) {
+      if (item.definitionId === definitionId) {
+        total += Math.max(0, item.quantity);
+      }
+    }
+    return total;
+  }
+
+  private consumeItemDefinitionQuantity(inventory: MutableInventoryState, definitionId: number, quantity: number): boolean {
+    let remaining = Math.max(0, Math.floor(quantity));
+    if (remaining <= 0) {
+      return true;
+    }
+    for (let i = inventory.itemInstances.length - 1; i >= 0 && remaining > 0; i -= 1) {
+      const item = inventory.itemInstances[i];
+      if (!item || item.definitionId !== definitionId) {
+        continue;
+      }
+      const remove = Math.min(item.quantity, remaining);
+      item.quantity -= remove;
+      remaining -= remove;
+      if (item.quantity <= 0) {
+        this.removeItemFromInventory(inventory, item.itemInstanceId);
+      }
+    }
+    this.compactInventorySlots(inventory);
+    return remaining <= 0;
+  }
+
+  private resolveCraftBenchDistanceLimit(): number {
+    return Math.max(0, this.options.resolveCraftBenchDistanceLimit());
+  }
+
+  private canAddCraftOutputAfterConsumption(
+    inventory: MutableInventoryState,
+    outputDefinitionId: number,
+    outputQuantity: number
+  ): boolean {
+    const preview = this.toSnapshot(inventory);
+    const mutablePreview: MutableInventoryState = {
+      maxSlots: preview.maxSlots,
+      itemInstances: preview.itemInstances.map((item) => ({ ...item })),
+      equipment: { ...preview.equipment },
+      hotbarSlots: preview.hotbarSlots.map((entry) => (entry ? { ...entry } : null))
+    };
+    const outputDefinition = getItemDefinitionById(outputDefinitionId);
+    if (!outputDefinition) {
+      return false;
+    }
+    const accepted = this.addItemToInventory(mutablePreview, outputDefinition, outputQuantity);
+    return accepted >= outputQuantity;
   }
 }

@@ -20,8 +20,11 @@ import {
   NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES,
   coerceClientLocalSettings,
   getAbilityDefinitionById,
+  getLocationCraftBenchSockets,
   getLocationDefinitionByPid,
+  getLocationPilotConsoleSockets,
   getItemDefinitionById,
+  resolveWorldAnchorAttachmentPoint,
   movementModeToLabel,
   type ClientLocalSettings,
   type PlayerSettings,
@@ -40,7 +43,7 @@ import { RenderSnapshotAssembler } from "./RenderSnapshotAssembler";
 import { WorldRenderer } from "./WorldRenderer";
 import { ClientNetworkOrchestrator } from "./network/ClientNetworkOrchestrator";
 import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
-import { resolveAccessKey } from "../auth/accessKey";
+import { ensureAccessKey, resolveAccessKey } from "../auth/accessKey";
 import {
   type NetworkDiagnosticsSnapshot
 } from "../ui/NetworkDiagnosticsPanel";
@@ -56,6 +59,7 @@ const PLAYER_SETTINGS_LOCAL_CACHE_KEY = "playerSettingsLocalCache";
 const CLIENT_LOCAL_SETTINGS_CACHE_KEY = "clientLocalSettingsCache";
 const SETTINGS_SAVE_DEBOUNCE_MS = 1500;
 const TEST_ALERT_INTERVAL_SECONDS = 60;
+const CLIENT_KINEMATICS_SPEED_SMOOTH_SECONDS = 0.5;
 
 interface TransferBootstrapPayload {
   wsUrl: string;
@@ -117,6 +121,9 @@ export class GameClientApp {
   private previousPhysicsRenderPose: { x: number; y: number; z: number } | null = null;
   private currentPhysicsRenderPose: { x: number; y: number; z: number } | null = null;
   private testAlertElapsedSeconds = 0;
+  private previousKinematicsPose: { x: number; y: number; z: number } | null = null;
+  private currentClientFrameVelocity = { x: 0, y: 0, z: 0 };
+  private smoothedClientSpeed = 0;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -180,6 +187,9 @@ export class GameClientApp {
       onHotbarSlotDropped: (slot) => {
         this.network.queueDropHotbarSlot(slot);
       },
+      onCraftRecipeRequested: (recipeId) => {
+        this.network.queueCraftRecipe(recipeId);
+      },
       onPlayerSettingsChanged: (settingsPatch) => {
         this.applyPlayerSettingsPatch(settingsPatch, true);
       },
@@ -214,7 +224,7 @@ export class GameClientApp {
     onCreatePhase?.("physics");
     const physics = await LocalPhysicsWorld.create();
     const serverUrl = connectionTarget.serverUrl;
-    const resolvedAccessKey = resolveAccessKey(connectionTarget.accessKeyScopeUrl ?? serverUrl);
+    const resolvedAccessKey = ensureAccessKey(connectionTarget.accessKeyScopeUrl ?? serverUrl);
     const accessKey = resolvedAccessKey.key.length > 0 ? resolvedAccessKey.key : null;
     const app = new GameClientApp(
       canvas,
@@ -241,7 +251,7 @@ export class GameClientApp {
       }
     }
     onCreatePhase?.("ready");
-    app.updateDiagnosticsOverlay();
+    app.updateDiagnosticsOverlay(0);
     app.registerTestingHooks();
     return app;
   }
@@ -297,6 +307,9 @@ export class GameClientApp {
     if (!this.ui.isMainMenuOpen() && (this.input.consumeInteractTrigger() || this.consumeTestInteractTrigger())) {
       if (this.currentInteractTargetNid !== null) {
         this.network.queuePickupWorldItem(this.currentInteractTargetNid);
+      } else {
+        // Authoritative world interact fallback (bench session / pilot console toggle).
+        this.network.queuePickupWorldItem(0);
       }
     }
 
@@ -333,13 +346,15 @@ export class GameClientApp {
     this.applySettingsEvents();
     this.applyServerAlertEvents();
     this.maybeFlushSettingsDebounced();
+    this.updateHealthBar(seconds);
 
     const renderSnapshot = this.renderSnapshotAssembler.build(seconds);
     this.renderer.apply(renderSnapshot);
     this.renderedLocationFrameSnapshot = this.renderer.getRenderedLocationFrameSnapshot();
     this.applyVisualCarrierYawFromRenderedLocations();
     this.updateInteractPrompt();
-    this.updateDiagnosticsOverlay();
+    this.updateCraftingBenchAvailability();
+    this.updateDiagnosticsOverlay(seconds);
     this.updateTestAlert(seconds);
   }
 
@@ -486,6 +501,15 @@ export class GameClientApp {
         continue;
       }
       console.warn(`[inventory] action=${feedback.action} failed reason=${feedback.reason}`);
+      if (feedback.reason === "bench_session_missing" || feedback.reason === "bench_session_invalid") {
+        this.ui.showAlert("Use the craft bench first (press E nearby).", "warning");
+      } else if (feedback.reason === "bench_out_of_range") {
+        this.ui.showAlert("Move back near the craft bench.", "warning");
+      } else if (feedback.reason === "missing_resources") {
+        this.ui.showAlert("Missing required resources.", "warning");
+      } else if (feedback.reason === "inventory_full") {
+        this.ui.showAlert("Inventory full.", "warning");
+      }
     }
   }
 
@@ -568,9 +592,59 @@ export class GameClientApp {
     return this.playerSettings;
   }
 
-  private updateDiagnosticsOverlay(): void {
+  private updateDiagnosticsOverlay(frameDeltaSeconds: number): void {
     this.updateConnectedPlayersIndicator();
     this.ui.updateDiagnostics(this.buildNetworkDiagnosticsSnapshot());
+    this.updateClientKinematics(frameDeltaSeconds);
+  }
+
+  private updateHealthBar(deltaSeconds: number): void {
+    const localPlayerRuntime = this.network.getLocalPlayerPose();
+    this.ui.updateLocalPlayerHealth(
+      localPlayerRuntime?.health ?? null,
+      localPlayerRuntime?.maxHealth ?? null,
+      deltaSeconds
+    );
+  }
+
+  private updateClientKinematics(frameDeltaSeconds: number): void {
+    const pose = this.getRenderPose();
+    if (
+      this.previousKinematicsPose &&
+      Number.isFinite(frameDeltaSeconds) &&
+      frameDeltaSeconds > 0
+    ) {
+      const invDelta = 1 / frameDeltaSeconds;
+      this.currentClientFrameVelocity.x = (pose.x - this.previousKinematicsPose.x) * invDelta;
+      this.currentClientFrameVelocity.y = (pose.y - this.previousKinematicsPose.y) * invDelta;
+      this.currentClientFrameVelocity.z = (pose.z - this.previousKinematicsPose.z) * invDelta;
+    } else {
+      this.currentClientFrameVelocity.x = 0;
+      this.currentClientFrameVelocity.y = 0;
+      this.currentClientFrameVelocity.z = 0;
+    }
+    this.previousKinematicsPose = { x: pose.x, y: pose.y, z: pose.z };
+    const instantaneousSpeed = Math.hypot(
+      this.currentClientFrameVelocity.x,
+      this.currentClientFrameVelocity.y,
+      this.currentClientFrameVelocity.z
+    );
+    const speedAlpha = Number.isFinite(frameDeltaSeconds) && frameDeltaSeconds > 0
+      ? Math.max(0, Math.min(1, frameDeltaSeconds / CLIENT_KINEMATICS_SPEED_SMOOTH_SECONDS))
+      : 1;
+    this.smoothedClientSpeed += (instantaneousSpeed - this.smoothedClientSpeed) * speedAlpha;
+    const physicsKinematic = this.physics.getKinematicState();
+    const horizontalSpeed = Math.hypot(physicsKinematic.vx, physicsKinematic.vz);
+    this.ui.updateClientKinematics({
+      x: pose.x,
+      y: pose.y,
+      z: pose.z,
+      renderSpeed: this.smoothedClientSpeed,
+      physicsVx: physicsKinematic.vx,
+      physicsVy: physicsKinematic.vy,
+      physicsVz: physicsKinematic.vz,
+      horizontalSpeed
+    });
   }
 
   private buildNetworkDiagnosticsSnapshot(): NetworkDiagnosticsSnapshot {
@@ -686,21 +760,22 @@ export class GameClientApp {
 
     return {
       ...basePayload,
-      locationRoots: this.network.getLocationRoots().map((location) => ({
+      worldAnchors: this.network.getWorldAnchors().map((location) => ({
         nid: location.nid,
         modelId: location.modelId,
-        locationPid: location.locationPid,
-        locationKind: location.locationKind,
-        locationArchetypeId: location.locationArchetypeId,
-        locationSeed: location.locationSeed,
-        locationEnvironmentId: location.locationEnvironmentId,
-        locationStreamingRadius: location.locationStreamingRadius,
-        locationInfluenceRadius: location.locationInfluenceRadius,
+        worldAnchorId: location.worldAnchorId,
+        worldAnchorKind: location.worldAnchorKind,
+        worldAnchorArchetypeId: location.worldAnchorArchetypeId,
+        worldAnchorSeed: location.worldAnchorSeed,
+        worldAnchorEnvironmentId: location.worldAnchorEnvironmentId,
+        worldAnchorStreamingRadius: location.worldAnchorStreamingRadius,
+        worldAnchorInfluenceRadius: location.worldAnchorInfluenceRadius,
         x: location.x,
         y: location.y,
         z: location.z,
         rotation: location.rotation
       })),
+      locationRoots: this.network.getWorldAnchors().map((location) => ({ ...location })),
       projectiles: this.network.getProjectiles().map((projectile) => ({
         nid: projectile.nid,
         modelId: projectile.modelId,
@@ -714,6 +789,10 @@ export class GameClientApp {
       ].map((e) => ({
         nid: e.nid,
         modelId: e.modelId,
+        renderArchetypeId: e.renderArchetypeId,
+        materialVariantId: e.materialVariantId,
+        tintColorRgb: e.tintColorRgb,
+        uniformScalePct: e.uniformScalePct,
         x: e.x, y: e.y, z: e.z,
         rotationX: e.rotationX, rotationY: e.rotationY, rotationZ: e.rotationZ, rotationW: e.rotationW,
         health: e.health,
@@ -794,7 +873,7 @@ export class GameClientApp {
         const renderSnapshot = this.renderSnapshotAssembler.build(FIXED_STEP);
         this.renderer.apply(renderSnapshot);
         this.updateInteractPrompt();
-        this.updateDiagnosticsOverlay();
+        this.updateDiagnosticsOverlay(FIXED_STEP);
       }
     };
 
@@ -903,6 +982,7 @@ export class GameClientApp {
       ...this.getRenderPlatformStatesAt(renderServerTimeSeconds),
       ...this.network.getWorldEntities()
     ];
+    const localPlayerRuntime = this.network.getLocalPlayerPose();
     return {
       frameDeltaSeconds,
       renderServerTimeSeconds,
@@ -910,9 +990,20 @@ export class GameClientApp {
       localGrounded: this.resolveLocalGroundedState(),
       localMovementMode: this.resolveLocalMovementMode(),
       localPlayerNid: this.network.getLocalPlayerNid(),
+      localEquippedWeaponArchetypeId: localPlayerRuntime?.equippedWeaponArchetypeId ?? 0,
+      localEquippedWeaponTintColorRgb: localPlayerRuntime?.equippedWeaponTintColorRgb ?? 0xffffff,
+      localEquippedHeadArchetypeId: localPlayerRuntime?.equippedHeadArchetypeId ?? 0,
+      localEquippedHeadTintColorRgb: localPlayerRuntime?.equippedHeadTintColorRgb ?? 0xffffff,
+      localEquippedBodyArchetypeId: localPlayerRuntime?.equippedBodyArchetypeId ?? 0,
+      localEquippedBodyTintColorRgb: localPlayerRuntime?.equippedBodyTintColorRgb ?? 0xffffff,
+      localEquippedLegsArchetypeId: localPlayerRuntime?.equippedLegsArchetypeId ?? 0,
+      localEquippedLegsTintColorRgb: localPlayerRuntime?.equippedLegsTintColorRgb ?? 0xffffff,
+      localEquippedAccessoryArchetypeId: localPlayerRuntime?.equippedAccessoryArchetypeId ?? 0,
+      localEquippedAccessoryTintColorRgb: localPlayerRuntime?.equippedAccessoryTintColorRgb ?? 0xffffff,
       remotePlayers: this.network.getRemotePlayers(),
       abilityUseEvents: this.network.consumeAbilityUseEvents(),
-      locationRoots: this.network.getLocationRoots(),
+      worldAnchors: this.network.getWorldAnchors(),
+      locationRoots: this.network.getWorldAnchors(),
       worldEntities,
       projectiles: this.network.getProjectiles()
     };
@@ -1032,8 +1123,22 @@ export class GameClientApp {
   }
 
   private updateInteractPrompt(): void {
+    if (this.ui.isMainMenuOpen()) {
+      this.ui.clearInteractPrompt();
+      return;
+    }
     const targetNid = this.currentInteractTargetNid;
-    if (targetNid === null || this.ui.isMainMenuOpen()) {
+    if (targetNid === null) {
+      const pose = this.getRenderPose();
+      if (this.findNearbyCraftBenchPrompt(pose)) {
+        this.ui.showInteractPrompt("E  Use Craft Bench");
+        return;
+      }
+      const referenceFrames = this.network.getActiveCarrierFramePids();
+      if (referenceFrames.length > 0 && this.findNearbyPilotConsolePrompt(pose)) {
+        this.ui.showInteractPrompt("E  Toggle Pilot Console");
+        return;
+      }
       this.ui.clearInteractPrompt();
       return;
     }
@@ -1046,6 +1151,46 @@ export class GameClientApp {
     this.ui.showInteractPrompt(
       `E  Pick up ${definition.name}${item.itemQuantity > 1 ? ` x${item.itemQuantity}` : ""}`
     );
+  }
+
+  private updateCraftingBenchAvailability(): void {
+    const pose = this.getRenderPose();
+    this.ui.setBenchCraftingAvailable(this.findNearbyCraftBenchPrompt(pose));
+  }
+
+  private findNearbyCraftBenchPrompt(pose: { x: number; y: number; z: number }): boolean {
+    const roots = this.network.getLocationRoots();
+    for (const root of roots) {
+      const definition = getLocationDefinitionByPid(root.worldAnchorId);
+      if (!definition) {
+        continue;
+      }
+      const sockets = getLocationCraftBenchSockets(definition);
+      if (sockets.length <= 0) {
+        continue;
+      }
+      const rendered = this.resolveRenderedLocationRootByCarrierFramePid(root.worldAnchorId);
+      const rootX = rendered?.x ?? root.x;
+      const rootY = rendered?.y ?? root.y;
+      const rootZ = rendered?.z ?? root.z;
+      const yaw = rendered
+        ? this.extractYawFromRotationQuaternion(rendered.rotation)
+        : this.extractYawFromRotationQuaternion(root.rotation);
+      for (const socket of sockets) {
+        const world = resolveWorldAnchorAttachmentPoint(
+          { x: rootX, y: rootY, z: rootZ, yaw },
+          { x: socket.localX, y: socket.localY, z: socket.localZ }
+        );
+        const dx = world.x - pose.x;
+        const dy = world.y - pose.y;
+        const dz = world.z - pose.z;
+        const maxDistance = Math.max(0.5, socket.interactRadius + 0.75);
+        if (dx * dx + dy * dy + dz * dz <= maxDistance * maxDistance) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
@@ -1154,12 +1299,13 @@ export class GameClientApp {
     joinTicket: string;
     mapConfig: RuntimeMapConfig;
   } | null> {
-    const accessKey = resolveAccessKey(orchestratorUrl).key;
+    const accessKey = ensureAccessKey(orchestratorUrl).key;
     const authKey = accessKey.length > 0 ? accessKey : null;
     const response = await fetch(`${orchestratorUrl}/bootstrap`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        accessKey: authKey,
         authKey
       } satisfies BootstrapRequest)
     });
@@ -1417,6 +1563,45 @@ export class GameClientApp {
     const sinYawCosPitch = 2 * (rotation.w * rotation.y + rotation.x * rotation.z);
     const cosYawCosPitch = 1 - 2 * (rotation.y * rotation.y + rotation.z * rotation.z);
     return Math.atan2(sinYawCosPitch, cosYawCosPitch);
+  }
+
+  private findNearbyPilotConsolePrompt(pose: { x: number; y: number; z: number }): boolean {
+    const roots = this.network.getLocationRoots();
+    for (const root of roots) {
+      const definition = getLocationDefinitionByPid(root.worldAnchorId);
+      if (!definition || definition.motion === "static") {
+        continue;
+      }
+      const sockets = getLocationPilotConsoleSockets(definition);
+      if (sockets.length <= 0) {
+        continue;
+      }
+      const rendered = this.resolveRenderedLocationRootByCarrierFramePid(root.worldAnchorId);
+      const rootX = rendered?.x ?? root.x;
+      const rootY = rendered?.y ?? root.y;
+      const rootZ = rendered?.z ?? root.z;
+      const yaw = rendered
+        ? this.extractYawFromRotationQuaternion(rendered.rotation)
+        : this.extractYawFromRotationQuaternion(root.rotation);
+      for (const socket of sockets) {
+        const world = resolveWorldAnchorAttachmentPoint(
+          { x: rootX, y: rootY, z: rootZ, yaw },
+          { x: socket.localX, y: socket.localY, z: socket.localZ }
+        );
+        const worldX = world.x;
+        const worldY = world.y;
+        const worldZ = world.z;
+        const dx = worldX - pose.x;
+        const dy = worldY - pose.y;
+        const dz = worldZ - pose.z;
+        const distanceSq = dx * dx + dy * dy + dz * dz;
+        const maxDistance = Math.max(0.5, socket.interactRadius);
+        if (distanceSq <= maxDistance * maxDistance) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 }
 

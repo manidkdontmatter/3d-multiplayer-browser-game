@@ -24,6 +24,11 @@ const MAP_PORTAL_ARRIVAL_OVERRIDES: Readonly<Record<string, { x: number; y: numb
 
 export class ServerNetworkEventRouter {
   private readonly commandRouter = new ServerCommandRouter<ServerNetworkUser>();
+  private lastDrainInputStats: {
+    commandSets: number;
+    inputCommands: number;
+    byUserId: ReadonlyArray<{ userId: number; commandSets: number; inputCommands: number }>;
+  } = { commandSets: 0, inputCommands: 0, byUserId: [] };
   private nextGuestAccountId = GUEST_ACCOUNT_ID_BASE;
   private readonly transferDisconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private readonly connectedUsersByAccountId = new Map<number, ServerNetworkUser>();
@@ -36,9 +41,10 @@ export class ServerNetworkEventRouter {
   ) {}
 
   public drainQueue(): void {
+    const perUser = new Map<number, { commandSets: number; inputCommands: number }>();
     this.networkHost.drainQueue({
       onUserConnected: (user, payload) => this.handleUserConnected(user, payload),
-      onCommandSet: (user, commands) => this.handleCommandSet(user, commands),
+      onCommandSet: (user, commands) => this.handleCommandSet(user, commands, perUser),
       onUserDisconnected: (user) => {
         this.clearTransferDisconnectTimer(user.id);
         if (typeof user.accountId === "number" && Number.isFinite(user.accountId)) {
@@ -51,7 +57,27 @@ export class ServerNetworkEventRouter {
         this.simulation.removeUser(user);
       }
     });
+    let commandSets = 0;
+    let inputCommands = 0;
+    const byUserId: Array<{ userId: number; commandSets: number; inputCommands: number }> = [];
+    for (const [userId, stats] of perUser) {
+      commandSets += stats.commandSets;
+      inputCommands += stats.inputCommands;
+      byUserId.push({ userId, commandSets: stats.commandSets, inputCommands: stats.inputCommands });
+    }
+    byUserId.sort((a, b) => a.userId - b.userId);
+    this.lastDrainInputStats = { commandSets, inputCommands, byUserId };
     this.drainAutoPortalTransfers();
+  }
+
+  public consumeLastDrainInputStats(): {
+    commandSets: number;
+    inputCommands: number;
+    byUserId: ReadonlyArray<{ userId: number; commandSets: number; inputCommands: number }>;
+  } {
+    const snapshot = this.lastDrainInputStats;
+    this.lastDrainInputStats = { commandSets: 0, inputCommands: 0, byUserId: [] };
+    return snapshot;
   }
 
   private drainAutoPortalTransfers(): void {
@@ -65,7 +91,21 @@ export class ServerNetworkEventRouter {
     }
   }
 
-  private handleCommandSet(user: ServerNetworkUser, commands: unknown[]): void {
+  private handleCommandSet(
+    user: ServerNetworkUser,
+    commands: unknown[],
+    perUser: Map<number, { commandSets: number; inputCommands: number }>
+  ): void {
+    const userStats = perUser.get(user.id) ?? { commandSets: 0, inputCommands: 0 };
+    userStats.commandSets += 1;
+    let inputCount = 0;
+    for (let index = 0; index < commands.length; index += 1) {
+      if ((commands[index] as { ntype?: unknown } | undefined)?.ntype === NType.InputCommand) {
+        inputCount += 1;
+      }
+    }
+    userStats.inputCommands += inputCount;
+    perUser.set(user.id, userStats);
     this.commandRouter.route(user, commands, {
       onInputCommands: (inputCommands) => this.simulation.applyInputCommands(user.id, inputCommands),
       onAbilityCommand: (commandUser, command) => this.simulation.applyAbilityCommand(commandUser, command),
@@ -122,7 +162,9 @@ export class ServerNetworkEventRouter {
   }
 
   private handleUserConnected(user: ServerNetworkUser, payload: unknown): void {
-    const authKey = (payload as { authKey?: unknown } | undefined)?.authKey;
+    const authKey =
+      (payload as { accessKey?: unknown; authKey?: unknown } | undefined)?.accessKey
+      ?? (payload as { accessKey?: unknown; authKey?: unknown } | undefined)?.authKey;
     const payloadAccountId = (payload as { accountId?: unknown } | undefined)?.accountId;
     const payloadSnapshot = (payload as { playerSnapshot?: unknown } | undefined)?.playerSnapshot;
     const payloadInventory = (payload as { inventoryState?: unknown } | undefined)?.inventoryState;

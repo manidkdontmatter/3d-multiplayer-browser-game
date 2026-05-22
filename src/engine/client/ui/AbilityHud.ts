@@ -27,6 +27,7 @@ import {
   type AbilityDefinition
 } from "../../shared/abilities";
 import {
+  CRAFT_RECIPES,
   EQUIPMENT_SLOT_WIRE_VALUE,
   getItemDefinitionById,
   type EquipmentSlot,
@@ -54,6 +55,7 @@ export interface AbilityHudOptions {
   onHotbarSlotMoved?: (sourceSlot: number, targetSlot: number) => void;
   onHotbarSlotExecuted?: (slot: number, channel: number) => void;
   onHotbarSlotDropped?: (slot: number) => void;
+  onCraftRecipeRequested?: (recipeId: number) => void;
   onPlayerSettingsChanged?: (settingsPatch: Partial<PlayerSettings>) => void;
   onClientLocalSettingsChanged?: (settingsPatch: Partial<ClientLocalSettings>) => void;
 }
@@ -80,6 +82,7 @@ export class AbilityHud {
   private abilityBookGrid!: HTMLDivElement;
   private inventoryList!: HTMLDivElement;
   private equipmentList!: HTMLDivElement;
+  private craftingList!: HTMLDivElement;
   private abilitySearchInput!: HTMLInputElement;
   private readonly abilityCards = new Map<number, HTMLDivElement>();
   private readonly slotElements: SlotElements[] = [];
@@ -95,6 +98,7 @@ export class AbilityHud {
   private secondaryMouseSlot = 1;
   private playerSettings = coercePlayerSettings(null);
   private clientLocalSettings = coerceClientLocalSettings(null);
+  private benchCraftingAvailable = false;
   private hotbarDigitToggleInput: HTMLInputElement | null = null;
   private mouseSmoothingToggleInput: HTMLInputElement | null = null;
   private mouseSensitivitySliderInput: HTMLInputElement | null = null;
@@ -237,6 +241,15 @@ export class AbilityHud {
     };
     this.renderInventory();
     this.renderAllSlots();
+  }
+
+  public setBenchCraftingAvailable(available: boolean): void {
+    const normalized = Boolean(available);
+    if (this.benchCraftingAvailable === normalized) {
+      return;
+    }
+    this.benchCraftingAvailable = normalized;
+    this.renderCraftingRecipes();
   }
 
   public upsertAbility(ability: AbilityDefinition): void {
@@ -388,6 +401,11 @@ export class AbilityHud {
 
     layout.append(inventoryColumn, equipmentColumn);
     panel.append(layout);
+    const craftingHeading = documentRef.createElement("h4");
+    craftingHeading.textContent = "Crafting";
+    this.craftingList = documentRef.createElement("div");
+    this.craftingList.className = "inventory-list";
+    panel.append(craftingHeading, this.craftingList);
     this.renderInventory();
     return panel;
   }
@@ -836,6 +854,50 @@ export class AbilityHud {
         }));
       }
       this.equipmentList.append(row);
+    }
+    this.renderCraftingRecipes();
+  }
+
+  private renderCraftingRecipes(): void {
+    if (!this.craftingList) {
+      return;
+    }
+    this.craftingList.innerHTML = "";
+    for (const recipe of CRAFT_RECIPES) {
+      if (recipe.station === "bench" && !this.benchCraftingAvailable) {
+        continue;
+      }
+      const row = this.root.ownerDocument.createElement("div");
+      row.className = "inventory-item-row";
+      const main = this.root.ownerDocument.createElement("div");
+      main.className = "inventory-item-main";
+      const name = this.root.ownerDocument.createElement("span");
+      name.className = "inventory-item-name";
+      name.textContent = recipe.name;
+      const output = getItemDefinitionById(recipe.outputDefinitionId);
+      const meta = this.root.ownerDocument.createElement("span");
+      meta.className = "inventory-item-meta";
+      meta.textContent = `${recipe.station} craft -> ${output?.name ?? recipe.outputDefinitionId} x${recipe.outputQuantity}`;
+      main.append(name, meta);
+      const ingredients = this.root.ownerDocument.createElement("span");
+      ingredients.className = "inventory-item-meta";
+      ingredients.textContent = recipe.ingredients
+        .map((ingredient) => `${getItemDefinitionById(ingredient.definitionId)?.name ?? ingredient.definitionId} x${ingredient.quantity}`)
+        .join(", ");
+      const actions = this.root.ownerDocument.createElement("div");
+      actions.className = "inventory-item-actions";
+      actions.append(this.createInventoryActionButton("Craft", () => {
+        this.options.onCraftRecipeRequested?.(recipe.id);
+      }));
+      row.append(main, actions);
+      row.append(ingredients);
+      this.craftingList.append(row);
+    }
+    if (!this.benchCraftingAvailable) {
+      const hint = this.root.ownerDocument.createElement("p");
+      hint.className = "inventory-empty";
+      hint.textContent = "Move near a crafting bench to view bench recipes.";
+      this.craftingList.append(hint);
     }
   }
 

@@ -24,6 +24,7 @@ export const GameEvent = {
   ITEM_PICKED_UP: "item.pickedUp",
   ITEM_DROPPED: "item.dropped",
   ITEM_EQUIPPED: "item.equipped",
+  ITEM_UNEQUIPPED: "item.unequipped",
   STATUS_APPLIED: "status.applied",
   STATUS_REMOVED: "status.removed",
   ENTITY_CREATED: "entity.created",
@@ -124,7 +125,13 @@ export interface ItemDroppedPayload {
 
 export interface ItemEquippedPayload {
   userId: number;
-  itemEid: number;
+  itemInstanceId: number;
+  slot: string;
+}
+
+export interface ItemUnequippedPayload {
+  userId: number;
+  itemInstanceId: number;
   slot: string;
 }
 

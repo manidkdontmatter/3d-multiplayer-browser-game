@@ -7,7 +7,8 @@ import { Color } from "three";
 import {
   injectVisualPalette,
   type EntityVisualDef,
-  type LocationVisualDef
+  type LocationVisualDef,
+  type RenderArchetypeDef
 } from "../../engine/client/runtime/rendering/VisualRegistry";
 import {
   injectEnvironmentPresets,
@@ -27,7 +28,11 @@ import {
   MODEL_ID_ITEM_FOCUS_BLADE,
   MODEL_ID_ITEM_ETHER_CRYSTAL,
   MODEL_ID_PROJECTILE_PRIMARY,
-  MODEL_ID_TRAINING_DUMMY
+  MODEL_ID_TRAINING_DUMMY,
+  MODEL_ID_LOCATION_STATIC_CASTLE,
+  MODEL_ID_LOCATION_MOVING_CASTLE,
+  MODEL_ID_LOCATION_MOVING_TEST_PLATFORM,
+  MODEL_ID_LOCATION_TEST_ARENA
 } from "../../engine/shared/config";
 import {
   ENVIRONMENT_PRESET_VOID_NEUTRAL,
@@ -42,16 +47,97 @@ const entities = new Map<number, EntityVisualDef>([
   [MODEL_ID_PLATFORM_LINEAR, { geometry: "box", geometryParams: [4.5, 0.7, 4.5], color: 0xd8b691, roughness: 0.88, metalness: 0.06 }],
   [MODEL_ID_PLATFORM_ROTATING, { geometry: "box", geometryParams: [5.6, 0.7, 5.6], color: 0x9ea7d8, roughness: 0.88, metalness: 0.06 }],
   // NPCs
-  [MODEL_ID_NPC_HOSTILE_GUARD, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0xd9463e, roughness: 0.82, metalness: 0.08 }],
-  [MODEL_ID_NPC_DOCILE_FLEE, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0xf2d34f, roughness: 0.82, metalness: 0.08 }],
-  [MODEL_ID_NPC_WANDERER, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0x52c96b, roughness: 0.82, metalness: 0.08 }],
+  [MODEL_ID_NPC_HOSTILE_GUARD, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0x8a8a8a, roughness: 0.82, metalness: 0.08 }],
+  [MODEL_ID_NPC_DOCILE_FLEE, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0x8a8a8a, roughness: 0.82, metalness: 0.08 }],
+  [MODEL_ID_NPC_WANDERER, { geometry: "cylinder", geometryParams: [0.35, 0.35, 1.9, 14, 1], color: 0x8a8a8a, roughness: 0.82, metalness: 0.08 }],
   // Training dummy
   [MODEL_ID_TRAINING_DUMMY, { geometry: "cylinder", geometryParams: [0.42, 0.42, 1.9, 12, 1], color: 0xa6c9d8, roughness: 0.88, metalness: 0.08 }],
   // World items
   [MODEL_ID_ITEM_VITALITY_SHARD, { geometry: "dodecahedron", geometryParams: [0.22, 0], color: 0x74f2b2, roughness: 0.42, metalness: 0.06, emissive: 0x74f2b2, emissiveIntensity: 0.28 }],
   [MODEL_ID_ITEM_FOCUS_BLADE, { geometry: "box", geometryParams: [0.18, 0.9, 0.18], color: 0xbfc7d5, roughness: 0.42, metalness: 0.06 }],
-  [MODEL_ID_ITEM_ETHER_CRYSTAL, { geometry: "dodecahedron", geometryParams: [0.28, 0], color: 0x8fb7ff, roughness: 0.42, metalness: 0.2, emissive: 0x8fb7ff, emissiveIntensity: 0.28 }]
+  [MODEL_ID_ITEM_ETHER_CRYSTAL, { geometry: "dodecahedron", geometryParams: [0.28, 0], color: 0x8fb7ff, roughness: 0.42, metalness: 0.2, emissive: 0x8fb7ff, emissiveIntensity: 0.28 }],
+  [47, { geometry: "dodecahedron", geometryParams: [0.23, 0], color: 0xff3f2a, roughness: 0.48, metalness: 0.06, emissive: 0xff3f2a, emissiveIntensity: 0.26 }],
+  [48, { geometry: "dodecahedron", geometryParams: [0.23, 0], color: 0x40ff59, roughness: 0.48, metalness: 0.06, emissive: 0x40ff59, emissiveIntensity: 0.26 }],
+  [49, { geometry: "dodecahedron", geometryParams: [0.23, 0], color: 0xffd300, roughness: 0.48, metalness: 0.06, emissive: 0xffd300, emissiveIntensity: 0.26 }]
 ]);
+
+const renderArchetypes = new Map<number, RenderArchetypeDef>();
+for (const [id, visual] of entities) {
+  renderArchetypes.set(id, {
+    id,
+    nodes: [
+      {
+        geometry: visual.geometry,
+        geometryParams: visual.geometryParams,
+        color: visual.color,
+        roughness: visual.roughness,
+        metalness: visual.metalness,
+        emissive: visual.emissive,
+        emissiveIntensity: visual.emissiveIntensity
+      }
+    ]
+  });
+}
+renderArchetypes.set(MODEL_ID_TRAINING_DUMMY, {
+  id: MODEL_ID_TRAINING_DUMMY,
+  nodes: [
+    {
+      geometry: "cylinder",
+      geometryParams: [0.42, 0.42, 1.9, 12, 1],
+      color: 0xa6c9d8,
+      roughness: 0.88,
+      metalness: 0.08,
+      localPosition: { x: 0, y: 0, z: 0 }
+    },
+    {
+      geometry: "sphere",
+      geometryParams: [0.26, 14, 10],
+      color: 0xd2edf2,
+      roughness: 0.72,
+      metalness: 0.04,
+      localPosition: { x: 0, y: 1.15, z: 0 }
+    }
+  ]
+});
+renderArchetypes.set(MODEL_ID_LOCATION_STATIC_CASTLE, {
+  id: MODEL_ID_LOCATION_STATIC_CASTLE,
+  nodes: [
+    { geometry: "box", geometryParams: [68, 10, 48], color: 0x24222d, roughness: 0.86, metalness: 0.05, localPosition: { x: 0, y: 0, z: 0 } },
+    { geometry: "box", geometryParams: [42, 16, 28], color: 0x24222d, roughness: 0.86, metalness: 0.05, localPosition: { x: 0, y: 18, z: 0 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x5d526e, roughness: 0.76, metalness: 0.12, localPosition: { x: -52, y: 12, z: -34 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x5d526e, roughness: 0.76, metalness: 0.12, localPosition: { x: 52, y: 12, z: -34 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x5d526e, roughness: 0.76, metalness: 0.12, localPosition: { x: -52, y: 12, z: 34 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x5d526e, roughness: 0.76, metalness: 0.12, localPosition: { x: 52, y: 12, z: 34 } },
+    { geometry: "box", geometryParams: [92, 5, 64], color: 0x5d526e, roughness: 0.76, metalness: 0.12, localPosition: { x: 0, y: -8, z: 0 } }
+  ]
+});
+renderArchetypes.set(MODEL_ID_LOCATION_MOVING_CASTLE, {
+  id: MODEL_ID_LOCATION_MOVING_CASTLE,
+  nodes: [
+    { geometry: "box", geometryParams: [68, 10, 48], color: 0x253d55, roughness: 0.86, metalness: 0.05, localPosition: { x: 0, y: 0, z: 0 } },
+    { geometry: "box", geometryParams: [42, 16, 28], color: 0x253d55, roughness: 0.86, metalness: 0.05, localPosition: { x: 0, y: 18, z: 0 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x75a7c4, roughness: 0.76, metalness: 0.12, localPosition: { x: -52, y: 12, z: -34 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x75a7c4, roughness: 0.76, metalness: 0.12, localPosition: { x: 52, y: 12, z: -34 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x75a7c4, roughness: 0.76, metalness: 0.12, localPosition: { x: -52, y: 12, z: 34 } },
+    { geometry: "box", geometryParams: [12, 28, 12], color: 0x75a7c4, roughness: 0.76, metalness: 0.12, localPosition: { x: 52, y: 12, z: 34 } },
+    { geometry: "box", geometryParams: [92, 5, 64], color: 0x75a7c4, roughness: 0.76, metalness: 0.12, localPosition: { x: 0, y: -8, z: 0 } }
+  ]
+});
+renderArchetypes.set(MODEL_ID_LOCATION_TEST_ARENA, {
+  id: MODEL_ID_LOCATION_TEST_ARENA,
+  nodes: [
+    { geometry: "box", geometryParams: [84, 4, 84], color: 0x4e625f, roughness: 0.84, metalness: 0.08, localPosition: { x: 0, y: 0, z: 0 } },
+    { geometry: "box", geometryParams: [24, 12, 6], color: 0xd8b691, roughness: 0.82, metalness: 0.1, localPosition: { x: 0, y: 10, z: -68 } }
+  ]
+});
+renderArchetypes.set(MODEL_ID_LOCATION_MOVING_TEST_PLATFORM, {
+  id: MODEL_ID_LOCATION_MOVING_TEST_PLATFORM,
+  nodes: [
+    { geometry: "box", geometryParams: [120, 1, 70], color: 0x7fc7d9, roughness: 0.72, metalness: 0.08, localPosition: { x: 0, y: 0, z: 0 } },
+    { geometry: "box", geometryParams: [1.25, 0.1, 70.2], color: 0xf2d16b, roughness: 0.68, metalness: 0.05, localPosition: { x: -40, y: 0.55, z: 0 } },
+    { geometry: "box", geometryParams: [1.25, 0.1, 70.2], color: 0xf2d16b, roughness: 0.68, metalness: 0.05, localPosition: { x: 40, y: 0.55, z: 0 } }
+  ]
+});
 
 const locations = new Map<string, LocationVisualDef>([
   ["terrainIsland", { kind: "terrainIsland", terrainColor: 0xffffff, terrainRoughness: 0.95, bowlColor: 0x8ed8ff }],
@@ -101,7 +187,7 @@ const environmentPresets = new Map<number, EnvironmentPreset>([
 ]);
 
 export function initVisuals(): void {
-  injectVisualPalette({ entities, locations });
+  injectVisualPalette({ entities, renderArchetypes, locations });
   injectEnvironmentPresets(environmentPresets);
   injectProjectilePalettes(projectilePalettes);
 }

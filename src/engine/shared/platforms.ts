@@ -4,10 +4,13 @@
  * Human Summary: Shared by client and server so both sides use the same definitions where required.
  */
 export type PlatformKind = 1 | 2;
+export type PlatformMotionProfile = "linear_oscillation" | "yaw_rotation";
 
 export interface PlatformDefinition {
   pid: number;
   kind: PlatformKind;
+  motionProfile?: PlatformMotionProfile;
+  modelId?: number;
   halfX: number;
   halfY: number;
   halfZ: number;
@@ -54,17 +57,25 @@ export function samplePlatformTransform(definition: PlatformDefinition, seconds:
   const z = definition.baseZ;
   let yaw = definition.baseYaw;
 
-  if (definition.kind === 1) {
+  const motionProfile = resolvePlatformMotionProfile(definition);
+  if (motionProfile === "linear_oscillation") {
     const wave = seconds * definition.frequency + definition.phase;
     x = definition.baseX + Math.sin(wave) * definition.amplitudeX;
     y = definition.baseY + Math.sin(wave * 0.8) * definition.amplitudeY;
   }
 
-  if (definition.kind === 2) {
+  if (motionProfile === "yaw_rotation") {
     yaw = normalizeYaw(definition.baseYaw + definition.angularSpeed * seconds);
   }
 
   return { x, y, z, yaw };
+}
+
+export function resolvePlatformMotionProfile(definition: Pick<PlatformDefinition, "kind" | "motionProfile">): PlatformMotionProfile {
+  if (definition.motionProfile === "linear_oscillation" || definition.motionProfile === "yaw_rotation") {
+    return definition.motionProfile;
+  }
+  return definition.kind === 2 ? "yaw_rotation" : "linear_oscillation";
 }
 
 export function toPlatformLocal(
@@ -130,6 +141,8 @@ function parsePlatformArchetypeCatalog(raw: PlatformArchetypeCatalog): PlatformD
     const definition: PlatformDefinition = {
       pid: asInt(record.pid, `platform-archetypes.platforms[${index}].pid`),
       kind: asPlatformKind(record.kind, `platform-archetypes.platforms[${index}].kind`),
+      motionProfile: asOptionalPlatformMotionProfile(record.motionProfile, `platform-archetypes.platforms[${index}].motionProfile`),
+      modelId: asOptionalInt(record.modelId),
       halfX: asPositiveNumber(record.halfX, `platform-archetypes.platforms[${index}].halfX`),
       halfY: asPositiveNumber(record.halfY, `platform-archetypes.platforms[${index}].halfY`),
       halfZ: asPositiveNumber(record.halfZ, `platform-archetypes.platforms[${index}].halfZ`),
@@ -151,6 +164,23 @@ function parsePlatformArchetypeCatalog(raw: PlatformArchetypeCatalog): PlatformD
   });
 
   return platforms;
+}
+
+function asOptionalInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function asOptionalPlatformMotionProfile(value: unknown, label: string): PlatformMotionProfile | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "linear_oscillation" || value === "yaw_rotation") {
+    return value;
+  }
+  throw new Error(`${label} must be linear_oscillation or yaw_rotation.`);
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {

@@ -12,6 +12,20 @@ export interface ItemUseAction {
   label: string;
   restoreHealth?: number;
   consumeQuantity: number;
+  effects?: ReadonlyArray<{
+    type: "restore_health";
+    amount: number;
+  } | {
+    type: "set_player_render_appearance";
+    renderArchetypeId?: number;
+    materialVariantId?: number;
+    tintColorRgb?: number;
+    uniformScalePct?: number;
+  } | {
+    type: "set_equipped_slot_tint";
+    slot: EquipmentSlot;
+    tintColorRgb: number;
+  }>;
 }
 
 export interface ItemUseProfile {
@@ -44,6 +58,34 @@ export interface PickupSpawnDefinition {
   y: number;
   z: number;
   persistencePolicy: PickupPersistencePolicy;
+}
+
+export type CraftStationKind = "hand" | "bench";
+
+export interface CraftRecipeIngredient {
+  definitionId: number;
+  quantity: number;
+}
+
+export interface CraftRecipeDefinition {
+  id: number;
+  key: string;
+  name: string;
+  description: string;
+  station: CraftStationKind;
+  outputDefinitionId: number;
+  outputQuantity: number;
+  ingredients: CraftRecipeIngredient[];
+}
+
+export interface CraftingBenchDefinition {
+  id: number;
+  key: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  interactRadius: number;
 }
 
 export interface ItemInstance {
@@ -83,6 +125,7 @@ export const INVENTORY_OP_CLEAR_HOTBAR_SLOT = 7;
 export const INVENTORY_OP_MOVE_HOTBAR_SLOT = 8;
 export const INVENTORY_OP_EXECUTE_HOTBAR_SLOT = 9;
 export const INVENTORY_OP_DROP_HOTBAR_SLOT = 10;
+export const INVENTORY_OP_CRAFT = 11;
 
 export const ITEM_ACTIVATION_CHANNEL_DEFAULT = 0;
 export const ITEM_ACTIVATION_CHANNEL_SECONDARY = 1;
@@ -130,6 +173,8 @@ export type ItemCatalogRaw = {
   items: unknown;
   starterPickupSpawns?: unknown;
   starterWorldItems?: unknown;
+  craftRecipes?: unknown;
+  craftingBenches?: unknown;
 };
 
 let ITEM_DEFINITIONS: ReadonlyArray<ItemDefinition> = Object.freeze([]);
@@ -137,6 +182,8 @@ let ITEM_DEFINITIONS_BY_ID = new Map<number, ItemDefinition>();
 let ITEM_DEFINITIONS_BY_MODEL_ID = new Map<number, ItemDefinition>();
 export let INVENTORY_MAX_SLOTS = 32;
 export let STARTER_PICKUP_SPAWNS: ReadonlyArray<PickupSpawnDefinition> = Object.freeze([]);
+export let CRAFT_RECIPES: ReadonlyArray<CraftRecipeDefinition> = Object.freeze([]);
+export let CRAFTING_BENCHES: ReadonlyArray<CraftingBenchDefinition> = Object.freeze([]);
 
 export function injectItemCatalog(raw: ItemCatalogRaw): void {
   const parsed = parseItemCatalog(raw);
@@ -145,6 +192,8 @@ export function injectItemCatalog(raw: ItemCatalogRaw): void {
   ITEM_DEFINITIONS_BY_MODEL_ID = new Map(parsed.items.map((item) => [item.modelId, item]));
   INVENTORY_MAX_SLOTS = parsed.maxSlots;
   STARTER_PICKUP_SPAWNS = Object.freeze(parsed.starterPickupSpawns);
+  CRAFT_RECIPES = Object.freeze(parsed.craftRecipes);
+  CRAFTING_BENCHES = Object.freeze(parsed.craftingBenches);
 }
 
 export function getAllItemDefinitions(): ReadonlyArray<ItemDefinition> {
@@ -163,6 +212,45 @@ export function getItemDefinitionByModelId(modelId: number): ItemDefinition | nu
     return null;
   }
   return ITEM_DEFINITIONS_BY_MODEL_ID.get(Math.max(0, Math.floor(modelId))) ?? null;
+}
+
+export function getCraftRecipeById(recipeId: number): CraftRecipeDefinition | null {
+  if (!Number.isFinite(recipeId)) {
+    return null;
+  }
+  const normalized = Math.max(0, Math.floor(recipeId));
+  for (const recipe of CRAFT_RECIPES) {
+    if (recipe.id === normalized) {
+      return recipe;
+    }
+  }
+  return null;
+}
+
+export function getNearestCraftingBench(
+  x: number,
+  y: number,
+  z: number,
+  maxDistance: number
+): CraftingBenchDefinition | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(maxDistance) || maxDistance <= 0) {
+    return null;
+  }
+  const maxDistanceSq = maxDistance * maxDistance;
+  let best: CraftingBenchDefinition | null = null;
+  let bestDistanceSq = Number.POSITIVE_INFINITY;
+  for (const bench of CRAFTING_BENCHES) {
+    const dx = bench.x - x;
+    const dy = bench.y - y;
+    const dz = bench.z - z;
+    const distanceSq = dx * dx + dy * dy + dz * dz;
+    if (distanceSq > maxDistanceSq || distanceSq > bestDistanceSq) {
+      continue;
+    }
+    best = bench;
+    bestDistanceSq = distanceSq;
+  }
+  return best;
 }
 
 export function equipmentSlotToWireValue(slot: EquipmentSlot | null | undefined): number {
@@ -291,6 +379,8 @@ function parseItemCatalog(raw: ItemCatalogRaw): {
   maxSlots: number;
   items: ItemDefinition[];
   starterPickupSpawns: PickupSpawnDefinition[];
+  craftRecipes: CraftRecipeDefinition[];
+  craftingBenches: CraftingBenchDefinition[];
 } {
   if (!raw || typeof raw !== "object") {
     throw new Error("item catalog must be an object.");
@@ -324,11 +414,85 @@ function parseItemCatalog(raw: ItemCatalogRaw): {
   const starterPickupSpawns = spawnSource.map((entry, index) =>
     parseStarterPickupSpawn(entry, ids, `item-catalog.starterPickupSpawns[${index}]`)
   );
+  const craftRecipes = Array.isArray(raw.craftRecipes)
+    ? raw.craftRecipes.map((entry, index) => parseCraftRecipe(entry, ids, `item-catalog.craftRecipes[${index}]`))
+    : [];
+  const craftingBenches = Array.isArray(raw.craftingBenches)
+    ? raw.craftingBenches.map((entry, index) => parseCraftingBench(entry, `item-catalog.craftingBenches[${index}]`))
+    : [];
   return {
     maxSlots,
     items,
-    starterPickupSpawns
+    starterPickupSpawns,
+    craftRecipes,
+    craftingBenches
   };
+}
+
+function parseCraftRecipe(value: unknown, itemIds: Set<number>, label: string): CraftRecipeDefinition {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const entry = value as Record<string, unknown>;
+  const station = parseCraftStation(entry.station, `${label}.station`);
+  const outputDefinitionId = parseFiniteInt(entry.outputDefinitionId, `${label}.outputDefinitionId`);
+  if (!itemIds.has(outputDefinitionId)) {
+    throw new Error(`${label}.outputDefinitionId references unknown item id ${outputDefinitionId}.`);
+  }
+  if (!Array.isArray(entry.ingredients) || entry.ingredients.length <= 0) {
+    throw new Error(`${label}.ingredients must be a non-empty array.`);
+  }
+  const ingredients: CraftRecipeIngredient[] = entry.ingredients.map((ingredient, index) =>
+    parseCraftIngredient(ingredient, itemIds, `${label}.ingredients[${index}]`)
+  );
+  return {
+    id: parseFiniteInt(entry.id, `${label}.id`),
+    key: parseString(entry.key, `${label}.key`),
+    name: parseString(entry.name, `${label}.name`),
+    description: parseString(entry.description, `${label}.description`),
+    station,
+    outputDefinitionId,
+    outputQuantity: Math.max(1, parseFiniteInt(entry.outputQuantity ?? 1, `${label}.outputQuantity`)),
+    ingredients
+  };
+}
+
+function parseCraftIngredient(value: unknown, itemIds: Set<number>, label: string): CraftRecipeIngredient {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const entry = value as Record<string, unknown>;
+  const definitionId = parseFiniteInt(entry.definitionId, `${label}.definitionId`);
+  if (!itemIds.has(definitionId)) {
+    throw new Error(`${label}.definitionId references unknown item id ${definitionId}.`);
+  }
+  return {
+    definitionId,
+    quantity: Math.max(1, parseFiniteInt(entry.quantity, `${label}.quantity`))
+  };
+}
+
+function parseCraftingBench(value: unknown, label: string): CraftingBenchDefinition {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const entry = value as Record<string, unknown>;
+  return {
+    id: parseFiniteInt(entry.id, `${label}.id`),
+    key: parseString(entry.key, `${label}.key`),
+    name: parseString(entry.name, `${label}.name`),
+    x: parseFiniteNumber(entry.x, `${label}.x`),
+    y: parseFiniteNumber(entry.y, `${label}.y`),
+    z: parseFiniteNumber(entry.z, `${label}.z`),
+    interactRadius: Math.max(0.5, parseFiniteNumber(entry.interactRadius ?? 4, `${label}.interactRadius`))
+  };
+}
+
+function parseCraftStation(value: unknown, label: string): CraftStationKind {
+  if (value === "hand" || value === "bench") {
+    return value;
+  }
+  throw new Error(`${label} must be one of hand|bench.`);
 }
 
 function parseItemDefinition(value: unknown, label: string): ItemDefinition {
@@ -342,9 +506,6 @@ function parseItemDefinition(value: unknown, label: string): ItemDefinition {
     ? null
     : parseEquipmentSlot(entry.equipSlot, `${label}.equipSlot`);
   const use = entry.use === undefined || entry.use === null ? null : parseUseProfile(entry.use, `${label}.use`);
-  if (category === "equipment" && !equipSlot) {
-    throw new Error(`${label}.equipSlot is required for equipment.`);
-  }
   return {
     id: parseFiniteInt(entry.id, `${label}.id`),
     key: parseString(entry.key, `${label}.key`),
@@ -403,12 +564,91 @@ function parseItemUseAction(value: unknown, label: string): ItemUseAction | null
     entry.restoreHealth === undefined
       ? undefined
       : Math.max(0, parseFiniteNumber(entry.restoreHealth, `${label}.restoreHealth`));
+  const effects = parseItemUseEffects(entry.effects, `${label}.effects`);
   return {
     key,
     label: actionLabel,
     consumeQuantity,
-    restoreHealth
+    restoreHealth,
+    effects
   };
+}
+
+function parseItemUseEffects(
+  value: unknown,
+  label: string
+): ItemUseAction["effects"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  const effects: Array<
+    { type: "restore_health"; amount: number }
+    | {
+        type: "set_player_render_appearance";
+        renderArchetypeId?: number;
+        materialVariantId?: number;
+        tintColorRgb?: number;
+        uniformScalePct?: number;
+      }
+    | {
+        type: "set_equipped_slot_tint";
+        slot: EquipmentSlot;
+        tintColorRgb: number;
+      }
+  > = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${label}[${index}] must be an object.`);
+    }
+    const raw = entry as Record<string, unknown>;
+    if (raw.type === "restore_health") {
+      effects.push({
+        type: "restore_health",
+        amount: Math.max(0, parseFiniteInt(raw.amount, `${label}[${index}].amount`))
+      });
+      continue;
+    }
+    if (raw.type === "set_player_render_appearance") {
+      const effect: {
+        type: "set_player_render_appearance";
+        renderArchetypeId?: number;
+        materialVariantId?: number;
+        tintColorRgb?: number;
+        uniformScalePct?: number;
+      } = {
+        type: "set_player_render_appearance"
+      };
+      if (raw.renderArchetypeId !== undefined) {
+        effect.renderArchetypeId = Math.max(0, parseFiniteInt(raw.renderArchetypeId, `${label}[${index}].renderArchetypeId`));
+      }
+      if (raw.materialVariantId !== undefined) {
+        effect.materialVariantId = Math.max(0, parseFiniteInt(raw.materialVariantId, `${label}[${index}].materialVariantId`));
+      }
+      if (raw.tintColorRgb !== undefined) {
+        effect.tintColorRgb = Math.max(0, Math.min(0xffffff, parseFiniteInt(raw.tintColorRgb, `${label}[${index}].tintColorRgb`)));
+      }
+      if (raw.uniformScalePct !== undefined) {
+        effect.uniformScalePct = Math.max(1, Math.min(1000, parseFiniteInt(raw.uniformScalePct, `${label}[${index}].uniformScalePct`)));
+      }
+      effects.push(effect);
+      continue;
+    }
+    if (raw.type === "set_equipped_slot_tint") {
+      const slot = parseEquipmentSlot(raw.slot, `${label}[${index}].slot`);
+      effects.push({
+        type: "set_equipped_slot_tint",
+        slot,
+        tintColorRgb: Math.max(0, Math.min(0xffffff, parseFiniteInt(raw.tintColorRgb, `${label}[${index}].tintColorRgb`)))
+      });
+      continue;
+    }
+    throw new Error(`${label}[${index}].type must be restore_health|set_player_render_appearance|set_equipped_slot_tint.`);
+  }
+  return effects;
 }
 
 function parseStarterPickupSpawn(value: unknown, ids: Set<number>, label: string): PickupSpawnDefinition {

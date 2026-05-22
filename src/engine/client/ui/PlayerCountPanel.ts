@@ -9,7 +9,8 @@ export class PlayerCountPanel {
   private constructor(parent: HTMLElement, documentRef: Document) {
     this.root = documentRef.createElement("div");
     this.root.id = "connected-players-indicator";
-    this.root.textContent = "Players: 0\nAOI: 0";
+    this.root.className = "connected-players-hidden";
+    this.root.textContent = "Players: 0\nAOI Players: 0";
     parent.append(this.root);
   }
 
@@ -18,6 +19,11 @@ export class PlayerCountPanel {
   }
 
   public update(serverPlayersLabel: string, aoiCount: number): void {
-    this.root.textContent = `Players: ${serverPlayersLabel}\nAOI: ${aoiCount}`;
+    this.root.textContent = `Players: ${serverPlayersLabel}\nAOI Players: ${aoiCount}`;
+  }
+
+  public setVisible(visible: boolean): void {
+    this.root.classList.toggle("connected-players-hidden", !visible);
+    this.root.classList.toggle("connected-players-visible", visible);
   }
 }

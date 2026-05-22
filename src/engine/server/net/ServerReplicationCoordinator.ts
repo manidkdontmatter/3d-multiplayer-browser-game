@@ -94,11 +94,12 @@ export class ServerReplicationCoordinator<TUser extends ReplicationUser> {
     user.queueMessage({ ntype: NType.IdentityMessage, playerNid });
   }
 
-  public queueCarrierVolumeEntered(userId: number, framePid: number, volumeId: string): void {
-    this.replicationMessaging.queueCarrierVolumeEntered(userId, framePid, volumeId);
+  public queueReferenceFrameVolumeEntered(userId: number, framePid: number, volumeId: string): void {
+    this.replicationMessaging.queueReferenceFrameVolumeEntered(userId, framePid, volumeId);
   }
 
-  public queueCarrierVolumeExited(userId: number, framePid: number, volumeId: string): void {
-    this.replicationMessaging.queueCarrierVolumeExited(userId, framePid, volumeId);
+  public queueReferenceFrameVolumeExited(userId: number, framePid: number, volumeId: string): void {
+    this.replicationMessaging.queueReferenceFrameVolumeExited(userId, framePid, volumeId);
   }
+
 }

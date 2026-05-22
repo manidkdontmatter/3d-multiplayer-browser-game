@@ -14,13 +14,18 @@ import {
   HOTBAR_SLOT_COUNT, PLAYER_BODY_CENTER_HEIGHT, MOVEMENT_MODE_GROUNDED,
   PLAYER_CHARACTER_CONTROLLER_OFFSET, PLAYER_CAMERA_OFFSET_Y,
   PLAYER_CAPSULE_HALF_HEIGHT, PLAYER_CAPSULE_RADIUS,
-  encodeInventorySnapshot, getAbilityDefinitionById,
+  encodeInventorySnapshot, getAbilityDefinitionById, getItemDefinitionById,
   quaternionFromYawPitchRoll,
   DEFAULT_PLAYER_SETTINGS,
   coercePlayerSettings,
+  getBlueprintRuntimeAbilityByBlueprintId,
+  getBlueprintRuntimeActivationSpecsByBlueprintId,
+  upsertBlueprintRuntimeCapabilityEntry,
+  type RuntimeActivationSpec,
   sanitizeMovementMode,
   type BlueprintAccessTag,
   type InventorySnapshot, type MovementMode, type PlayerSettings, SERVER_TICK_SECONDS
+  , INVENTORY_OP_PICKUP, type EquipmentSlot
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
 import { sortedUniqueContains } from "../shared/sortedNumberList";
@@ -36,6 +41,7 @@ import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
 import { PersistenceSyncSystem } from "./persistence/PersistenceSyncSystem";
 import { DamageSystem } from "./combat/damage/DamageSystem";
 import { AbilityExecutionSystem } from "./combat/abilities/AbilityExecutionSystem";
+import { ActionEffectPipeline } from "./combat/actions/ActionEffectPipeline";
 import { MeleeCombatSystem } from "./combat/melee/MeleeCombatSystem";
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
 import { InputSystem } from "./input/InputSystem";
@@ -59,8 +65,25 @@ import { CharacterNavigationPlanner } from "./navigation/NavigationService";
 import { buildServerNavigationWorld, type NavigationBuildReport } from "./navigation/NavigationWorldBuilder";
 import type { PlayerStateSnapshot } from "./ecs/SimulationEcsTypes";
 import { EventBus } from "./events/EventBus";
-import { GameEvent, type PlayerMovedPayload, type PlayerSpawnedPayload, type PlayerDespawnedPayload, type DamageDealtPayload, type HealthChangedPayload, type AbilityUsedPayload } from "./events/GameEvents";
+import {
+  GameEvent,
+  type PlayerMovedPayload,
+  type PlayerSpawnedPayload,
+  type PlayerDespawnedPayload,
+  type DamageDealtPayload,
+  type HealthChangedPayload,
+  type AbilityUsedPayload,
+  type ItemEquippedPayload,
+  type ItemUnequippedPayload
+} from "./events/GameEvents";
 import { StatusEffectSystem } from "./combat/status/StatusEffectSystem";
+import {
+  type EntityAppearancePatch,
+  getDefaultEquippedTintPatch,
+  getEquippedSlotTintPatch
+} from "../shared/appearance/AppearancePolicy";
+import { AppearanceSystem } from "./appearance/AppearanceSystem";
+import type { AppearanceIntentSource } from "./appearance/AppearanceSystem";
 
 type UserLike = {
   id: number; queueMessage: (message: unknown) => void; accountId?: number;
@@ -92,10 +115,28 @@ interface PortalTransferZone {
 }
 
 const PORTAL_TRANSFER_RETRIGGER_SECONDS = 2.0;
+const FALL_DAMAGE_MIN_IMPACT_SPEED = 14;
+const FALL_DAMAGE_PER_SPEED = 5;
 const PORTAL_TRANSFER_ZONES: readonly PortalTransferZone[] = Object.freeze([
   { sourceMapInstanceId: "map-a", targetMapInstanceId: "map-b", centerX: 12, centerY: 34, centerZ: 0, sensorRadius: 2.2 },
   { sourceMapInstanceId: "map-b", targetMapInstanceId: "map-a", centerX: 0, centerY: 4, centerZ: 0, sensorRadius: 2.2 }
 ]);
+
+const EQUIPMENT_SLOT_TINT_INTENT_SOURCES: readonly AppearanceIntentSource[] = Object.freeze([
+  "equipment_slot_tint_weapon",
+  "equipment_slot_tint_head",
+  "equipment_slot_tint_body",
+  "equipment_slot_tint_legs",
+  "equipment_slot_tint_accessory"
+]);
+
+function getEquipmentSlotTintIntentSource(slot: EquipmentSlot): AppearanceIntentSource {
+  if (slot === "weapon") return "equipment_slot_tint_weapon";
+  if (slot === "head") return "equipment_slot_tint_head";
+  if (slot === "body") return "equipment_slot_tint_body";
+  if (slot === "legs") return "equipment_slot_tint_legs";
+  return "equipment_slot_tint_accessory";
+}
 
 export class GameSimulation {
   private readonly usersById = new Map<number, UserLike>();
@@ -105,12 +146,14 @@ export class GameSimulation {
   private readonly simulationEcs = new SimulationEcs();
   private readonly controllerSystem = new ControllerSystem();
   private readonly replication: ServerReplicationCoordinator<UserLike>;
+  private readonly appearanceSystem: AppearanceSystem;
   private readonly characterController: RAPIER.KinematicCharacterController;
   private readonly persistenceSyncSystem = new PersistenceSyncSystem();
   private readonly worldContentCoordinator: WorldContentCoordinator;
   private readonly damageSystem: DamageSystem;
   private readonly meleeCombatSystem: MeleeCombatSystem;
   private readonly abilityExecutionSystem: AbilityExecutionSystem;
+  private readonly actionEffectPipeline: ActionEffectPipeline;
   private readonly projectileSystem: ProjectileSystem;
   private readonly inputSystem: InputSystem;
   private readonly abilityCommandHandler: AbilityCommandHandler<UserLike>;
@@ -138,9 +181,21 @@ export class GameSimulation {
   private readonly platformEidByPid = new Map<number, number>();
   private readonly locationEidByPid = new Map<number, number>();
   private readonly dummyEidByObject = new WeakMap<object, number>();
-  private readonly carrierMembershipByUserId = new Map<number, Set<string>>();
+  private readonly referenceFrameMembershipByUserId = new Map<number, Set<string>>();
+  private readonly pilotedReferenceFrameByUserId = new Map<number, { framePid: number; volumeId: string }>();
+  private readonly pilotUserIdByReferenceFramePid = new Map<number, number>();
+  private readonly pilotControlIntentByUserId = new Map<number, {
+    forward: number;
+    strafe: number;
+    ascend: number;
+    yawDelta: number;
+    sprint: boolean;
+  }>();
+  private readonly effectAuditSuccessCountByType = new Map<string, number>();
   private readonly autoTransferRequestByUserId = new Map<number, string>();
   private readonly portalTriggerCooldownByUserId = new Map<number, number>();
+  private readonly previousGroundedByEid = new Map<number, boolean>();
+  private readonly minAirborneVyByEid = new Map<number, number>();
   private readonly playerSettingsByAccountId = new Map<number, PlayerSettings>();
   private nextNpcPlayerAlertAtSeconds = 0; private elapsedSeconds = 0; private tickNumber = 0;
 
@@ -170,11 +225,132 @@ export class GameSimulation {
       sanitizeHotbarSlot: (rawSlot, fallbackSlot) => this.sanitizeHotbarSlot(rawSlot, fallbackSlot),
       getAbilityDefinitionById: (abilityId) => this.resolveAbilityDefinitionById(abilityId)
     }, c);
+    this.appearanceSystem = new AppearanceSystem(
+      this.simulationEcs,
+      (eid) => this.replication.syncEntityFromEcs(eid)
+    );
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
     this.world.integrationParameters.dt = SERVER_TICK_SECONDS;
     this.characterController = this.world.createCharacterController(PLAYER_CHARACTER_CONTROLLER_OFFSET);
     configurePlayerCharacterController(this.characterController);
     const mapInstanceId = process.env.MAP_INSTANCE_ID ?? "default-1";
+
+    this.actionEffectPipeline = new ActionEffectPipeline({
+      broadcastAbilityUse: (playerNid, abilityId, x, y, z) => {
+        const ability = this.resolveAbilityDefinitionById(abilityId);
+        if (!ability) {
+          return;
+        }
+        this.replication.broadcastAbilityUseMessage(playerNid, ability, x, y, z);
+        this.events.emit<AbilityUsedPayload>(GameEvent.ABILITY_USED, {
+          ownerNid: playerNid,
+          abilityId: ability.id,
+          category: ability.category,
+          serverTick: this.tickNumber,
+          x,
+          y,
+          z
+        });
+      },
+      spawnProjectile: (req) => this.spawnProjectile(req),
+      applyMeleeHit: (req) => {
+        const body = this.simulationEcs.getPlayerBody(req.attackerEid);
+        const collider = this.simulationEcs.getPlayerCollider(req.attackerEid);
+        if (!body || !collider) return;
+        this.meleeCombatSystem.tryApplyMeleeHit({
+          nid: c.NetworkId.value[req.attackerEid] ?? 0,
+          yaw: c.Yaw.value[req.attackerEid] ?? 0,
+          pitch: c.Pitch.value[req.attackerEid] ?? 0,
+          body,
+          collider
+        }, {
+          damage: req.damage,
+          range: req.range,
+          radius: req.radius,
+          cooldownSeconds: 0,
+          arcDegrees: req.arcDegrees
+        });
+      },
+      restoreHealth: (userId, amount) => {
+        const state = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+        if (!state) return false;
+        const nextHealth = Math.min(state.maxHealth, state.health + Math.max(0, Math.floor(amount)));
+        return this.simulationEcs.setPlayerHealthByUserId(userId, nextHealth);
+      },
+      equipItemInstance: (userId, itemInstanceId) => this.itemInventorySystem?.applyEquipEffectByUserId(userId, itemInstanceId) ?? false,
+      unequipSlot: (userId, slot) => this.itemInventorySystem?.applyUnequipEffectByUserId(userId, slot) ?? false,
+      consumeItemQuantity: (userId, itemInstanceId, amount) =>
+        this.itemInventorySystem?.applyConsumeItemEffectByUserId(userId, itemInstanceId, amount) ?? false,
+      pickupWorldItem: (userId, pickupNid) =>
+        this.itemInventorySystem?.applyPickupWorldItemEffectByUserId(userId, pickupNid) ?? false,
+      dropItemInstance: (userId, itemInstanceId, quantity) =>
+        this.itemInventorySystem?.applyDropItemEffectByUserId(userId, itemInstanceId, quantity) ?? false,
+      assignHotbarSlot: (userId, itemInstanceId, targetSlot, payloadKind) =>
+        this.itemInventorySystem?.applyAssignHotbarSlotEffectByUserId(userId, itemInstanceId, targetSlot, payloadKind) ?? false,
+      clearHotbarSlot: (userId, sourceSlot) =>
+        this.itemInventorySystem?.applyClearHotbarSlotEffectByUserId(userId, sourceSlot) ?? false,
+      moveHotbarSlot: (userId, sourceSlot, targetSlot) =>
+        this.itemInventorySystem?.applyMoveHotbarSlotEffectByUserId(userId, sourceSlot, targetSlot) ?? false,
+      dropHotbarSlot: (userId, sourceSlot) =>
+        this.itemInventorySystem?.applyDropHotbarSlotEffectByUserId(userId, sourceSlot) ?? false,
+      setPlayerRenderAppearance: (userId, patch) => {
+        const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+        if (!playerState) {
+          return false;
+        }
+        return this.applyRuntimeAppearancePatchByEid(playerState.eid, patch);
+      },
+      setEquippedSlotTint: (userId, slot, tintColorRgb) => this.applyEquippedSlotTintForUser(userId, slot, tintColorRgb),
+      pilotReferenceFrameBegin: (userId, framePid, volumeId) => {
+        const seatOwner = this.pilotUserIdByReferenceFramePid.get(framePid);
+        if (typeof seatOwner === "number" && seatOwner !== userId) {
+          return false;
+        }
+        const previous = this.pilotedReferenceFrameByUserId.get(userId);
+        if (previous && previous.framePid !== framePid) {
+          this.pilotUserIdByReferenceFramePid.delete(previous.framePid);
+        }
+        this.pilotedReferenceFrameByUserId.set(userId, { framePid, volumeId });
+        this.pilotUserIdByReferenceFramePid.set(framePid, userId);
+        const pilotEid = this.simulationEcs.getPlayerEidByUserId(userId);
+        if (typeof pilotEid === "number") {
+          const pc = this.simulationEcs.world.components;
+          pc.Velocity.x[pilotEid] = 0;
+          pc.Velocity.y[pilotEid] = 0;
+          pc.Velocity.z[pilotEid] = 0;
+          pc.PrimaryHeld.value[pilotEid] = 0;
+          pc.SecondaryHeld.value[pilotEid] = 0;
+        }
+        return true;
+      },
+      pilotReferenceFrameEnd: (userId, framePid) => {
+        const current = this.pilotedReferenceFrameByUserId.get(userId);
+        if (!current || current.framePid !== framePid) {
+          return false;
+        }
+        this.pilotedReferenceFrameByUserId.delete(userId);
+        const seatOwner = this.pilotUserIdByReferenceFramePid.get(framePid);
+        if (seatOwner === userId) {
+          this.pilotUserIdByReferenceFramePid.delete(framePid);
+        }
+        return true;
+      },
+      onReferenceFrameVolumeEntered: (userId, framePid, volumeId) => {
+        this.replication.queueReferenceFrameVolumeEntered(userId, framePid, volumeId);
+      },
+      onReferenceFrameVolumeExited: (userId, framePid, volumeId) => {
+        this.replication.queueReferenceFrameVolumeExited(userId, framePid, volumeId);
+      },
+      onEffectEvaluated: (record) => {
+        if (!record.success) {
+          return;
+        }
+        this.effectAuditSuccessCountByType.set(
+          record.type,
+          (this.effectAuditSuccessCountByType.get(record.type) ?? 0) + 1
+        );
+      }
+    });
 
     // ── Item inventory ────────────────────────────────────────────────────
     this.itemInventorySystem = new ItemInventorySystem<UserLike>({
@@ -280,6 +456,49 @@ export class GameSimulation {
           return false;
         }
         return this.abilityExecutionSystem.tryUseAbilityByIdByEid(eid, abilityId);
+      },
+      applyEntityRenderAppearanceByEid: (eid, patch) => {
+        return this.applyRuntimeAppearancePatchByEid(eid, patch);
+      },
+      findNearbyCraftBenchForPlayer: (userId, maxDistance) => {
+        const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+        if (!playerState) {
+          return null;
+        }
+        const bench = this.locationRootSystem.findNearbyCraftBench(
+          { x: playerState.x, y: playerState.y, z: playerState.z },
+          maxDistance
+        );
+        return bench ? { sessionId: bench.sessionId } : null;
+      },
+      isUserWithinCraftBenchSession: (userId, sessionId, slack) => {
+        const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+        if (!playerState) {
+          return false;
+        }
+        return this.locationRootSystem.isPointWithinCraftBenchSession(
+          { x: playerState.x, y: playerState.y, z: playerState.z },
+          sessionId,
+          slack
+        );
+      },
+      resolveCraftBenchDistanceLimit: () => this.locationRootSystem.getMaxCraftBenchInteractRadius(0.75),
+      actionEffects: this.actionEffectPipeline,
+      onItemEquipped: (userId, itemInstanceId, slot) => {
+        this.refreshEquippedVisualAppearanceForUser(userId);
+        this.events.emit<ItemEquippedPayload>(GameEvent.ITEM_EQUIPPED, {
+          userId,
+          itemInstanceId,
+          slot
+        });
+      },
+      onItemUnequipped: (userId, itemInstanceId, slot) => {
+        this.refreshEquippedVisualAppearanceForUser(userId);
+        this.events.emit<ItemUnequippedPayload>(GameEvent.ITEM_UNEQUIPPED, {
+          userId,
+          itemInstanceId,
+          slot
+        });
       }
     });
 
@@ -341,27 +560,10 @@ export class GameSimulation {
     this.abilityExecutionSystem = new AbilityExecutionSystem({
       getElapsedSeconds: () => this.elapsedSeconds,
       resolveAbilityById: (unlockedAbilityIds, abilityId) => this.getAbilityDefinitionForUnlockedList(unlockedAbilityIds, abilityId),
-      broadcastAbilityUse: (playerNid, ability, x, y, z) => {
-        this.replication.broadcastAbilityUseMessage(playerNid, ability, x, y, z);
-        this.events.emit<AbilityUsedPayload>(GameEvent.ABILITY_USED, {
-          ownerNid: playerNid, abilityId: ability.id,
-          category: ability.category, serverTick: this.tickNumber,
-          x, y, z
-        });
-      },
+      resolveAbilityActivationSpec: (abilityId) =>
+        getBlueprintRuntimeActivationSpecsByBlueprintId(abilityId).find((entry) => entry.source === "ability") ?? null,
       ecsComponents: c,
-      spawnProjectile: (req) => this.spawnProjectile(req),
-      applyMeleeHit: (playerEid, mp) => {
-        const body = this.simulationEcs.getPlayerBody(playerEid);
-        const collider = this.simulationEcs.getPlayerCollider(playerEid);
-        if (!body || !collider) return;
-        this.meleeCombatSystem.tryApplyMeleeHit({
-          nid: c.NetworkId.value[playerEid] ?? 0,
-          yaw: c.Yaw.value[playerEid] ?? 0,
-          pitch: c.Pitch.value[playerEid] ?? 0,
-          body, collider
-        }, mp);
-      }
+      effectPipeline: this.actionEffectPipeline
     });
 
     // ── Input ─────────────────────────────────────────────────────────────
@@ -396,10 +598,10 @@ export class GameSimulation {
       onLocationAdded: (location) => {
         const eid = this.simulationEcs.createEntityFromPreset("location", {
           position: location.position, rotation: location.rotation, modelId: location.modelId,
-          locationPid: location.pid,
-          locationKind: location.locationKind, locationArchetypeId: location.locationArchetypeId,
-          locationSeed: location.locationSeed, locationEnvironmentId: location.locationEnvironmentId,
-          locationStreamingRadius: location.locationStreamingRadius, locationInfluenceRadius: location.locationInfluenceRadius
+          worldAnchorId: location.pid,
+          worldAnchorKind: location.locationKind, worldAnchorArchetypeId: location.locationArchetypeId,
+          worldAnchorSeed: location.locationSeed, worldAnchorEnvironmentId: location.locationEnvironmentId,
+          worldAnchorStreamingRadius: location.locationStreamingRadius, worldAnchorInfluenceRadius: location.locationInfluenceRadius
         });
         this.locationEidByPid.set(location.pid, eid);
         const nid = this.replication.spawnEntity(eid);
@@ -516,7 +718,7 @@ export class GameSimulation {
     });
 
     this.events.on<PlayerSpawnedPayload>(GameEvent.PLAYER_SPAWNED, (payload) => {
-      this.carrierMembershipByUserId.set(payload.userId, new Set<string>());
+      this.referenceFrameMembershipByUserId.set(payload.userId, new Set<string>());
       this.syncCarrierMembershipMessagesForPlayer(payload.userId, payload.eid);
       this.replication.queueIdentityMessage(
         { id: payload.userId, queueMessage: (msg) => { const u = this.usersById.get(payload.userId); if (u) u.queueMessage(msg); } } as UserLike,
@@ -583,6 +785,8 @@ export class GameSimulation {
       hasPerceptionTargets: () => this.aiPerceptionTargetByColliderHandle.size > 0,
       resolvePerceptionTargetByColliderHandle: (h) => this.aiPerceptionTargetByColliderHandle.get(h) ?? null,
       usePrimaryAbilityByEid: (eid) => this.abilityExecutionSystem.tryUsePrimaryMouseAbilityByEid(eid),
+      applyEntityAppearanceByEid: (eid, patch) =>
+        this.appearanceSystem.applyAppearancePatch(eid, "npc_behavior", patch),
       aiTickIntervalSeconds: this.resolvePositiveEnvNumber("NPC_AI_TICK_INTERVAL", 0.2),
       perceptionTickIntervalSeconds: this.resolvePositiveEnvNumber("NPC_PERCEPTION_TICK_INTERVAL", 0.25),
       pathReplanIntervalSeconds: this.resolvePositiveEnvNumber("NPC_PATH_REPLAN_INTERVAL", 0.75),
@@ -620,7 +824,9 @@ export class GameSimulation {
   // ── User management ───────────────────────────────────────────────────────
   public addUser(user: UserLike): void { this.playerLifecycleSystem.addUser(user); }
   public removeUser(user: UserLike): void {
-    this.carrierMembershipByUserId.delete(user.id);
+    this.referenceFrameMembershipByUserId.delete(user.id);
+    this.pilotControlIntentByUserId.delete(user.id);
+    this.releaseUserPilotSeat(user.id);
     this.playerLifecycleSystem.removeUser(user);
   }
 
@@ -628,11 +834,18 @@ export class GameSimulation {
   public applyInputCommands(userId: number, commands: Partial<InputWireCommand>[]): void {
     const eid = this.simulationEcs.getPlayerEidByUserId(userId);
     if (typeof eid !== "number") return;
+    if (this.isUserInPilotControlMode(userId)) {
+      this.pilotControlIntentByUserId.set(userId, this.resolvePilotIntentFromCommands(commands));
+      return;
+    }
     this.inputSystem.applyCommands(eid, commands);
   }
 
   public applyAbilityCommand(user: UserLike, command: Partial<AbilityWireCommand>): void {
     if (typeof this.simulationEcs.getPlayerEidByUserId(user.id) !== "number") return;
+    if (this.isUserInPilotControlMode(user.id)) {
+      return;
+    }
     this.applyForgetAbilityIntent(user, command);
     this.abilityCommandHandler.apply(user, command);
   }
@@ -661,16 +874,45 @@ export class GameSimulation {
     this.replication.queueCreatorStateMessage(user, result.snapshot);
 
     if (result.createdBlueprint) {
+      const createdAbility = buildAbilityDefinitionFromBlueprint(result.createdBlueprint);
+      const createdActivations: RuntimeActivationSpec[] = [];
+      if (createdAbility?.projectile) {
+        createdActivations.push({
+          activationId: `ability:${createdAbility.id}:primary`,
+          source: "ability",
+          channel: 0,
+          cooldownSeconds: Math.max(0, createdAbility.projectile.cooldownSeconds),
+          consumeQuantity: 0,
+          effects: [{ type: "spawn_projectile", projectile: createdAbility.projectile }]
+        });
+      } else if (createdAbility?.melee) {
+        createdActivations.push({
+          activationId: `ability:${createdAbility.id}:primary`,
+          source: "ability",
+          channel: 0,
+          cooldownSeconds: Math.max(0, createdAbility.melee.cooldownSeconds),
+          consumeQuantity: 0,
+          effects: [{ type: "apply_melee_hit", melee: createdAbility.melee }]
+        });
+      }
+      const runtimeCapabilityEntry = {
+        blueprintId: result.createdBlueprint.id,
+        ability: createdAbility,
+        item: null,
+        platform: null,
+        activations: createdActivations
+      };
+      upsertBlueprintRuntimeCapabilityEntry(runtimeCapabilityEntry);
       const grantedAccessTags = creatorProfileIdToGrantedAccessTags(result.snapshot.profileId);
       this.persistence.saveBlueprintAndGrantAccess({
         blueprint: result.createdBlueprint,
+        runtimeCapability: runtimeCapabilityEntry,
         createdByAccountId: accountId,
         grantAccessTags: grantedAccessTags
       });
       for (const accessTag of grantedAccessTags) {
         this.creatorSystem.grantBlueprintAccess(accountId, accessTag, result.createdBlueprint.id);
       }
-      const createdAbility = buildAbilityDefinitionFromBlueprint(result.createdBlueprint);
       if (createdAbility) {
         const unlockedAbilityIds = this.creatorSystem.getAccessibleBlueprintIds(accountId, "ability.use") ?? [];
         this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(user.id, unlockedAbilityIds);
@@ -690,6 +932,12 @@ export class GameSimulation {
 
   public applyItemCommand(user: UserLike, command: Partial<ItemWireCommand>): void {
     if (typeof this.simulationEcs.getPlayerEidByUserId(user.id) !== "number") return;
+    const action = typeof command.action === "number" ? Math.floor(command.action) : 0;
+    const pickupNid = typeof command.pickupNid === "number" ? Math.floor(command.pickupNid) : 0;
+    if (action === INVENTORY_OP_PICKUP && pickupNid <= 0) {
+      this.applyWorldInteractIntent(user.id);
+      return;
+    }
     this.itemInventorySystem.applyCommand(user.id, command);
   }
 
@@ -757,10 +1005,184 @@ export class GameSimulation {
     this.tickAiIntentPhase();
     this.tickAbilityIntentPhase();
     this.tickMovementPhase(delta);
+    this.itemInventorySystem.refreshCraftBenchSessions();
     this.tickPortalTransferPhase();
     this.tickCombatPhase(delta);
     this.tickReplicationPhase();
     this.tickPhysicsFinalizePhase();
+  }
+
+  private applyWorldInteractIntent(userId: number): void {
+    if (this.tryBeginNearbyCraftBenchSession(userId)) {
+      this.queueServerAlertForUser(userId, "Craft bench ready.", "info");
+      return;
+    }
+    const runtime = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+    if (!runtime) {
+      return;
+    }
+    const consoleRef = this.locationRootSystem.findNearbyPilotConsole(
+      { x: runtime.x, y: runtime.y, z: runtime.z },
+      4
+    );
+    if (!consoleRef) {
+      return;
+    }
+    const memberships = this.referenceFrameMembershipByUserId.get(userId) ?? null;
+    if (!memberships || !memberships.has(this.toReferenceFrameMembershipKey(consoleRef.framePid, consoleRef.volumeId))) {
+      return;
+    }
+    const current = this.pilotedReferenceFrameByUserId.get(userId) ?? null;
+    if (current && current.framePid === consoleRef.framePid) {
+      this.actionEffectPipeline.execute({
+        type: "pilot_reference_frame_end",
+        userId,
+        framePid: consoleRef.framePid
+      });
+      this.queueServerAlertForUser(userId, "Piloting disengaged.", "info");
+      return;
+    }
+    const seatOwner = this.pilotUserIdByReferenceFramePid.get(consoleRef.framePid);
+    if (typeof seatOwner === "number" && seatOwner !== userId) {
+      this.queueServerAlertForUser(userId, "Pilot console is in use.", "warning");
+      return;
+    }
+    this.actionEffectPipeline.execute({
+      type: "pilot_reference_frame_begin",
+      userId,
+      framePid: consoleRef.framePid,
+      volumeId: consoleRef.volumeId
+    });
+    this.queueServerAlertForUser(userId, "Piloting engaged.", "success");
+  }
+
+  private isUserInPilotControlMode(userId: number): boolean {
+    return this.pilotedReferenceFrameByUserId.has(userId);
+  }
+
+  private releaseUserPilotSeat(userId: number): void {
+    const current = this.pilotedReferenceFrameByUserId.get(userId);
+    if (!current) {
+      return;
+    }
+    this.pilotedReferenceFrameByUserId.delete(userId);
+    const seatOwner = this.pilotUserIdByReferenceFramePid.get(current.framePid);
+    if (seatOwner === userId) {
+      this.pilotUserIdByReferenceFramePid.delete(current.framePid);
+    }
+    this.pilotControlIntentByUserId.delete(userId);
+  }
+
+  private resolvePilotIntentFromCommands(commands: Partial<InputWireCommand>[]): {
+    forward: number;
+    strafe: number;
+    ascend: number;
+    yawDelta: number;
+    sprint: boolean;
+  } {
+    let forward = 0;
+    let strafe = 0;
+    let ascend = 0;
+    let yawDelta = 0;
+    let sprint = false;
+    for (const command of commands) {
+      if (command.ntype !== NType.InputCommand) continue;
+      if (typeof command.forward === "number" && Number.isFinite(command.forward)) {
+        forward = Math.max(-1, Math.min(1, command.forward));
+      }
+      if (typeof command.strafe === "number" && Number.isFinite(command.strafe)) {
+        strafe = Math.max(-1, Math.min(1, command.strafe));
+      }
+      if (typeof command.yawDelta === "number" && Number.isFinite(command.yawDelta)) {
+        yawDelta = Math.max(-1, Math.min(1, command.yawDelta));
+      }
+      const jump = Boolean(command.jump);
+      const descend = Boolean(command.useSecondaryHeld || command.useSecondaryPressed);
+      ascend = jump ? 1 : (descend ? -1 : 0);
+      sprint = Boolean(command.sprint);
+    }
+    return { forward, strafe, ascend, yawDelta, sprint };
+  }
+
+  private tryBeginNearbyCraftBenchSession(userId: number): boolean {
+    const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+    if (!playerState) {
+      return false;
+    }
+    const nearbyBench = this.locationRootSystem.findNearbyCraftBench(
+      { x: playerState.x, y: playerState.y, z: playerState.z },
+      this.locationRootSystem.getMaxCraftBenchInteractRadius(0.75)
+    );
+    if (!nearbyBench) {
+      return false;
+    }
+    return this.itemInventorySystem.beginCraftBenchSession(userId, nearbyBench.sessionId);
+  }
+
+  private refreshEquippedVisualAppearanceForUser(userId: number): void {
+    const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+    if (!playerState) {
+      return;
+    }
+    const inventory = this.itemInventorySystem.ensureInventoryLoaded(playerState.accountId);
+    const equippedItemBySlot = new Map<"weapon" | "head" | "body" | "legs" | "accessory", number>([
+      ["weapon", inventory.equipment.weapon ?? 0],
+      ["head", inventory.equipment.head ?? 0],
+      ["body", inventory.equipment.body ?? 0],
+      ["legs", inventory.equipment.legs ?? 0],
+      ["accessory", inventory.equipment.accessory ?? 0]
+    ]);
+    let weaponArchetypeId = 0;
+    let headArchetypeId = 0;
+    let bodyArchetypeId = 0;
+    let legsArchetypeId = 0;
+    let accessoryArchetypeId = 0;
+    for (const [slot, itemInstanceId] of equippedItemBySlot) {
+      if (itemInstanceId <= 0) {
+        continue;
+      }
+      const item = inventory.itemInstances.find((entry) => entry.itemInstanceId === itemInstanceId) ?? null;
+      if (!item) {
+        continue;
+      }
+      const definition = getItemDefinitionById(item.definitionId);
+      if (!definition || definition.modelId <= 0) {
+        continue;
+      }
+      if (slot === "weapon") {
+        weaponArchetypeId = definition.modelId;
+      } else if (slot === "head") {
+        headArchetypeId = definition.modelId;
+      } else if (slot === "body") {
+        bodyArchetypeId = definition.modelId;
+      } else if (slot === "legs") {
+        legsArchetypeId = definition.modelId;
+      } else {
+        accessoryArchetypeId = definition.modelId;
+      }
+    }
+    this.appearanceSystem.clearAppearanceIntentSources(playerState.eid, EQUIPMENT_SLOT_TINT_INTENT_SOURCES);
+    this.appearanceSystem.applyAppearancePatch(playerState.eid, "equipment_profile", {
+      equippedWeaponArchetypeId: weaponArchetypeId,
+      equippedHeadArchetypeId: headArchetypeId,
+      equippedBodyArchetypeId: bodyArchetypeId,
+      equippedLegsArchetypeId: legsArchetypeId,
+      equippedAccessoryArchetypeId: accessoryArchetypeId,
+      ...getDefaultEquippedTintPatch()
+    });
+  }
+
+  private applyEquippedSlotTintForUser(userId: number, slot: EquipmentSlot, tintColorRgb: number): boolean {
+    const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+    if (!playerState) {
+      return false;
+    }
+    const patch = getEquippedSlotTintPatch(slot, tintColorRgb);
+    return this.appearanceSystem.applyAppearancePatch(playerState.eid, getEquipmentSlotTintIntentSource(slot), patch);
+  }
+
+  private applyRuntimeAppearancePatchByEid(eid: number, patch: EntityAppearancePatch): boolean {
+    return this.appearanceSystem.applyAppearancePatch(eid, "runtime_effect", patch);
   }
 
   private tickPortalTransferPhase(): void {
@@ -801,6 +1223,16 @@ export class GameSimulation {
 
   private tickKinematicWorldFrames(prevElapsed: number): void {
     this.platformSystem.updatePlatforms(prevElapsed, this.elapsedSeconds);
+    for (const [userId, pilotState] of this.pilotedReferenceFrameByUserId.entries()) {
+      const intent = this.pilotControlIntentByUserId.get(userId) ?? {
+        forward: 0,
+        strafe: 0,
+        ascend: 0,
+        yawDelta: 0,
+        sprint: false
+      };
+      this.locationRootSystem.applyPilotControlIntent(pilotState.framePid, intent, SERVER_TICK_SECONDS);
+    }
     this.locationRootSystem.updateLocations(prevElapsed, this.elapsedSeconds);
   }
 
@@ -826,7 +1258,42 @@ export class GameSimulation {
 
   private tickMovementPhase(delta: number): void {
     this.playerMovementSystem.stepPlayers(this.getMovementPlayerEntries(), delta, this.elapsedSeconds);
+    this.applyFallDamagePhase();
     this.npcMovementSystem.stepCharacters(this.npcAiSystem.getNpcEids() as number[], delta, this.elapsedSeconds);
+  }
+
+  private applyFallDamagePhase(): void {
+    const c = this.simulationEcs.world.components;
+    for (const [, eid] of this.getMovementPlayerEntries()) {
+      const groundedNow = (c.Grounded.value[eid] ?? 0) !== 0;
+      const vy = c.Velocity.y[eid] ?? 0;
+      const groundedBefore = this.previousGroundedByEid.get(eid) ?? groundedNow;
+      const minVyBefore = this.minAirborneVyByEid.get(eid) ?? 0;
+
+      if (groundedNow) {
+        if (!groundedBefore) {
+          const impactSpeed = Math.max(0, -minVyBefore);
+          const damage = this.computeFallDamageFromImpactSpeed(impactSpeed);
+          if (damage > 0) {
+            this.damageSystem.applyFallDamageByCharacterEid(eid, damage);
+          }
+        }
+        this.minAirborneVyByEid.set(eid, 0);
+      } else {
+        const nextMinVy = groundedBefore ? Math.min(0, vy) : Math.min(minVyBefore, vy);
+        this.minAirborneVyByEid.set(eid, nextMinVy);
+      }
+
+      this.previousGroundedByEid.set(eid, groundedNow);
+    }
+  }
+
+  private computeFallDamageFromImpactSpeed(impactSpeed: number): number {
+    if (!Number.isFinite(impactSpeed) || impactSpeed <= FALL_DAMAGE_MIN_IMPACT_SPEED) {
+      return 0;
+    }
+    const damage = Math.floor((impactSpeed - FALL_DAMAGE_MIN_IMPACT_SPEED) * FALL_DAMAGE_PER_SPEED);
+    return Math.max(0, Math.min(this.archetypes.player.maxHealth, damage));
   }
 
   private tickCombatPhase(delta: number): void {
@@ -896,51 +1363,82 @@ export class GameSimulation {
     return requests;
   }
 
-  public getRuntimeStats(): { onlinePlayers: number; activeProjectiles: number; pendingOfflineSnapshots: number; ecsEntities: number; activeNpcs: number; inactiveNpcs: number; hibernatingNpcs: number } {
+  public getRuntimeStats(): {
+    onlinePlayers: number;
+    activeProjectiles: number;
+    pendingOfflineSnapshots: number;
+    ecsEntities: number;
+    activeNpcs: number;
+    inactiveNpcs: number;
+    hibernatingNpcs: number;
+    pilotedReferenceFrames: number;
+    effectAuditSuccesses: Readonly<Record<string, number>>;
+  } {
     const es = this.simulationEcs.getStats();
     const ai = this.npcAiSystem.getStats();
-    return { onlinePlayers: this.simulationEcs.getOnlinePlayerCount(), activeProjectiles: this.projectileSystem.getActiveCount(), pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount(), ecsEntities: es.total, activeNpcs: ai.active, inactiveNpcs: ai.inactive, hibernatingNpcs: ai.hibernating };
+    return {
+      onlinePlayers: this.simulationEcs.getOnlinePlayerCount(),
+      activeProjectiles: this.projectileSystem.getActiveCount(),
+      pendingOfflineSnapshots: this.persistenceSyncSystem.getPendingOfflineSnapshotCount(),
+      ecsEntities: es.total,
+      activeNpcs: ai.active,
+      inactiveNpcs: ai.inactive,
+      hibernatingNpcs: ai.hibernating,
+      pilotedReferenceFrames: this.pilotedReferenceFrameByUserId.size,
+      effectAuditSuccesses: Object.freeze(Object.fromEntries(this.effectAuditSuccessCountByType.entries()))
+    };
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   private syncCarrierMembershipMessagesForPlayer(userId: number, eid: number): void {
     const collider = this.simulationEcs.getPlayerCollider(eid);
     if (!collider) {
-      this.carrierMembershipByUserId.delete(userId);
+      this.referenceFrameMembershipByUserId.delete(userId);
       return;
     }
-    const overlaps = this.locationRootSystem.collectCarrierVolumeMembershipsForCollider(collider);
+    const overlaps = this.locationRootSystem.collectReferenceFrameVolumeMembershipsForCollider(collider);
     const nextKeys = new Set<string>();
     for (let i = 0; i < overlaps.length; i += 1) {
       const membership = overlaps[i];
       if (!membership) continue;
-      nextKeys.add(this.toCarrierMembershipKey(membership.framePid, membership.volumeId));
+      nextKeys.add(this.toReferenceFrameMembershipKey(membership.framePid, membership.volumeId));
     }
-    const previousKeys = this.carrierMembershipByUserId.get(userId) ?? new Set<string>();
+    const previousKeys = this.referenceFrameMembershipByUserId.get(userId) ?? new Set<string>();
     for (const key of previousKeys) {
       if (!nextKeys.has(key)) {
-        const parsed = this.parseCarrierMembershipKey(key);
+        const parsed = this.parseReferenceFrameMembershipKey(key);
         if (parsed) {
-          this.replication.queueCarrierVolumeExited(userId, parsed.framePid, parsed.volumeId);
+          this.actionEffectPipeline.execute({
+            type: "reference_frame_volume_exited",
+            userId,
+            framePid: parsed.framePid,
+            volumeId: parsed.volumeId
+          });
         }
       }
     }
     for (const key of nextKeys) {
       if (!previousKeys.has(key)) {
-        const parsed = this.parseCarrierMembershipKey(key);
+        const parsed = this.parseReferenceFrameMembershipKey(key);
         if (parsed) {
-          this.replication.queueCarrierVolumeEntered(userId, parsed.framePid, parsed.volumeId);
+          this.actionEffectPipeline.execute({
+            type: "reference_frame_volume_entered",
+            userId,
+            framePid: parsed.framePid,
+            volumeId: parsed.volumeId
+          });
         }
       }
     }
-    this.carrierMembershipByUserId.set(userId, nextKeys);
+    this.referenceFrameMembershipByUserId.set(userId, nextKeys);
+    this.syncPilotedReferenceFrameForUser(userId, nextKeys);
   }
 
-  private toCarrierMembershipKey(framePid: number, volumeId: string): string {
+  private toReferenceFrameMembershipKey(framePid: number, volumeId: string): string {
     return `${Math.floor(framePid)}:${volumeId}`;
   }
 
-  private parseCarrierMembershipKey(key: string): { framePid: number; volumeId: string } | null {
+  private parseReferenceFrameMembershipKey(key: string): { framePid: number; volumeId: string } | null {
     const separator = key.indexOf(":");
     if (separator <= 0 || separator >= key.length - 1) {
       return null;
@@ -951,6 +1449,17 @@ export class GameSimulation {
       return null;
     }
     return { framePid: Math.floor(framePid), volumeId };
+  }
+
+  private syncPilotedReferenceFrameForUser(userId: number, memberships: ReadonlySet<string>): void {
+    const current = this.pilotedReferenceFrameByUserId.get(userId) ?? null;
+    if (current && !memberships.has(this.toReferenceFrameMembershipKey(current.framePid, current.volumeId))) {
+      this.actionEffectPipeline.execute({
+        type: "pilot_reference_frame_end",
+        userId,
+        framePid: current.framePid
+      });
+    }
   }
 
   private ensureBlueprintAccessLoaded(
@@ -977,8 +1486,11 @@ export class GameSimulation {
       return;
     }
     const persistedBlueprints = this.persistence.loadPersistedBlueprintDefinitions(unresolvedIds);
-    for (const blueprint of persistedBlueprints) {
-      this.creatorSystem.registerPersistedBlueprint(blueprint);
+    for (const record of persistedBlueprints) {
+      this.creatorSystem.registerPersistedBlueprint(record.blueprint);
+      if (record.runtimeCapability) {
+        upsertBlueprintRuntimeCapabilityEntry(record.runtimeCapability);
+      }
     }
   }
 
@@ -1031,8 +1543,8 @@ export class GameSimulation {
   private resolveAbilityDefinitionById(id: number): AbilityDefinition | null {
     const sd = getAbilityDefinitionById(id);
     if (sd) return sd;
-    const blueprint = this.creatorSystem.resolveBlueprintDefinitionById(id);
-    return blueprint ? buildAbilityDefinitionFromBlueprint(blueprint) : null;
+    const projected = getBlueprintRuntimeAbilityByBlueprintId(id);
+    return projected ?? null;
   }
 
   private createInitialHotbar(saved?: number[]): number[] {
@@ -1278,6 +1790,8 @@ export class GameSimulation {
         this.simulationEcs.bindPlayerIndexes(user.id, eid);
         this.controllerSystem.attachPlayerController(user.id, eid);
         this.damageSystem.registerPlayerCollider(ctx.collider.handle, eid);
+        this.previousGroundedByEid.set(eid, true);
+        this.minAirborneVyByEid.set(eid, 0);
         this.ensurePunchAssigned(eid);
         this.replication.queueIdentityMessage(user, nid);
         this.events.emit<PlayerSpawnedPayload>(GameEvent.PLAYER_SPAWNED, { userId: user.id, eid, accountId: ctx.accountId, colliderHandle: ctx.collider.handle });
@@ -1285,9 +1799,12 @@ export class GameSimulation {
       },
       despawnPlayer: (user, eid) => {
         const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id) ?? 0;
-        this.carrierMembershipByUserId.delete(user.id);
+        this.referenceFrameMembershipByUserId.delete(user.id);
+        this.releaseUserPilotSeat(user.id);
         this.creatorSystem.removeSession(user.id);
         this.controllerSystem.detachUser(user.id);
+        this.previousGroundedByEid.delete(eid);
+        this.minAirborneVyByEid.delete(eid);
         this.simulationEcs.unbindPlayerIndexes(user.id, eid);
         this.replication.despawnEntity(eid);
         this.simulationEcs.destroyEid(eid);
@@ -1316,6 +1833,7 @@ export class GameSimulation {
         );
         this.replication.queueCreatorStateMessage(user, creatorState);
         this.itemInventorySystem.queueInventoryStateForUser(user.id);
+        this.refreshEquippedVisualAppearanceForUser(user.id);
       },
       resolvePlayerRuntimeRefsByUserId: (uid) => {
         const runtime = this.simulationEcs.getPlayerRuntimeStateByUserId(uid);

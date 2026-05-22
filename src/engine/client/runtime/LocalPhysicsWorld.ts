@@ -7,13 +7,14 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import {
   applyPlatformCarry,
   configurePlayerCharacterController,
-  createLocationCarrierSensorColliders,
+  createLocationReferenceFrameSensorColliders,
   createLocationKinematicCollider,
   createStaticWorldColliders,
   DEFAULT_VOID_SPAWN_ANCHOR,
   getReferenceFrameCarryDelta,
+  getLocationReferenceFrameVolumes,
   GROUND_CONTACT_MIN_NORMAL_Y,
-  hasCarrierVolumesContainingPoint,
+  hasReferenceFrameVolumesContainingPoint,
   MOVEMENT_MODE_FLYING,
   MOVEMENT_MODE_GROUNDED,
   normalizeYaw,
@@ -85,7 +86,7 @@ interface LocalFrameCarry {
   carriedFramePid: number | null;
 }
 
-const CARRIER_FRAME_STICKY_MARGIN = 0.25;
+const REFERENCE_FRAME_STICKY_MARGIN = 0.25;
 
 export class LocalPhysicsWorld {
   private readonly characterController: RAPIER.KinematicCharacterController;
@@ -179,7 +180,7 @@ export class LocalPhysicsWorld {
       }
       const pose = sampleLocationTransform(definition, 0);
       const moving = createLocationKinematicCollider(world, definition, pose);
-      createLocationCarrierSensorColliders(world, definition, moving.body);
+      createLocationReferenceFrameSensorColliders(world, definition, moving.body);
       local.movingLocationBodies.set(definition.pid, {
         definition,
         body: moving.body,
@@ -345,11 +346,11 @@ export class LocalPhysicsWorld {
       yaw: previousPose.yaw
     };
     if (
-      !hasCarrierVolumesContainingPoint(
-        location.definition.carrierVolumes,
+      !hasReferenceFrameVolumesContainingPoint(
+        getLocationReferenceFrameVolumes(location.definition),
         previousFrame,
         bodyPos,
-        CARRIER_FRAME_STICKY_MARGIN
+        REFERENCE_FRAME_STICKY_MARGIN
       )
     ) {
       return 0;
@@ -521,7 +522,7 @@ export class LocalPhysicsWorld {
       const carry = this.sampleMovingLocationCarryFromPreviousFrame(
         previousLocation,
         bodyPos,
-        CARRIER_FRAME_STICKY_MARGIN
+        REFERENCE_FRAME_STICKY_MARGIN
       );
       if (carry) {
         return carry;
@@ -543,7 +544,7 @@ export class LocalPhysicsWorld {
     margin: number
   ): LocalFrameCarry | null {
     const previous = { x: location.prevX, y: location.prevY, z: location.prevZ, yaw: location.prevYaw };
-    if (!hasCarrierVolumesContainingPoint(location.definition.carrierVolumes, previous, bodyPos, margin)) {
+    if (!hasReferenceFrameVolumesContainingPoint(getLocationReferenceFrameVolumes(location.definition), previous, bodyPos, margin)) {
       return null;
     }
     const current = { x: location.x, y: location.y, z: location.z, yaw: location.yaw };
@@ -559,11 +560,11 @@ export class LocalPhysicsWorld {
       previousCarriedFramePid === null ? null : this.movingLocationBodies.get(previousCarriedFramePid) ?? null;
     if (
       previousLocation &&
-      hasCarrierVolumesContainingPoint(
-        previousLocation.definition.carrierVolumes,
+      hasReferenceFrameVolumesContainingPoint(
+        getLocationReferenceFrameVolumes(previousLocation.definition),
         { x: previousLocation.x, y: previousLocation.y, z: previousLocation.z, yaw: previousLocation.yaw },
         point,
-        CARRIER_FRAME_STICKY_MARGIN
+        REFERENCE_FRAME_STICKY_MARGIN
       )
     ) {
       return previousLocation.definition.pid;
@@ -571,8 +572,8 @@ export class LocalPhysicsWorld {
 
     for (const location of this.movingLocationBodies.values()) {
       if (
-        hasCarrierVolumesContainingPoint(
-          location.definition.carrierVolumes,
+        hasReferenceFrameVolumesContainingPoint(
+          getLocationReferenceFrameVolumes(location.definition),
           { x: location.x, y: location.y, z: location.z, yaw: location.yaw },
           point,
           0

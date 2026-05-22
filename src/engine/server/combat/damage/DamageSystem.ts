@@ -83,6 +83,19 @@ export class DamageSystem {
   }
 
   public applyDamage(target: CombatTarget, damage: number, sourceEid: number | null = null): void {
+    this.applyDamageWithKind(target, damage, sourceEid, sourceEid !== null ? "melee" : "environment");
+  }
+
+  public applyFallDamageByCharacterEid(eid: number, damage: number): void {
+    this.applyDamageWithKind({ kind: "character", eid }, damage, null, "fall");
+  }
+
+  private applyDamageWithKind(
+    target: CombatTarget,
+    damage: number,
+    sourceEid: number | null,
+    damageKind: "melee" | "projectile" | "status" | "fall" | "environment"
+  ): void {
     const appliedDamage = Math.max(0, Math.floor(damage));
     if (appliedDamage <= 0) return;
 
@@ -98,7 +111,7 @@ export class DamageSystem {
       }
       this.options.events.emit<DamageDealtPayload>(GameEvent.DAMAGE_DEALT, {
         sourceEid, targetEid: target.eid, amount: appliedDamage,
-        kind: sourceEid !== null ? "melee" : "environment"
+        kind: damageKind
       });
       this.options.events.emit<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, {
         eid: target.eid, previous: previousHealth,

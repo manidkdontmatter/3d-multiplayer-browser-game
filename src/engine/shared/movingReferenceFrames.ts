@@ -5,11 +5,11 @@
  */
 import { normalizeYaw } from "./platforms";
 
-export type CarrierVolumeShape = "box" | "sphere";
+export type ReferenceFrameVolumeShape = "box" | "sphere";
 
-export interface CarrierVolumeDefinition {
+export interface ReferenceFrameVolumeDefinition {
   readonly id: string;
-  readonly shape: CarrierVolumeShape;
+  readonly shape: ReferenceFrameVolumeShape;
   readonly localX: number;
   readonly localY: number;
   readonly localZ: number;
@@ -55,8 +55,8 @@ export function getReferenceFrameCarryDelta(
   };
 }
 
-export function isPointInsideCarrierVolume(
-  volume: CarrierVolumeDefinition,
+export function isPointInsideReferenceFrameVolume(
+  volume: ReferenceFrameVolumeDefinition,
   frame: ReferenceFrameTransform,
   point: ReferenceFramePoint,
   margin = 0
@@ -83,8 +83,8 @@ export function isPointInsideCarrierVolume(
   return Math.abs(volumeLocalX) <= halfX && Math.abs(dy) <= halfY && Math.abs(volumeLocalZ) <= halfZ;
 }
 
-export function hasCarrierVolumesContainingPoint(
-  volumes: readonly CarrierVolumeDefinition[] | undefined,
+export function hasReferenceFrameVolumesContainingPoint(
+  volumes: readonly ReferenceFrameVolumeDefinition[] | undefined,
   frame: ReferenceFrameTransform,
   point: ReferenceFramePoint,
   margin = 0
@@ -92,11 +92,11 @@ export function hasCarrierVolumesContainingPoint(
   if (!volumes || volumes.length === 0) {
     return false;
   }
-  return volumes.some((volume) => isPointInsideCarrierVolume(volume, frame, point, margin));
+  return volumes.some((volume) => isPointInsideReferenceFrameVolume(volume, frame, point, margin));
 }
 
-export function transformCarrierVolumeCenter(
-  volume: CarrierVolumeDefinition,
+export function transformReferenceFrameVolumeCenter(
+  volume: ReferenceFrameVolumeDefinition,
   frame: ReferenceFrameTransform
 ): ReferenceFrameTransform {
   const world = frameLocalPointToWorld(frame, {

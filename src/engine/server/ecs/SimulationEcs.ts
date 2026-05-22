@@ -11,6 +11,13 @@ import {
   clampHotbarSlotIndex,
   sanitizeMovementMode
 } from "../../shared/index";
+import {
+  DEFAULT_TINT_COLOR_RGB,
+  sanitizeMaterialVariantId,
+  sanitizeRenderArchetypeId,
+  sanitizeTintColorRgb,
+  sanitizeUniformScalePct
+} from "../../shared/appearance/AppearancePolicy";
 import type { MovementMode } from "../../shared/index";
 import type { EntityFactoryOverrides } from "./EntityFactory";
 import type { EntityPresetId } from "./ComponentRegistry";
@@ -454,6 +461,154 @@ export class SimulationEcs {
 
   public getReplicatedEids(): number[] {
     return this.store.getReplicatedTagEids();
+  }
+
+  public setEntityRenderAppearanceByEid(
+    eid: number,
+    patch: Partial<{
+      renderArchetypeId: number;
+      materialVariantId: number;
+      tintColorRgb: number;
+      uniformScalePct: number;
+      equippedWeaponArchetypeId: number;
+      equippedWeaponTintColorRgb: number;
+      equippedHeadArchetypeId: number;
+      equippedHeadTintColorRgb: number;
+      equippedBodyArchetypeId: number;
+      equippedBodyTintColorRgb: number;
+      equippedLegsArchetypeId: number;
+      equippedLegsTintColorRgb: number;
+      equippedAccessoryArchetypeId: number;
+      equippedAccessoryTintColorRgb: number;
+    }>
+  ): boolean {
+    const c = this.world.components;
+    let changed = false;
+    if (typeof patch.renderArchetypeId === "number" && Number.isFinite(patch.renderArchetypeId)) {
+      const next = sanitizeRenderArchetypeId(patch.renderArchetypeId);
+      if ((c.RenderArchetypeId.value[eid] ?? 0) !== next) {
+        c.RenderArchetypeId.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.materialVariantId === "number" && Number.isFinite(patch.materialVariantId)) {
+      const next = sanitizeMaterialVariantId(patch.materialVariantId);
+      if ((c.MaterialVariantId.value[eid] ?? 0) !== next) {
+        c.MaterialVariantId.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.tintColorRgb === "number" && Number.isFinite(patch.tintColorRgb)) {
+      const next = sanitizeTintColorRgb(patch.tintColorRgb);
+      if ((c.TintColorRgb.value[eid] ?? DEFAULT_TINT_COLOR_RGB) !== next) {
+        c.TintColorRgb.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.uniformScalePct === "number" && Number.isFinite(patch.uniformScalePct)) {
+      const next = sanitizeUniformScalePct(patch.uniformScalePct);
+      if ((c.UniformScalePct.value[eid] ?? 100) !== next) {
+        c.UniformScalePct.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedWeaponArchetypeId === "number" && Number.isFinite(patch.equippedWeaponArchetypeId)) {
+      const next = sanitizeRenderArchetypeId(patch.equippedWeaponArchetypeId);
+      if ((c.EquippedWeaponArchetypeId.value[eid] ?? 0) !== next) {
+        c.EquippedWeaponArchetypeId.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedWeaponTintColorRgb === "number" && Number.isFinite(patch.equippedWeaponTintColorRgb)) {
+      const next = sanitizeTintColorRgb(patch.equippedWeaponTintColorRgb);
+      if ((c.EquippedWeaponTintColorRgb.value[eid] ?? DEFAULT_TINT_COLOR_RGB) !== next) {
+        c.EquippedWeaponTintColorRgb.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedHeadArchetypeId === "number" && Number.isFinite(patch.equippedHeadArchetypeId)) {
+      const next = sanitizeRenderArchetypeId(patch.equippedHeadArchetypeId);
+      if ((c.EquippedHeadArchetypeId.value[eid] ?? 0) !== next) {
+        c.EquippedHeadArchetypeId.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedHeadTintColorRgb === "number" && Number.isFinite(patch.equippedHeadTintColorRgb)) {
+      const next = sanitizeTintColorRgb(patch.equippedHeadTintColorRgb);
+      if ((c.EquippedHeadTintColorRgb.value[eid] ?? DEFAULT_TINT_COLOR_RGB) !== next) {
+        c.EquippedHeadTintColorRgb.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedBodyArchetypeId === "number" && Number.isFinite(patch.equippedBodyArchetypeId)) {
+      const next = sanitizeRenderArchetypeId(patch.equippedBodyArchetypeId);
+      if ((c.EquippedBodyArchetypeId.value[eid] ?? 0) !== next) {
+        c.EquippedBodyArchetypeId.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedBodyTintColorRgb === "number" && Number.isFinite(patch.equippedBodyTintColorRgb)) {
+      const next = sanitizeTintColorRgb(patch.equippedBodyTintColorRgb);
+      if ((c.EquippedBodyTintColorRgb.value[eid] ?? DEFAULT_TINT_COLOR_RGB) !== next) {
+        c.EquippedBodyTintColorRgb.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedLegsArchetypeId === "number" && Number.isFinite(patch.equippedLegsArchetypeId)) {
+      const next = sanitizeRenderArchetypeId(patch.equippedLegsArchetypeId);
+      if ((c.EquippedLegsArchetypeId.value[eid] ?? 0) !== next) {
+        c.EquippedLegsArchetypeId.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedLegsTintColorRgb === "number" && Number.isFinite(patch.equippedLegsTintColorRgb)) {
+      const next = sanitizeTintColorRgb(patch.equippedLegsTintColorRgb);
+      if ((c.EquippedLegsTintColorRgb.value[eid] ?? DEFAULT_TINT_COLOR_RGB) !== next) {
+        c.EquippedLegsTintColorRgb.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedAccessoryArchetypeId === "number" && Number.isFinite(patch.equippedAccessoryArchetypeId)) {
+      const next = sanitizeRenderArchetypeId(patch.equippedAccessoryArchetypeId);
+      if ((c.EquippedAccessoryArchetypeId.value[eid] ?? 0) !== next) {
+        c.EquippedAccessoryArchetypeId.value[eid] = next;
+        changed = true;
+      }
+    }
+    if (typeof patch.equippedAccessoryTintColorRgb === "number" && Number.isFinite(patch.equippedAccessoryTintColorRgb)) {
+      const next = sanitizeTintColorRgb(patch.equippedAccessoryTintColorRgb);
+      if ((c.EquippedAccessoryTintColorRgb.value[eid] ?? DEFAULT_TINT_COLOR_RGB) !== next) {
+        c.EquippedAccessoryTintColorRgb.value[eid] = next;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  public setEntityRenderAppearanceByNid(
+    nid: number,
+    patch: Partial<{
+      renderArchetypeId: number;
+      materialVariantId: number;
+      tintColorRgb: number;
+      uniformScalePct: number;
+      equippedWeaponArchetypeId: number;
+      equippedWeaponTintColorRgb: number;
+      equippedHeadArchetypeId: number;
+      equippedHeadTintColorRgb: number;
+      equippedBodyArchetypeId: number;
+      equippedBodyTintColorRgb: number;
+      equippedLegsArchetypeId: number;
+      equippedLegsTintColorRgb: number;
+      equippedAccessoryArchetypeId: number;
+      equippedAccessoryTintColorRgb: number;
+    }>
+  ): boolean {
+    const eid = this.getAnyEidByNid(Math.max(0, Math.floor(nid)));
+    if (typeof eid !== "number") {
+      return false;
+    }
+    return this.setEntityRenderAppearanceByEid(eid, patch);
   }
 
   // ── Stats / queries ───────────────────────────────────────────────────────

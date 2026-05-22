@@ -13,6 +13,22 @@ export interface EntityVisualDef {
   emissiveIntensity?: number;
 }
 
+export interface RenderArchetypeNodeDef {
+  geometry: "box" | "cylinder" | "dodecahedron" | "sphere";
+  geometryParams: number[];
+  color: number;
+  roughness: number;
+  metalness: number;
+  emissive?: number;
+  emissiveIntensity?: number;
+  localPosition?: { x: number; y: number; z: number };
+}
+
+export interface RenderArchetypeDef {
+  id: number;
+  nodes: ReadonlyArray<RenderArchetypeNodeDef>;
+}
+
 export interface LocationVisualDef {
   kind: "terrainIsland" | "staticCastle" | "movingCastle" | "movingTestPlatform" | "testArena";
   castleBaseColor?: number;
@@ -44,6 +60,7 @@ export interface PropColorDef {
 
 export interface VisualPalette {
   entities: ReadonlyMap<number, EntityVisualDef>;
+  renderArchetypes: ReadonlyMap<number, RenderArchetypeDef>;
   locations: ReadonlyMap<string, LocationVisualDef>;
   fallbackAvatar: FallbackAvatarVisualDef;
   propColors: PropColorDef;
@@ -60,6 +77,7 @@ const DEFAULT_PROP_COLORS: PropColorDef = {
 
 let _palette: VisualPalette = {
   entities: new Map(),
+  renderArchetypes: new Map(),
   locations: new Map(),
   fallbackAvatar: DEFAULT_FALLBACK_AVATAR,
   propColors: DEFAULT_PROP_COLORS
@@ -67,12 +85,14 @@ let _palette: VisualPalette = {
 
 export function injectVisualPalette(palette: {
   entities?: ReadonlyMap<number, EntityVisualDef>;
+  renderArchetypes?: ReadonlyMap<number, RenderArchetypeDef>;
   locations?: ReadonlyMap<string, LocationVisualDef>;
   fallbackAvatar?: Partial<FallbackAvatarVisualDef>;
   propColors?: Partial<PropColorDef>;
 }): void {
   _palette = {
     entities: palette.entities ?? _palette.entities,
+    renderArchetypes: palette.renderArchetypes ?? _palette.renderArchetypes,
     locations: palette.locations ?? _palette.locations,
     fallbackAvatar: palette.fallbackAvatar ? { ...DEFAULT_FALLBACK_AVATAR, ...palette.fallbackAvatar } : _palette.fallbackAvatar,
     propColors: palette.propColors ? { ...DEFAULT_PROP_COLORS, ...palette.propColors } : _palette.propColors
@@ -81,6 +101,10 @@ export function injectVisualPalette(palette: {
 
 export function getEntityVisual(modelId: number): EntityVisualDef | undefined {
   return _palette.entities.get(modelId);
+}
+
+export function getRenderArchetype(id: number): RenderArchetypeDef | undefined {
+  return _palette.renderArchetypes.get(id);
 }
 
 export function getVisualPalette(): VisualPalette {

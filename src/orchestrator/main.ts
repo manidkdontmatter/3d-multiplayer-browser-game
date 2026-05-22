@@ -45,7 +45,7 @@ import {
 
 interface JoinTicketRecord {
   token: string;
-  authKey: string | null;
+  accessKey: string | null;
   accountId: number;
   playerSnapshot: PlayerSnapshot | null;
   inventoryState: InventorySnapshot | null;
@@ -443,11 +443,18 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       sendJson(res, 503, { ok: false, error: "no_ready_maps" } satisfies BootstrapResponse);
       return;
     }
-    const identity = resolveIdentity(payload.authKey ?? null, req.socket.remoteAddress ?? "unknown");
+    const identity = resolveIdentity(
+      (typeof payload.accessKey === "string" ? payload.accessKey : payload.authKey) ?? null,
+      req.socket.remoteAddress ?? "unknown"
+    );
+    if (!identity.ok) {
+      sendJson(res, 401, { ok: false, error: identity.error } satisfies BootstrapResponse);
+      return;
+    }
     const playerSnapshot = loadSnapshot(identity.accountId);
     const inventoryState = loadInventorySnapshot(identity.accountId);
     const playerSettings = loadPlayerSettings(identity.accountId);
-    const ticket = issueJoinTicket(identity.authKey, identity.accountId, playerSnapshot, inventoryState, playerSettings, selected.instanceId, {
+    const ticket = issueJoinTicket(identity.accessKey, identity.accountId, playerSnapshot, inventoryState, playerSettings, selected.instanceId, {
       kind: "bootstrap",
       transferId: null
     });
@@ -827,7 +834,11 @@ async function handleTransferRequest(payload: TransferRequest): Promise<Transfer
     eventAtMs: issuedAtMs
   });
   const ticket = issueJoinTicket(
-    typeof payload.authKey === "string" && payload.authKey.length > 0 ? payload.authKey : null,
+    typeof payload.accessKey === "string" && payload.accessKey.length > 0
+      ? payload.accessKey
+      : typeof payload.authKey === "string" && payload.authKey.length > 0
+        ? payload.authKey
+        : null,
     normalizedAccountId,
     payload.playerSnapshot ? toPlayerSnapshot(payload.playerSnapshot) : null,
     payload.inventoryState ?? null,
@@ -882,18 +893,29 @@ function deriveSeedFromInstanceId(instanceId: string): number {
   return Math.abs(hash | 0) + 1;
 }
 
-function resolveIdentity(authKey: string | null, remoteIp: string): { authKey: string | null; accountId: number } {
-  if (typeof authKey === "string" && authKey.length > 0) {
-    const auth = persistence.authenticateOrCreate(authKey, remoteIp);
-    if (auth.ok && typeof auth.accountId === "number") {
+function resolveIdentity(
+  accessKey: string | null,
+  remoteIp: string
+):
+  | { ok: true; accessKey: string | null; accountId: number }
+  | { ok: false; error: string } {
+  if (typeof accessKey === "string" && accessKey.length > 0) {
+    const auth = persistence.authenticateOrCreate(accessKey, remoteIp);
+    if (!auth.ok || typeof auth.accountId !== "number") {
       return {
-        authKey,
-        accountId: auth.accountId
+        ok: false,
+        error: auth.code
       };
     }
+    return {
+      ok: true,
+      accessKey,
+      accountId: auth.accountId
+    };
   }
   return {
-    authKey: null,
+    ok: true,
+    accessKey: null,
     accountId: nextGuestAccountId++
   };
 }
@@ -917,7 +939,7 @@ function loadPlayerSettings(accountId: number): PlayerSettings | null {
 }
 
 function issueJoinTicket(
-  authKey: string | null,
+  accessKey: string | null,
   accountId: number,
   playerSnapshot: PlayerSnapshot | null,
   inventoryState: InventorySnapshot | null,
@@ -933,7 +955,7 @@ function issueJoinTicket(
   const token = `${payload}.${signature}`;
   joinTickets.set(tokenId, {
     token,
-    authKey,
+    accessKey,
     accountId,
     playerSnapshot,
     inventoryState,
@@ -1045,7 +1067,7 @@ async function validateJoinTicket(joinTicket: string, mapInstanceId: string): Pr
   ticket.consumedAtMs = now;
   return {
     ok: true,
-    authKey: ticket.authKey,
+    authKey: ticket.accessKey,
     accountId: ticket.accountId,
     playerSnapshot: ticket.playerSnapshot,
     inventoryState: ticket.inventoryState,

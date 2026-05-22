@@ -219,19 +219,15 @@
     },
     {
       "id": 200,
-      "key": "minor-vitality-shard",
-      "name": "Minor Vitality Shard",
-      "description": "A condensed soul-glass shard that restores a small amount of health.",
+      "key": "red-orb",
+      "name": "Red Orb",
+      "description": "Volatile red crafting resource.",
       "metadata": { "authoredViaProfile": "item_creator" },
       "components": {
         "InventoryItem": {
-          "category": "consumable",
+          "category": "material",
           "modelId": 40,
-          "stackMax": 10
-        },
-        "ConsumableEffect": {
-          "restoreHealth": 25,
-          "consumeQuantity": 1
+          "stackMax": 25
         }
       },
       "templateProfiles": {
@@ -246,14 +242,60 @@
     },
     {
       "id": 201,
-      "key": "training-focus-blade",
-      "name": "Training Focus Blade",
-      "description": "A blunt practice focus for channeling melee energy.",
+      "key": "green-orb",
+      "name": "Green Orb",
+      "description": "Stable green crafting resource.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "material",
+          "modelId": 41,
+          "stackMax": 25
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 202,
+      "key": "yellow-orb",
+      "name": "Yellow Orb",
+      "description": "Charged yellow crafting resource.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "material",
+          "modelId": 42,
+          "stackMax": 25
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 210,
+      "key": "pulse-carbine",
+      "name": "Pulse Carbine",
+      "description": "Crafted ranged weapon frame.",
       "metadata": { "authoredViaProfile": "item_creator" },
       "components": {
         "InventoryItem": {
           "category": "equipment",
-          "modelId": 41,
+          "modelId": 43,
           "stackMax": 1
         },
         "Equippable": { "slot": "weapon" },
@@ -270,16 +312,171 @@
       }
     },
     {
-      "id": 202,
-      "key": "ether-crystal",
-      "name": "Ether Crystal",
-      "description": "A raw crafting material used by early item and ability experiments.",
+      "id": 211,
+      "key": "ion-blade",
+      "name": "Ion Blade",
+      "description": "Crafted melee focus blade.",
       "metadata": { "authoredViaProfile": "item_creator" },
       "components": {
         "InventoryItem": {
-          "category": "material",
-          "modelId": 42,
-          "stackMax": 25
+          "category": "equipment",
+          "modelId": 44,
+          "stackMax": 1
+        },
+        "Equippable": { "slot": "weapon" },
+        "ItemStats": { "sharpness": 0 }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 10,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["sharpened", "brittle"],
+          "draftStats": { "sharpness": 0 },
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 212,
+      "key": "field-bandage",
+      "name": "Field Bandage",
+      "description": "Basic hand-crafted healing consumable.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "consumable",
+          "modelId": 45,
+          "stackMax": 10
+        },
+        "ConsumableEffect": {
+          "restoreHealth": 20,
+          "consumeQuantity": 1
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 213,
+      "key": "signal-flare",
+      "name": "Signal Flare",
+      "description": "Hand-crafted utility consumable.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "consumable",
+          "modelId": 46,
+          "stackMax": 10
+        },
+        "ConsumableEffect": {
+          "restoreHealth": 5,
+          "consumeQuantity": 1
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 214,
+      "key": "weapon-dye-red",
+      "name": "Weapon Dye: Red",
+      "description": "Applies a red tint to your equipped weapon.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "consumable",
+          "modelId": 47,
+          "stackMax": 10
+        },
+        "ConsumableEffect": {
+          "consumeQuantity": 1,
+          "effects": [
+            {
+              "type": "set_equipped_slot_tint",
+              "slot": "weapon",
+              "tintColorRgb": 16724736
+            }
+          ]
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 215,
+      "key": "weapon-dye-green",
+      "name": "Weapon Dye: Green",
+      "description": "Applies a green tint to your equipped weapon.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "consumable",
+          "modelId": 48,
+          "stackMax": 10
+        },
+        "ConsumableEffect": {
+          "consumeQuantity": 1,
+          "effects": [
+            {
+              "type": "set_equipped_slot_tint",
+              "slot": "weapon",
+              "tintColorRgb": 4259673
+            }
+          ]
+        }
+      },
+      "templateProfiles": {
+        "item_creator": {
+          "statBudget": 0,
+          "attributeBudget": 0,
+          "availableAttributeIds": [],
+          "draftStats": {},
+          "draftAttributes": {}
+        }
+      }
+    },
+    {
+      "id": 216,
+      "key": "weapon-dye-yellow",
+      "name": "Weapon Dye: Yellow",
+      "description": "Applies a yellow tint to your equipped weapon.",
+      "metadata": { "authoredViaProfile": "item_creator" },
+      "components": {
+        "InventoryItem": {
+          "category": "consumable",
+          "modelId": 49,
+          "stackMax": 10
+        },
+        "ConsumableEffect": {
+          "consumeQuantity": 1,
+          "effects": [
+            {
+              "type": "set_equipped_slot_tint",
+              "slot": "weapon",
+              "tintColorRgb": 16766720
+            }
+          ]
         }
       },
       "templateProfiles": {

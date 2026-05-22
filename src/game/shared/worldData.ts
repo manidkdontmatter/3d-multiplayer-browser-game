@@ -6,7 +6,7 @@
 import { injectLocationDefinitions } from "../../engine/shared/worldLocations";
 import { injectEnvironmentVolumeDefinitions } from "../../engine/shared/environmentVolumes";
 import { injectMovingLocationCollisionExtents } from "../../engine/shared/worldPhysics";
-import type { LocationRootDefinition, SpawnAnchor } from "../../engine/shared/worldLocations";
+import type { WorldAnchorDefinition, SpawnAnchor } from "../../engine/shared/worldLocations";
 import type { EnvironmentVolumeDefinition } from "../../engine/shared/environmentVolumes";
 import {
   ENVIRONMENT_PRESET_SKY_BLUE_DAY,
@@ -29,7 +29,7 @@ import {
 } from "../../engine/shared/config";
 import { ENVIRONMENT_PRIORITY_VOID_REGION } from "../../engine/shared/environmentVolumes";
 
-const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
+const WORLD_ANCHOR_DEFINITIONS: readonly WorldAnchorDefinition[] = [
   {
     id: "verdant-test-island",
     mapInstanceIds: ["map-a"],
@@ -61,6 +61,24 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
       }
     ],
     motion: "static",
+    craftBenchSockets: [
+      {
+        id: "verdant-test-island.craft-bench.alpha",
+        localX: 0.5,
+        localY: 34,
+        localZ: 3.5,
+        interactRadius: 3.25,
+        visualMarker: {
+          geometry: "box",
+          sizeX: 1.8,
+          sizeY: 1.0,
+          sizeZ: 1.2,
+          color: 0x72c48f,
+          roughness: 0.55,
+          metalness: 0.08
+        }
+      }
+    ],
     seed: 2001,
     terrain: {
       halfExtent: 128,
@@ -110,7 +128,23 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
         blendDistance: 125
       }
     ],
-    motion: "static"
+    motion: "static",
+    staticCollisionVolumes: [
+      { localCenterX: 0, localCenterY: 5, localCenterZ: 0, halfX: 34, halfY: 5, halfZ: 24 },
+      { localCenterX: 0, localCenterY: 18, localCenterZ: 0, halfX: 22, halfY: 8, halfZ: 14 },
+      { localCenterX: -26, localCenterY: 12, localCenterZ: -18, halfX: 6, halfY: 14, halfZ: 6 },
+      { localCenterX: 26, localCenterY: 12, localCenterZ: -18, halfX: 6, halfY: 14, halfZ: 6 },
+      { localCenterX: -26, localCenterY: 12, localCenterZ: 18, halfX: 6, halfY: 14, halfZ: 6 },
+      { localCenterX: 26, localCenterY: 12, localCenterZ: 18, halfX: 6, halfY: 14, halfZ: 6 }
+    ],
+    staticNavigationSurfaces: [
+      { localCenterX: 0, localTopY: 5, localCenterZ: 0, halfX: 34, halfZ: 24 },
+      { localCenterX: 0, localTopY: 21, localCenterZ: 0, halfX: 22, halfZ: 14 },
+      { localCenterX: -26, localTopY: 26, localCenterZ: -18, halfX: 6, halfZ: 6 },
+      { localCenterX: 26, localTopY: 26, localCenterZ: -18, halfX: 6, halfZ: 6 },
+      { localCenterX: -26, localTopY: 26, localCenterZ: 18, halfX: 6, halfZ: 6 },
+      { localCenterX: 26, localTopY: 26, localCenterZ: 18, halfX: 6, halfZ: 6 }
+    ]
   },
   {
     id: "drifting-test-citadel",
@@ -133,7 +167,7 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
     driftY: 16,
     driftZ: 34,
     driftFrequency: 0.175,
-    carrierVolumes: [
+    referenceFrameVolumes: [
       {
         id: "drifting-citadel.main-deck",
         shape: "box",
@@ -184,6 +218,29 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
         halfY: 12,
         halfZ: 40
       }
+    ],
+    pilotConsoleSockets: [
+      {
+        id: "drifting-citadel.console.foredeck",
+        localX: 0,
+        localY: 12,
+        localZ: -8,
+        interactRadius: 3,
+        preferredReferenceFrameVolumeId: "drifting-citadel.main-deck",
+        visualMarker: {
+          geometry: "box",
+          sizeX: 1.2,
+          sizeY: 1.2,
+          sizeZ: 1.2,
+          color: 0xf2a65a,
+          roughness: 0.45,
+          metalness: 0.15
+        }
+      }
+    ],
+    movingNavigationSurfaces: [
+      { localCenterX: 0, localTopY: 9, localCenterZ: 0, halfX: 42, halfZ: 28 },
+      { localCenterX: 0, localTopY: 28, localCenterZ: 0, halfX: 22, halfZ: 14 }
     ]
   },
   {
@@ -202,14 +259,15 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
     influenceRadius: 24,
     environmentId: "void.neutral",
     environmentPresetId: ENVIRONMENT_PRESET_VOID_NEUTRAL,
+    renderArchetypeScalePct: 100,
     motion: "drift",
     driftX: 28,
     driftY: 0,
     driftZ: 0,
     driftFrequency: 0.32,
-    carrierVolumes: [
+    referenceFrameVolumes: [
       {
-        id: "single-volume-moving-slab.carrier",
+        id: "single-volume-moving-slab.reference-frame",
         shape: "box",
         localX: 0,
         localY: 4,
@@ -218,6 +276,90 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
         halfY: 40,
         halfZ: 50
       }
+    ],
+    pilotConsoleSockets: [
+      {
+        id: "single-volume-moving-slab.console",
+        localX: 0,
+        localY: 2,
+        localZ: -6,
+        interactRadius: 3.25,
+        preferredReferenceFrameVolumeId: "single-volume-moving-slab.reference-frame",
+        visualMarker: {
+          geometry: "box",
+          sizeX: 1.2,
+          sizeY: 1.2,
+          sizeZ: 1.2,
+          color: 0xf2a65a,
+          roughness: 0.45,
+          metalness: 0.15
+        }
+      }
+    ],
+    movingNavigationSurfaces: [
+      { localCenterX: 0, localTopY: 0.5, localCenterZ: 0, halfX: 60, halfZ: 35 }
+    ]
+  },
+  {
+    id: "pilotable-flat-raft",
+    mapInstanceIds: ["map-a"],
+    pid: 10_006,
+    archetypeId: 6,
+    kind: "movingTestPlatform",
+    kindId: LOCATION_KIND_MOVING_TEST_PLATFORM,
+    modelId: MODEL_ID_LOCATION_MOVING_TEST_PLATFORM,
+    baseX: 280,
+    baseY: 54,
+    baseZ: 32,
+    baseYaw: 0,
+    streamingRadius: 650,
+    influenceRadius: 26,
+    environmentId: "void.neutral",
+    environmentPresetId: ENVIRONMENT_PRESET_VOID_NEUTRAL,
+    renderArchetypeScalePct: 25,
+    motion: "drift",
+    driftX: 0,
+    driftY: 0,
+    driftZ: 0,
+    driftFrequency: 0,
+    movingCollisionHalfExtents: {
+      halfX: 15,
+      halfY: 0.5,
+      halfZ: 8.75
+    },
+    referenceFrameVolumes: [
+      {
+        id: "pilotable-flat-raft.reference-frame",
+        shape: "box",
+        localX: 0,
+        localY: 1.5,
+        localZ: 0,
+        halfX: 16,
+        halfY: 8,
+        halfZ: 10
+      }
+    ],
+    pilotConsoleSockets: [
+      {
+        id: "pilotable-flat-raft.console",
+        localX: 0,
+        localY: 1.5,
+        localZ: 0,
+        interactRadius: 3.5,
+        preferredReferenceFrameVolumeId: "pilotable-flat-raft.reference-frame",
+        visualMarker: {
+          geometry: "box",
+          sizeX: 1.2,
+          sizeY: 1.2,
+          sizeZ: 1.2,
+          color: 0xf2a65a,
+          roughness: 0.45,
+          metalness: 0.15
+        }
+      }
+    ],
+    movingNavigationSurfaces: [
+      { localCenterX: 0, localTopY: 0.125, localCenterZ: 0, halfX: 10, halfZ: 5 }
     ]
   },
   {
@@ -250,7 +392,15 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
         blendDistance: 80
       }
     ],
-    motion: "static"
+    motion: "static",
+    staticCollisionVolumes: [
+      { localCenterX: 0, localCenterY: 2, localCenterZ: 0, halfX: 42, halfY: 2, halfZ: 42 },
+      { localCenterX: 0, localCenterY: 10, localCenterZ: -34, halfX: 12, halfY: 6, halfZ: 3 }
+    ],
+    staticNavigationSurfaces: [
+      { localCenterX: 0, localTopY: 2, localCenterZ: 0, halfX: 42, halfZ: 42 },
+      { localCenterX: 0, localTopY: 16, localCenterZ: -34, halfX: 12, halfZ: 3 }
+    ]
   },
   {
     id: "transfer-void-pad",
@@ -282,7 +432,15 @@ const VOID_LOCATION_DEFINITIONS: readonly LocationRootDefinition[] = [
         blendDistance: 120
       }
     ],
-    motion: "static"
+    motion: "static",
+    staticCollisionVolumes: [
+      { localCenterX: 0, localCenterY: 2, localCenterZ: 0, halfX: 42, halfY: 2, halfZ: 42 },
+      { localCenterX: 0, localCenterY: 10, localCenterZ: -34, halfX: 12, halfY: 6, halfZ: 3 }
+    ],
+    staticNavigationSurfaces: [
+      { localCenterX: 0, localTopY: 2, localCenterZ: 0, halfX: 42, halfZ: 42 },
+      { localCenterX: 0, localTopY: 16, localCenterZ: -34, halfX: 12, halfZ: 3 }
+    ]
   }
 ];
 
@@ -356,7 +514,7 @@ const MOVING_LOCATION_COLLISION_EXTENTS = new Map([
 ]);
 
 export function initWorldData(): void {
-  injectLocationDefinitions(VOID_LOCATION_DEFINITIONS, DEFAULT_VOID_SPAWN_ANCHOR);
+  injectLocationDefinitions(WORLD_ANCHOR_DEFINITIONS, DEFAULT_VOID_SPAWN_ANCHOR);
   injectEnvironmentVolumeDefinitions(VOID_ENVIRONMENT_VOLUME_DEFINITIONS);
   injectMovingLocationCollisionExtents(MOVING_LOCATION_COLLISION_EXTENTS);
 }

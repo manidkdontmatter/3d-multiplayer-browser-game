@@ -20,15 +20,17 @@ import {
 } from "three";
 import {
   buildLocationTerrainConfig,
+  getLocationCraftBenchSockets,
   buildTerrainMeshData,
-  getLocationDefinitionByArchetypeId
+  getLocationDefinitionByArchetypeId,
+  getLocationPilotConsoleSockets,
+  getLocationReferenceFrameVolumes
 } from "../../../shared/index";
-import type { CarrierVolumeDefinition } from "../../../shared/index";
+import type { ReferenceFrameVolumeDefinition } from "../../../shared/index";
 import type { LocationRootState, WorldEntityState } from "../types";
 import {
-  getEntityVisual,
-  getLocationVisual,
-  type LocationVisualDef
+  getRenderArchetype,
+  getLocationVisual
 } from "./VisualRegistry";
 
 const LOCATION_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -40,12 +42,12 @@ let LOCATION_PRESENTATION_SMOOTH_ENABLED = true;
 
 interface LocationVisual {
   group: Group;
-  locationPid: number;
+  worldAnchorId: number;
   lastSeenMs: number;
 }
 
 export class WorldEntityVisualSystem {
-  private readonly worldEntities = new Map<number, Mesh>();
+  private readonly worldEntities = new Map<number, Group>();
   private readonly locations = new Map<number, LocationVisual>();
   private readonly renderedLocationByPid = new Map<
     number,
@@ -70,11 +72,11 @@ export class WorldEntityVisualSystem {
         group.position.set(root.x, root.y, root.z);
         this.quatScratch.set(root.rotation.x, root.rotation.y, root.rotation.z, root.rotation.w);
         group.setRotationFromQuaternion(this.quatScratch);
-        visual = { group, locationPid: root.locationPid, lastSeenMs: now };
+        visual = { group, worldAnchorId: root.worldAnchorId, lastSeenMs: now };
         this.locations.set(root.nid, visual);
         this.scene.add(group);
       }
-      visual.locationPid = root.locationPid;
+      visual.worldAnchorId = root.worldAnchorId;
       visual.lastSeenMs = now;
       visual.group.visible = true;
       this.quatScratch.set(root.rotation.x, root.rotation.y, root.rotation.z, root.rotation.w);
@@ -93,7 +95,7 @@ export class WorldEntityVisualSystem {
         visual.group.position.lerp(this.vectorScratch, alpha);
         visual.group.quaternion.slerp(this.quatScratch, alpha);
       }
-      this.renderedLocationByPid.set(visual.locationPid, {
+      this.renderedLocationByPid.set(visual.worldAnchorId, {
         x: visual.group.position.x,
         y: visual.group.position.y,
         z: visual.group.position.z,
@@ -131,7 +133,7 @@ export class WorldEntityVisualSystem {
       return cached;
     }
     for (const visual of this.locations.values()) {
-      if (visual.locationPid !== locationPid || !visual.group.visible) {
+      if (visual.worldAnchorId !== locationPid || !visual.group.visible) {
         continue;
       }
       return {
@@ -190,43 +192,37 @@ export class WorldEntityVisualSystem {
   public syncWorldEntities(entities: WorldEntityState[]): void {
     const activeNids = new Set<number>();
     for (const entity of entities) {
-      const visual = getEntityVisual(entity.modelId);
-      if (!visual) {
+      const archetype = getRenderArchetype(entity.renderArchetypeId);
+      if (!archetype) {
         continue;
       }
       activeNids.add(entity.nid);
-      let mesh = this.worldEntities.get(entity.nid);
-      if (!mesh) {
-        mesh = new Mesh(
-          this.buildGeometry(visual.geometry, visual.geometryParams),
-          new MeshStandardMaterial({
-            color: visual.color,
-            roughness: visual.roughness,
-            metalness: visual.metalness,
-            emissive: visual.emissive ?? 0x000000,
-            emissiveIntensity: visual.emissiveIntensity ?? 0
-          })
-        );
-        this.worldEntities.set(entity.nid, mesh);
-        this.scene.add(mesh);
+      let group = this.worldEntities.get(entity.nid);
+      if (!group) {
+        group = this.buildRuntimeEntityVisualGroup(entity);
+        this.worldEntities.set(entity.nid, group);
+        this.scene.add(group);
       }
       if (entity.health > 0 && entity.maxHealth > 0) {
         const healthRatio = Math.max(0, Math.min(1, entity.health / entity.maxHealth));
-        const material = mesh.material as MeshStandardMaterial;
-        material.color.set(visual.color).multiplyScalar(0.45 + healthRatio * 0.55);
+        const tintMultiplier = 0.45 + healthRatio * 0.55;
+        this.applyRuntimeEntityTint(group, entity.tintColorRgb, tintMultiplier);
+      } else {
+        this.applyRuntimeEntityTint(group, entity.tintColorRgb, 1);
       }
-      mesh.position.set(entity.x, entity.y, entity.z);
+      group.position.set(entity.x, entity.y, entity.z);
       this.quatScratch.set(entity.rotationX, entity.rotationY, entity.rotationZ, entity.rotationW);
-      mesh.setRotationFromQuaternion(this.quatScratch);
+      group.setRotationFromQuaternion(this.quatScratch);
+      const uniformScale = Math.max(0.01, entity.uniformScalePct / 100);
+      group.scale.set(uniformScale, uniformScale, uniformScale);
     }
 
-    for (const [nid, mesh] of this.worldEntities) {
+    for (const [nid, group] of this.worldEntities) {
       if (activeNids.has(nid)) {
         continue;
       }
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as MeshStandardMaterial).dispose();
+      this.scene.remove(group);
+      this.disposeObjectTree(group);
       this.worldEntities.delete(nid);
     }
   }
@@ -238,12 +234,43 @@ export class WorldEntityVisualSystem {
     }
     this.locations.clear();
 
-    for (const mesh of this.worldEntities.values()) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as MeshStandardMaterial).dispose();
+    for (const group of this.worldEntities.values()) {
+      this.scene.remove(group);
+      this.disposeObjectTree(group);
     }
     this.worldEntities.clear();
+  }
+
+  private buildRuntimeEntityVisualGroup(entity: WorldEntityState): Group {
+    const group = new Group();
+    const archetype = getRenderArchetype(entity.renderArchetypeId);
+    if (!archetype || archetype.nodes.length <= 0) {
+      return group;
+    }
+    this.addRenderArchetypeChildren(group, archetype.id);
+    return group;
+  }
+
+  private applyRuntimeEntityTint(group: Group, tintColorRgb: number, scalar: number): void {
+    const tint = Math.max(0, Math.min(0xffffff, Math.floor(tintColorRgb)));
+    group.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.material) {
+        return;
+      }
+      if (Array.isArray(mesh.material)) {
+        for (const material of mesh.material) {
+          if ("color" in material) {
+            (material as MeshStandardMaterial).color.setHex(tint).multiplyScalar(scalar);
+          }
+        }
+        return;
+      }
+      const material = mesh.material as MeshStandardMaterial;
+      if ("color" in material) {
+        material.color.setHex(tint).multiplyScalar(scalar);
+      }
+    });
   }
 
   private buildGeometry(type: string, params: number[]): BufferGeometry {
@@ -265,34 +292,36 @@ export class WorldEntityVisualSystem {
 
   private createLocationGroup(root: LocationRootState): Group {
     const group = new Group();
-    const definition = getLocationDefinitionByArchetypeId(root.locationArchetypeId);
+    const definition = getLocationDefinitionByArchetypeId(root.worldAnchorArchetypeId);
     if (!definition) {
       return group;
     }
 
     if (definition.kind === "terrainIsland") {
       this.addTerrainIslandChildren(group, definition.archetypeId);
+      this.addCraftBenchPlaceholders(group, definition);
       return group;
     }
     if (definition.kind === "staticCastle") {
-      const vis = getLocationVisual("staticCastle");
-      this.addCastleChildren(group, vis?.castleBaseColor ?? 0x24222d, vis?.castleAccentColor ?? 0x5d526e);
+      this.addRenderArchetypeChildren(group, definition.modelId);
+      this.addCraftBenchPlaceholders(group, definition);
       return group;
     }
     if (definition.kind === "movingCastle") {
-      const vis = getLocationVisual("movingCastle");
-      this.addCastleChildren(group, vis?.castleBaseColor ?? 0x253d55, vis?.castleAccentColor ?? 0x75a7c4);
-      this.addCarrierVolumeDebug(group, definition.carrierVolumes);
+      this.addRenderArchetypeChildren(group, definition.modelId);
+      this.addReferenceFrameVolumeDebug(group, getLocationReferenceFrameVolumes(definition));
+      this.addCraftBenchPlaceholders(group, definition);
       return group;
     }
     if (definition.kind === "movingTestPlatform") {
-      const vis = getLocationVisual("movingTestPlatform");
-      this.addMovingTestPlatformChildren(group, vis);
-      this.addCarrierVolumeDebug(group, definition.carrierVolumes);
+      this.addRenderArchetypeChildren(group, definition.modelId, definition.renderArchetypeScalePct ?? 100);
+      this.addReferenceFrameVolumeDebug(group, getLocationReferenceFrameVolumes(definition));
+      this.addPilotConsolePlaceholder(group, definition);
+      this.addCraftBenchPlaceholders(group, definition);
       return group;
     }
-    const arenaVis = getLocationVisual("testArena");
-    this.addArenaChildren(group, arenaVis);
+    this.addRenderArchetypeChildren(group, definition.modelId);
+    this.addCraftBenchPlaceholders(group, definition);
     return group;
   }
 
@@ -336,39 +365,29 @@ export class WorldEntityVisualSystem {
     group.add(bowl);
   }
 
-  private addCastleChildren(group: Group, baseColor: number, accentColor: number): void {
-    const baseMaterial = new MeshStandardMaterial({ color: baseColor, roughness: 0.86, metalness: 0.05 });
-    const accentMaterial = new MeshStandardMaterial({ color: accentColor, roughness: 0.76, metalness: 0.12 });
-    this.addBox(group, 0, 0, 0, 68, 10, 48, baseMaterial);
-    this.addBox(group, 0, 18, 0, 42, 16, 28, baseMaterial);
-    this.addBox(group, -52, 12, -34, 12, 28, 12, accentMaterial);
-    this.addBox(group, 52, 12, -34, 12, 28, 12, accentMaterial);
-    this.addBox(group, -52, 12, 34, 12, 28, 12, accentMaterial);
-    this.addBox(group, 52, 12, 34, 12, 28, 12, accentMaterial);
-    this.addBox(group, 0, -8, 0, 92, 5, 64, accentMaterial);
-  }
-
-  private addMovingTestPlatformChildren(group: Group, vis?: LocationVisualDef): void {
-    const slabMaterial = new MeshStandardMaterial({
-      color: vis?.slabColor ?? 0x7fc7d9,
-      roughness: 0.72,
-      metalness: 0.08
-    });
-    const stripeMaterial = new MeshStandardMaterial({
-      color: vis?.stripeColor ?? 0xf2d16b,
-      roughness: 0.68,
-      metalness: 0.05
-    });
-    this.addBox(group, 0, 0, 0, 120, 1, 70, slabMaterial);
-    this.addBox(group, -40, 0.55, 0, 1.25, 0.1, 70.2, stripeMaterial);
-    this.addBox(group, 40, 0.55, 0, 1.25, 0.1, 70.2, stripeMaterial);
-  }
-
-  private addArenaChildren(group: Group, vis?: LocationVisualDef): void {
-    const material = new MeshStandardMaterial({ color: vis?.arenaColor ?? 0x4e625f, roughness: 0.84, metalness: 0.08 });
-    const accent = new MeshStandardMaterial({ color: vis?.arenaAccentColor ?? 0xd8b691, roughness: 0.82, metalness: 0.1 });
-    this.addBox(group, 0, 0, 0, 84, 4, 84, material);
-    this.addBox(group, 0, 10, -68, 24, 12, 6, accent);
+  private addRenderArchetypeChildren(group: Group, renderArchetypeId: number, scalePct = 100): void {
+    const archetype = getRenderArchetype(renderArchetypeId);
+    if (!archetype || archetype.nodes.length <= 0) {
+      return;
+    }
+    const nodeScale = Math.max(0.01, Math.min(10, scalePct / 100));
+    for (const node of archetype.nodes) {
+      const material = new MeshStandardMaterial({
+        color: node.color,
+        roughness: node.roughness,
+        metalness: node.metalness,
+        emissive: node.emissive ?? 0x000000,
+        emissiveIntensity: node.emissiveIntensity ?? 0
+      });
+      const mesh = new Mesh(this.buildGeometry(node.geometry, node.geometryParams), material);
+      mesh.position.set(
+        (node.localPosition?.x ?? 0) * nodeScale,
+        (node.localPosition?.y ?? 0) * nodeScale,
+        (node.localPosition?.z ?? 0) * nodeScale
+      );
+      mesh.scale.set(nodeScale, nodeScale, nodeScale);
+      group.add(mesh);
+    }
   }
 
   private addBox(
@@ -386,9 +405,9 @@ export class WorldEntityVisualSystem {
     group.add(mesh);
   }
 
-  private addCarrierVolumeDebug(
+  private addReferenceFrameVolumeDebug(
     group: Group,
-    volumes: readonly CarrierVolumeDefinition[] | undefined
+    volumes: readonly ReferenceFrameVolumeDefinition[] | undefined
   ): void {
     if (!volumes || volumes.length === 0) {
       return;
@@ -410,10 +429,61 @@ export class WorldEntityVisualSystem {
               Math.max(0, volume.halfZ ?? 0) * 2
             );
       const mesh = new Mesh(geometry, material);
-      mesh.name = `carrier-volume-debug.${volume.id}`;
+      mesh.name = `reference-frame-volume-debug.${volume.id}`;
       mesh.position.set(volume.localX, volume.localY, volume.localZ);
       mesh.rotation.y = volume.localYaw ?? 0;
       group.add(mesh);
+    }
+  }
+
+  private addPilotConsolePlaceholder(
+    group: Group,
+    definition: NonNullable<ReturnType<typeof getLocationDefinitionByArchetypeId>>
+  ): void {
+    const sockets = getLocationPilotConsoleSockets(definition);
+    for (const socket of sockets) {
+      const marker = socket.visualMarker;
+      if (!marker || marker.geometry !== "box") {
+        continue;
+      }
+      const base = new Mesh(
+        new BoxGeometry(marker.sizeX, marker.sizeY, marker.sizeZ),
+        new MeshStandardMaterial({
+          color: marker.color,
+          roughness: marker.roughness ?? 0.45,
+          metalness: marker.metalness ?? 0.15
+        })
+      );
+      base.position.set(socket.localX, socket.localY, socket.localZ);
+      base.name = `pilot-console-placeholder.${socket.id}`;
+      group.add(base);
+    }
+  }
+
+  private addCraftBenchPlaceholders(
+    group: Group,
+    definition: NonNullable<ReturnType<typeof getLocationDefinitionByArchetypeId>>
+  ): void {
+    const sockets = getLocationCraftBenchSockets(definition);
+    if (sockets.length <= 0) {
+      return;
+    }
+    for (const socket of sockets) {
+      const marker = socket.visualMarker;
+      if (!marker || marker.geometry !== "box") {
+        continue;
+      }
+      const base = new Mesh(
+        new BoxGeometry(marker.sizeX, marker.sizeY, marker.sizeZ),
+        new MeshStandardMaterial({
+          color: marker.color,
+          roughness: marker.roughness ?? 0.55,
+          metalness: marker.metalness ?? 0.08
+        })
+      );
+      base.position.set(socket.localX, socket.localY, socket.localZ);
+      base.name = `craft-bench-placeholder.${socket.id}`;
+      group.add(base);
     }
   }
 

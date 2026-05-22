@@ -298,12 +298,12 @@ function readInventoryItem(payload: BlueprintComponentPayload | undefined): {
   stackMax: number;
 } | null {
   if (!isRecord(payload)) return null;
-  const rawCategory = typeof payload.category === "string" ? payload.category : "";
-  if (rawCategory !== "consumable" && rawCategory !== "equipment" && rawCategory !== "material") {
-    return null;
-  }
+  const rawCategory = typeof payload.category === "string" ? payload.category : "material";
+  const category = rawCategory === "consumable" || rawCategory === "equipment" || rawCategory === "material" || rawCategory === "quest"
+    ? rawCategory
+    : "material";
   return {
-    category: rawCategory,
+    category,
     modelId: readFiniteNumber(payload.modelId, 0),
     stackMax: Math.max(1, Math.floor(readFiniteNumber(payload.stackMax, 1)))
   };
@@ -335,7 +335,8 @@ function readConsumableEffect(payload: BlueprintComponentPayload | undefined): I
           key,
           label,
           restoreHealth: readOptionalFiniteNumber(rawAction.restoreHealth),
-          consumeQuantity: Math.max(1, Math.floor(readFiniteNumber(rawAction.consumeQuantity, 1)))
+          consumeQuantity: Math.max(1, Math.floor(readFiniteNumber(rawAction.consumeQuantity, 1))),
+          effects: readConsumableActionEffects(rawAction.effects)
         };
       })
       .filter((action): action is NonNullable<typeof action> => Boolean(action));
@@ -355,10 +356,73 @@ function readConsumableEffect(payload: BlueprintComponentPayload | undefined): I
         key: "default",
         label: actionLabel,
         restoreHealth,
-        consumeQuantity: consumeQuantity === undefined ? 1 : Math.max(1, Math.floor(consumeQuantity))
+        consumeQuantity: consumeQuantity === undefined ? 1 : Math.max(1, Math.floor(consumeQuantity)),
+        effects: readConsumableActionEffects(payload.effects)
       }
     ]
   };
+}
+
+function readConsumableActionEffects(
+  payload: unknown
+): Array<
+  { type: "restore_health"; amount: number }
+  | { type: "set_player_render_appearance"; renderArchetypeId?: number; materialVariantId?: number; tintColorRgb?: number; uniformScalePct?: number }
+  | { type: "set_equipped_slot_tint"; slot: "weapon" | "head" | "body" | "legs" | "accessory"; tintColorRgb: number }
+> | undefined {
+  if (!Array.isArray(payload)) {
+    return undefined;
+  }
+  const effects: Array<
+    { type: "restore_health"; amount: number }
+    | { type: "set_player_render_appearance"; renderArchetypeId?: number; materialVariantId?: number; tintColorRgb?: number; uniformScalePct?: number }
+    | { type: "set_equipped_slot_tint"; slot: "weapon" | "head" | "body" | "legs" | "accessory"; tintColorRgb: number }
+  > = [];
+  for (const raw of payload) {
+    if (!isRecord(raw)) {
+      continue;
+    }
+    if (raw.type === "restore_health") {
+      const amount = Math.max(0, Math.floor(readFiniteNumber(raw.amount, 0)));
+      effects.push({ type: "restore_health", amount });
+      continue;
+    }
+    if (raw.type === "set_player_render_appearance") {
+      const effect: {
+        type: "set_player_render_appearance";
+        renderArchetypeId?: number;
+        materialVariantId?: number;
+        tintColorRgb?: number;
+        uniformScalePct?: number;
+      } = { type: "set_player_render_appearance" };
+      if (raw.renderArchetypeId !== undefined) {
+        effect.renderArchetypeId = Math.max(0, Math.floor(readFiniteNumber(raw.renderArchetypeId, 0)));
+      }
+      if (raw.materialVariantId !== undefined) {
+        effect.materialVariantId = Math.max(0, Math.floor(readFiniteNumber(raw.materialVariantId, 0)));
+      }
+      if (raw.tintColorRgb !== undefined) {
+        effect.tintColorRgb = Math.max(0, Math.min(0xffffff, Math.floor(readFiniteNumber(raw.tintColorRgb, 0))));
+      }
+      if (raw.uniformScalePct !== undefined) {
+        effect.uniformScalePct = Math.max(1, Math.min(1000, Math.floor(readFiniteNumber(raw.uniformScalePct, 100))));
+      }
+      effects.push(effect);
+      continue;
+    }
+    if (raw.type === "set_equipped_slot_tint") {
+      const slot = raw.slot;
+      if (slot !== "weapon" && slot !== "head" && slot !== "body" && slot !== "legs" && slot !== "accessory") {
+        continue;
+      }
+      effects.push({
+        type: "set_equipped_slot_tint",
+        slot,
+        tintColorRgb: Math.max(0, Math.min(0xffffff, Math.floor(readFiniteNumber(raw.tintColorRgb, 0xffffff))))
+      });
+    }
+  }
+  return effects.length > 0 ? effects : undefined;
 }
 
 function readPlatformMotion(payload: BlueprintComponentPayload | undefined): PlatformDefinition | null {

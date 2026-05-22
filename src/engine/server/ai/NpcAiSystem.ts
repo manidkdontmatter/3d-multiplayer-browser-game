@@ -12,6 +12,11 @@ import {
   PHYSICS_GROUP_CHARACTER,
   quaternionFromYawPitchRoll
 } from "../../shared/index";
+import {
+  getNpcBehaviorTintColorRgb,
+  type EntityAppearancePatch,
+  type NpcBehaviorState
+} from "../../shared/appearance/AppearancePolicy";
 import type {
   CharacterArchetypeDefinition,
   NpcSpawnDefinition
@@ -25,8 +30,6 @@ import type {
 } from "../navigation/NavigationService";
 
 export type NpcLifecycleState = "active" | "inactive" | "hibernating";
-export type NpcBehaviorState = "idle" | "patrol" | "wander" | "chase" | "attack" | "flee";
-
 export type NpcCharacter = {
   readonly eid: number;
   readonly body: RAPIER.RigidBody;
@@ -115,6 +118,7 @@ export interface NpcAiSystemOptions {
   readonly hasPerceptionTargets: () => boolean;
   readonly resolvePerceptionTargetByColliderHandle: (colliderHandle: number) => AiVisibleTarget | null;
   readonly usePrimaryAbilityByEid: (eid: number) => void;
+  readonly applyEntityAppearanceByEid: (eid: number, patch: EntityAppearancePatch) => boolean;
   readonly aiTickIntervalSeconds: number;
   readonly perceptionTickIntervalSeconds: number;
   readonly pathReplanIntervalSeconds: number;
@@ -197,6 +201,7 @@ export class NpcAiSystem {
         }
       };
       this.npcs.push(runtime);
+      this.applyBehaviorTint(runtime);
       this.npcByColliderHandle.set(character.collider.handle, runtime);
       this.options.onNpcSpawned(character.eid, character.collider.handle);
       this.npcEids.push(character.eid);
@@ -231,6 +236,7 @@ export class NpcAiSystem {
       this.behaviorTicks += 1;
       this.tickBehaviorTree(guard, elapsedSeconds, profile);
       this.applyLocalSeparation(guard);
+      this.applyBehaviorTint(guard);
       guard.blackboard.nextThinkAtSeconds = this.scheduleNext(
         guard.blackboard.nextThinkAtSeconds,
         elapsedSeconds,
@@ -1011,6 +1017,11 @@ export class NpcAiSystem {
   private markPathProgressReset(guard: NpcRuntime, elapsedSeconds: number): void {
     guard.blackboard.lastPathProgressAtSeconds = elapsedSeconds;
     guard.blackboard.lastPathDistance = Number.POSITIVE_INFINITY;
+  }
+
+  private applyBehaviorTint(guard: NpcRuntime): void {
+    const tintColorRgb = getNpcBehaviorTintColorRgb(guard.blackboard.behaviorState);
+    this.options.applyEntityAppearanceByEid(guard.character.eid, { tintColorRgb });
   }
 
   private supportsBehaviorTree(behaviorTreeId: string): boolean {

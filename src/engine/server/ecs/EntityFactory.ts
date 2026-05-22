@@ -8,6 +8,15 @@ import {
   MOVEMENT_MODE_GROUNDED,
   clampHotbarSlotIndex
 } from "../../shared/index";
+import {
+  DEFAULT_MATERIAL_VARIANT_ID,
+  DEFAULT_TINT_COLOR_RGB,
+  DEFAULT_UNIFORM_SCALE_PCT,
+  sanitizeMaterialVariantId,
+  sanitizeRenderArchetypeId,
+  sanitizeTintColorRgb,
+  sanitizeUniformScalePct
+} from "../../shared/appearance/AppearancePolicy";
 import { normalizeSortedUniqueUInt } from "../../shared/sortedNumberList";
 import {
   ComponentRegistry,
@@ -20,6 +29,20 @@ import type { WorldWithComponents } from "./SimulationEcsTypes";
 
 export interface EntityFactoryOverrides {
   modelId?: number;
+  renderArchetypeId?: number;
+  materialVariantId?: number;
+  tintColorRgb?: number;
+  uniformScalePct?: number;
+  equippedWeaponArchetypeId?: number;
+  equippedWeaponTintColorRgb?: number;
+  equippedHeadArchetypeId?: number;
+  equippedHeadTintColorRgb?: number;
+  equippedBodyArchetypeId?: number;
+  equippedBodyTintColorRgb?: number;
+  equippedLegsArchetypeId?: number;
+  equippedLegsTintColorRgb?: number;
+  equippedAccessoryArchetypeId?: number;
+  equippedAccessoryTintColorRgb?: number;
   position?: { x: number; y: number; z: number };
   rotation?: { x: number; y: number; z: number; w: number };
   health?: number;
@@ -53,6 +76,13 @@ export interface EntityFactoryOverrides {
   locationEnvironmentId?: number;
   locationStreamingRadius?: number;
   locationInfluenceRadius?: number;
+  worldAnchorId?: number;
+  worldAnchorKind?: number;
+  worldAnchorArchetypeId?: number;
+  worldAnchorSeed?: number;
+  worldAnchorEnvironmentId?: number;
+  worldAnchorStreamingRadius?: number;
+  worldAnchorInfluenceRadius?: number;
   // Projectile
   projectileOwnerNid?: number;
   projectileKind?: number;
@@ -111,6 +141,20 @@ export class EntityFactory {
     // Set default base values
     c.NetworkId.value[eid] = 0;
     c.ModelId.value[eid] = overrides?.modelId ?? 0;
+    c.RenderArchetypeId.value[eid] = sanitizeRenderArchetypeId(overrides?.renderArchetypeId ?? (overrides?.modelId ?? 0));
+    c.MaterialVariantId.value[eid] = sanitizeMaterialVariantId(overrides?.materialVariantId ?? DEFAULT_MATERIAL_VARIANT_ID);
+    c.TintColorRgb.value[eid] = sanitizeTintColorRgb(overrides?.tintColorRgb ?? DEFAULT_TINT_COLOR_RGB);
+    c.UniformScalePct.value[eid] = sanitizeUniformScalePct(overrides?.uniformScalePct ?? DEFAULT_UNIFORM_SCALE_PCT);
+    c.EquippedWeaponArchetypeId.value[eid] = sanitizeRenderArchetypeId(overrides?.equippedWeaponArchetypeId ?? 0);
+    c.EquippedWeaponTintColorRgb.value[eid] = sanitizeTintColorRgb(overrides?.equippedWeaponTintColorRgb ?? DEFAULT_TINT_COLOR_RGB);
+    c.EquippedHeadArchetypeId.value[eid] = sanitizeRenderArchetypeId(overrides?.equippedHeadArchetypeId ?? 0);
+    c.EquippedHeadTintColorRgb.value[eid] = sanitizeTintColorRgb(overrides?.equippedHeadTintColorRgb ?? DEFAULT_TINT_COLOR_RGB);
+    c.EquippedBodyArchetypeId.value[eid] = sanitizeRenderArchetypeId(overrides?.equippedBodyArchetypeId ?? 0);
+    c.EquippedBodyTintColorRgb.value[eid] = sanitizeTintColorRgb(overrides?.equippedBodyTintColorRgb ?? DEFAULT_TINT_COLOR_RGB);
+    c.EquippedLegsArchetypeId.value[eid] = sanitizeRenderArchetypeId(overrides?.equippedLegsArchetypeId ?? 0);
+    c.EquippedLegsTintColorRgb.value[eid] = sanitizeTintColorRgb(overrides?.equippedLegsTintColorRgb ?? DEFAULT_TINT_COLOR_RGB);
+    c.EquippedAccessoryArchetypeId.value[eid] = sanitizeRenderArchetypeId(overrides?.equippedAccessoryArchetypeId ?? 0);
+    c.EquippedAccessoryTintColorRgb.value[eid] = sanitizeTintColorRgb(overrides?.equippedAccessoryTintColorRgb ?? DEFAULT_TINT_COLOR_RGB);
     c.Position.x[eid] = overrides?.position?.x ?? 0;
     c.Position.y[eid] = overrides?.position?.y ?? 0;
     c.Position.z[eid] = overrides?.position?.z ?? 0;
@@ -124,13 +168,13 @@ export class EntityFactory {
     c.Health.max[eid] = overrides?.maxHealth ?? 0;
     c.ItemArchetypeId.value[eid] = overrides?.pickupDefinitionId ?? 0;
     c.ItemQuantity.value[eid] = overrides?.itemQuantity ?? 0;
-    c.LocationPid.value[eid] = overrides?.locationPid ?? 0;
-    c.LocationKind.value[eid] = overrides?.locationKind ?? 0;
-    c.LocationArchetypeId.value[eid] = overrides?.locationArchetypeId ?? 0;
-    c.LocationSeed.value[eid] = overrides?.locationSeed ?? 0;
-    c.LocationEnvironmentId.value[eid] = overrides?.locationEnvironmentId ?? 0;
-    c.LocationStreamingRadius.value[eid] = overrides?.locationStreamingRadius ?? 0;
-    c.LocationInfluenceRadius.value[eid] = overrides?.locationInfluenceRadius ?? 0;
+    c.LocationPid.value[eid] = overrides?.worldAnchorId ?? overrides?.locationPid ?? 0;
+    c.LocationKind.value[eid] = overrides?.worldAnchorKind ?? overrides?.locationKind ?? 0;
+    c.LocationArchetypeId.value[eid] = overrides?.worldAnchorArchetypeId ?? overrides?.locationArchetypeId ?? 0;
+    c.LocationSeed.value[eid] = overrides?.worldAnchorSeed ?? overrides?.locationSeed ?? 0;
+    c.LocationEnvironmentId.value[eid] = overrides?.worldAnchorEnvironmentId ?? overrides?.locationEnvironmentId ?? 0;
+    c.LocationStreamingRadius.value[eid] = overrides?.worldAnchorStreamingRadius ?? overrides?.locationStreamingRadius ?? 0;
+    c.LocationInfluenceRadius.value[eid] = overrides?.worldAnchorInfluenceRadius ?? overrides?.locationInfluenceRadius ?? 0;
     c.CharacterArchetypeId.value[eid] = overrides?.characterArchetypeId ?? 0;
     c.ControllerKind.value[eid] = overrides?.controllerKind ?? 0;
 

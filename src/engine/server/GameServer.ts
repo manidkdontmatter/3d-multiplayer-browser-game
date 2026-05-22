@@ -85,6 +85,9 @@ export class GameServer {
   private tickPhasePostSimulationMaxMs = 0;
   private tickPhaseNetworkAccumMs = 0;
   private tickPhaseNetworkMaxMs = 0;
+  private readonly inputDiagnosticsEnabled =
+    process.env.SERVER_INPUT_DIAGNOSTICS === "1" || process.env.SERVER_INPUT_DIAGNOSTICS === "true";
+  private tickCounter = 0;
 
   public constructor(context: Context, private readonly ipcChannel: MapProcessIpcChannel | null = null) {
     this.netDiagnostics = new ServerNetDiagnosticsCollector();
@@ -155,7 +158,9 @@ export class GameServer {
     if (!handshake || typeof handshake !== "object") {
       throw new Error("Handshake payload required.");
     }
-    const baseAuthKey = (handshake as { authKey?: unknown }).authKey;
+    const baseAuthKey =
+      (handshake as { accessKey?: unknown; authKey?: unknown }).accessKey
+      ?? (handshake as { accessKey?: unknown; authKey?: unknown }).authKey;
     const directAuthKey = typeof baseAuthKey === "string" ? baseAuthKey : undefined;
     const mapInstanceId = process.env.MAP_INSTANCE_ID;
     if (!this.ipcChannel?.isAvailable() || !mapInstanceId) {
@@ -274,11 +279,14 @@ export class GameServer {
     activeNpcs: number;
     inactiveNpcs: number;
     hibernatingNpcs: number;
+    pilotedReferenceFrames: number;
+    effectAuditSuccesses: Readonly<Record<string, number>>;
   } {
     return this.simulation.getRuntimeStats();
   }
 
   private tick(): void {
+    this.tickCounter += 1;
     const tickStart = performance.now();
     const now = performance.now();
     if (this.lastTickStartMs !== null) {
@@ -301,6 +309,19 @@ export class GameServer {
 
     const phaseDrainStart = performance.now();
     this.networkEventRouter.drainQueue();
+    if (this.inputDiagnosticsEnabled) {
+      const inputStats = this.networkEventRouter.consumeLastDrainInputStats();
+      if (inputStats.commandSets > 0 || inputStats.inputCommands > 0) {
+        const details = inputStats.byUserId
+          .map((entry) => `u${entry.userId}:sets=${entry.commandSets},inputs=${entry.inputCommands}`)
+          .join(" ");
+        console.log(
+          `[input-diag] tick=${this.tickCounter} commandSets=${inputStats.commandSets} inputCommands=${inputStats.inputCommands}${details.length > 0 ? ` ${details}` : ""}`
+        );
+      }
+    } else {
+      this.networkEventRouter.consumeLastDrainInputStats();
+    }
     const phaseDrainMs = performance.now() - phaseDrainStart;
     this.tickPhaseDrainQueueAccumMs += phaseDrainMs;
     if (phaseDrainMs > this.tickPhaseDrainQueueMaxMs) {
@@ -453,12 +474,18 @@ export class GameServer {
     const p95TickDurationMs = this.computeP95(this.tickDurationSamplesMs);
     const uptimeSeconds = Math.max(0, Math.floor((nowMs - this.serverStartAtMs) / 1000));
     const runtime = this.simulation.getRuntimeStats();
+    const pilotCount = runtime.pilotedReferenceFrames;
+    const effectAuditTop = Object.entries(runtime.effectAuditSuccesses)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([type, count]) => `${type}:${count}`)
+      .join(",");
     const targetTps = SERVER_TICK_MS > 0 ? 1000 / SERVER_TICK_MS : 0;
     const netDiagnostics = this.captureNetDiagnostics(Date.now());
     const netSummary = this.formatNetDiagnosticsSummary(netDiagnostics);
 
     console.log(
-      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} npcs(active/inactive/hibernating)=${runtime.activeNpcs}/${runtime.inactiveNpcs}/${runtime.hibernatingNpcs} projectiles=${runtime.activeProjectiles} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots} ${netSummary}`
+      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} npcs(active/inactive/hibernating)=${runtime.activeNpcs}/${runtime.inactiveNpcs}/${runtime.hibernatingNpcs} projectiles=${runtime.activeProjectiles} piloted_frames=${pilotCount} effect_top=${effectAuditTop || "none"} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots} ${netSummary}`
     );
 
     this.tickDurationAccumMs = 0;

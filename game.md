@@ -18,7 +18,7 @@
 # Setting
 - The main game world is a paranormal void dimension informally understood as an otherspace/praeterspace rather than outer space. It is void-centric: players fly between sparse floating places instead of traveling across a mainland. It is almost as if the entire game takes place in the astral realm.
 - The void contains regions with radically different atmospheres, from hellish and hostile to heavenly and peaceful. These regions are defined by complete environment presets rather than skyboxes alone: sky, fog, lighting, nebula layers, particle fields, post-processing, and later ambience audio.
-- Environment appearance is resolved by priority layers. The neutral void is the fallback, large authored void-region volumes define the broad area aesthetic, and smaller location/interior volumes override the broader region while blending smoothly at their boundaries.
+- Environment appearance is resolved by priority layers. The neutral void is the fallback, large procedural void-region volumes define the broad area aesthetic, and smaller location/interior volumes override the broader region while blending smoothly at their boundaries.
 - Environment volume blending is distance-based. Broad void-region and location atmosphere changes should fade over large distances so flying between areas feels gradual rather than snapping after a short threshold.
 - The primary void sky should be a space/paranormal sky system with region-specific starfields and nebula colors, not a normal Earth-atmosphere sky. Blue-sky island bubbles can exist, but even those are environment presets that blend through the same client-only sky/fog/VFX resolver.
 - The game should not be built around a normal planet, Earth, or a large mainland. Terrain exists only as rare floating islands.
@@ -48,9 +48,9 @@
 - When you die you simply respawn fully healed
 
 # World
-- The primary world is one huge void map composed of authored floating locations. A location can be a terrain island, castle, shrine, ruin, arena, mothership, airship, mobile base, platform cluster, or other large object.
+- The primary world is one huge void map composed of procedurally generated floating locations. A location can be a terrain island, castle, shrine, ruin, arena, mothership, airship, mobile base, platform cluster, or other large object.
 - There is no canonical mainland and no ocean-surrounded default terrain. Old mainland/ocean assumptions are deprecated unless a specific modded map intentionally uses them.
-- The void map is authored as a sparse set of major location roots, likely tens rather than thousands of major places. These roots are replicated and interest-managed so clients discover and stream nearby locations.
+- The void map is procedurally generated as a sparse set of major location roots, likely tens rather than thousands of major places. These roots are replicated and interest-managed so clients discover and stream nearby locations.
 - A location root is a lightweight authoritative object. Its children can be local/generated/rendered content such as model pieces, procedural terrain, crystal bowls, collision proxies, visual effects, and environment volumes.
 
 # UI

@@ -5,6 +5,15 @@
  */
 import { NType } from "../../shared/netcode";
 import { MOVEMENT_MODE_GROUNDED, sanitizeMovementMode, type MovementMode } from "../../shared/index";
+import {
+  DEFAULT_MATERIAL_VARIANT_ID,
+  DEFAULT_UNIFORM_SCALE_PCT,
+  DEFAULT_TINT_COLOR_RGB,
+  sanitizeMaterialVariantId,
+  sanitizeRenderArchetypeId,
+  sanitizeTintColorRgb,
+  sanitizeUniformScalePct
+} from "../../shared/appearance/AppearancePolicy";
 import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
 
 type NetEntity = {
@@ -12,12 +21,30 @@ type NetEntity = {
   ntype: NType.RuntimeEntity | NType.WorldAnchorEntity;
   x: number; y: number; z: number;
   modelId: number;
+  renderArchetypeId: number;
+  materialVariantId: number;
+  tintColorRgb: number;
+  uniformScalePct: number;
+  equippedWeaponArchetypeId: number;
+  equippedWeaponTintColorRgb: number;
+  equippedHeadArchetypeId: number;
+  equippedHeadTintColorRgb: number;
+  equippedBodyArchetypeId: number;
+  equippedBodyTintColorRgb: number;
+  equippedLegsArchetypeId: number;
+  equippedLegsTintColorRgb: number;
+  equippedAccessoryArchetypeId: number;
+  equippedAccessoryTintColorRgb: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
   movementMode: MovementMode;
   health: number; maxHealth: number;
   pickupDefinitionId: number; itemQuantity: number;
+  worldAnchorId: number;
+  worldAnchorKind: number; worldAnchorArchetypeId: number;
+  worldAnchorSeed: number; worldAnchorEnvironmentId: number;
+  worldAnchorStreamingRadius: number; worldAnchorInfluenceRadius: number;
   locationPid: number;
   locationKind: number; locationArchetypeId: number;
   locationSeed: number; locationEnvironmentId: number;
@@ -55,6 +82,20 @@ export class NetReplicationBridge {
       ntype: isLocationRoot ? NType.WorldAnchorEntity : NType.RuntimeEntity,
       x, y, z,
       modelId: this.c.ModelId.value[simEid] ?? 0,
+      renderArchetypeId: sanitizeRenderArchetypeId(this.c.RenderArchetypeId.value[simEid] ?? (this.c.ModelId.value[simEid] ?? 0)),
+      materialVariantId: sanitizeMaterialVariantId(this.c.MaterialVariantId.value[simEid] ?? DEFAULT_MATERIAL_VARIANT_ID),
+      tintColorRgb: sanitizeTintColorRgb(this.c.TintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB),
+      uniformScalePct: sanitizeUniformScalePct(this.c.UniformScalePct.value[simEid] ?? DEFAULT_UNIFORM_SCALE_PCT),
+      equippedWeaponArchetypeId: sanitizeRenderArchetypeId(this.c.EquippedWeaponArchetypeId.value[simEid] ?? 0),
+      equippedWeaponTintColorRgb: sanitizeTintColorRgb(this.c.EquippedWeaponTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB),
+      equippedHeadArchetypeId: sanitizeRenderArchetypeId(this.c.EquippedHeadArchetypeId.value[simEid] ?? 0),
+      equippedHeadTintColorRgb: sanitizeTintColorRgb(this.c.EquippedHeadTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB),
+      equippedBodyArchetypeId: sanitizeRenderArchetypeId(this.c.EquippedBodyArchetypeId.value[simEid] ?? 0),
+      equippedBodyTintColorRgb: sanitizeTintColorRgb(this.c.EquippedBodyTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB),
+      equippedLegsArchetypeId: sanitizeRenderArchetypeId(this.c.EquippedLegsArchetypeId.value[simEid] ?? 0),
+      equippedLegsTintColorRgb: sanitizeTintColorRgb(this.c.EquippedLegsTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB),
+      equippedAccessoryArchetypeId: sanitizeRenderArchetypeId(this.c.EquippedAccessoryArchetypeId.value[simEid] ?? 0),
+      equippedAccessoryTintColorRgb: sanitizeTintColorRgb(this.c.EquippedAccessoryTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB),
       position: { x, y, z },
       rotation: {
         x: this.c.Rotation.x[simEid] ?? 0,
@@ -68,6 +109,13 @@ export class NetReplicationBridge {
       maxHealth: this.c.Health.max[simEid] ?? 0,
       pickupDefinitionId: this.c.ItemArchetypeId.value[simEid] ?? 0,
       itemQuantity: this.c.ItemQuantity.value[simEid] ?? 0,
+      worldAnchorId: this.c.LocationPid.value[simEid] ?? 0,
+      worldAnchorKind: locKind,
+      worldAnchorArchetypeId: locArchetypeId,
+      worldAnchorSeed: this.c.LocationSeed.value[simEid] ?? 0,
+      worldAnchorEnvironmentId: this.c.LocationEnvironmentId.value[simEid] ?? 0,
+      worldAnchorStreamingRadius: this.c.LocationStreamingRadius.value[simEid] ?? 0,
+      worldAnchorInfluenceRadius: this.c.LocationInfluenceRadius.value[simEid] ?? 0,
       locationPid: this.c.LocationPid.value[simEid] ?? 0,
       locationKind: locKind,
       locationArchetypeId: locArchetypeId,
@@ -90,6 +138,20 @@ export class NetReplicationBridge {
     const y = this.c.Position.y[simEid] ?? 0;
     const z = this.c.Position.z[simEid] ?? 0;
     netEntity.modelId = this.c.ModelId.value[simEid] ?? 0;
+    netEntity.renderArchetypeId = sanitizeRenderArchetypeId(this.c.RenderArchetypeId.value[simEid] ?? (this.c.ModelId.value[simEid] ?? 0));
+    netEntity.materialVariantId = sanitizeMaterialVariantId(this.c.MaterialVariantId.value[simEid] ?? DEFAULT_MATERIAL_VARIANT_ID);
+    netEntity.tintColorRgb = sanitizeTintColorRgb(this.c.TintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB);
+    netEntity.uniformScalePct = sanitizeUniformScalePct(this.c.UniformScalePct.value[simEid] ?? DEFAULT_UNIFORM_SCALE_PCT);
+    netEntity.equippedWeaponArchetypeId = sanitizeRenderArchetypeId(this.c.EquippedWeaponArchetypeId.value[simEid] ?? 0);
+    netEntity.equippedWeaponTintColorRgb = sanitizeTintColorRgb(this.c.EquippedWeaponTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB);
+    netEntity.equippedHeadArchetypeId = sanitizeRenderArchetypeId(this.c.EquippedHeadArchetypeId.value[simEid] ?? 0);
+    netEntity.equippedHeadTintColorRgb = sanitizeTintColorRgb(this.c.EquippedHeadTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB);
+    netEntity.equippedBodyArchetypeId = sanitizeRenderArchetypeId(this.c.EquippedBodyArchetypeId.value[simEid] ?? 0);
+    netEntity.equippedBodyTintColorRgb = sanitizeTintColorRgb(this.c.EquippedBodyTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB);
+    netEntity.equippedLegsArchetypeId = sanitizeRenderArchetypeId(this.c.EquippedLegsArchetypeId.value[simEid] ?? 0);
+    netEntity.equippedLegsTintColorRgb = sanitizeTintColorRgb(this.c.EquippedLegsTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB);
+    netEntity.equippedAccessoryArchetypeId = sanitizeRenderArchetypeId(this.c.EquippedAccessoryArchetypeId.value[simEid] ?? 0);
+    netEntity.equippedAccessoryTintColorRgb = sanitizeTintColorRgb(this.c.EquippedAccessoryTintColorRgb.value[simEid] ?? DEFAULT_TINT_COLOR_RGB);
     netEntity.position.x = x;
     netEntity.position.y = y;
     netEntity.position.z = z;
@@ -106,6 +168,13 @@ export class NetReplicationBridge {
     netEntity.maxHealth = this.c.Health.max[simEid] ?? 0;
     netEntity.pickupDefinitionId = this.c.ItemArchetypeId.value[simEid] ?? 0;
     netEntity.itemQuantity = this.c.ItemQuantity.value[simEid] ?? 0;
+    netEntity.worldAnchorId = this.c.LocationPid.value[simEid] ?? 0;
+    netEntity.worldAnchorKind = this.c.LocationKind.value[simEid] ?? 0;
+    netEntity.worldAnchorArchetypeId = this.c.LocationArchetypeId.value[simEid] ?? 0;
+    netEntity.worldAnchorSeed = this.c.LocationSeed.value[simEid] ?? 0;
+    netEntity.worldAnchorEnvironmentId = this.c.LocationEnvironmentId.value[simEid] ?? 0;
+    netEntity.worldAnchorStreamingRadius = this.c.LocationStreamingRadius.value[simEid] ?? 0;
+    netEntity.worldAnchorInfluenceRadius = this.c.LocationInfluenceRadius.value[simEid] ?? 0;
     netEntity.locationPid = this.c.LocationPid.value[simEid] ?? 0;
     netEntity.locationKind = this.c.LocationKind.value[simEid] ?? 0;
     netEntity.locationArchetypeId = this.c.LocationArchetypeId.value[simEid] ?? 0;
@@ -124,4 +193,5 @@ export class NetReplicationBridge {
     this.channelBySimEid.delete(simEid);
   }
 }
+
 

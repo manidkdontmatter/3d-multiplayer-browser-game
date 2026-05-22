@@ -17,14 +17,18 @@ import {
   coercePlayerSettings,
   type PlayerSettings,
   coerceBlueprintDefinition,
+  type BlueprintRuntimeCapabilityEntry,
+  type RuntimeActivationSpec,
+  type RuntimeActivationEffectSpec,
   type BlueprintAccessTag,
   type BlueprintDefinition,
   type EquipmentSlot,
   type InventorySnapshot,
   type PickupPersistencePolicy
 } from "../../shared/index";
+import type { MeleeAbilityProfile, ProjectileAbilityProfile } from "../../shared/abilities";
 
-const ACCESS_KEY_PATTERN = /^[A-Za-z0-9]{12}$/;
+const ACCESS_KEY_PATTERN = /^[A-Za-z0-9]{10,30}$/;
 const KEY_SCRYPT_BYTES = 64;
 const KEY_SALT_BYTES = 16;
 const CHARACTER_SCHEMA_VERSION = 1;
@@ -116,8 +120,14 @@ export type PersistedPlayerSettings = PlayerSettings;
 
 export interface SaveBlueprintAndGrantAccessRequest {
   blueprint: BlueprintDefinition;
+  runtimeCapability?: BlueprintRuntimeCapabilityEntry | null;
   createdByAccountId: number;
   grantAccessTags: readonly BlueprintAccessTag[];
+}
+
+export interface PersistedBlueprintRecord {
+  blueprint: BlueprintDefinition;
+  runtimeCapability: BlueprintRuntimeCapabilityEntry | null;
 }
 
 type TokenBucketState = {
@@ -395,7 +405,7 @@ export class PersistenceService {
 
   public loadPersistedBlueprintDefinitions(
     blueprintIds: ReadonlyArray<number>
-  ): BlueprintDefinition[] {
+  ): PersistedBlueprintRecord[] {
     if (this.disablePersistenceWrites || blueprintIds.length === 0) {
       return [];
     }
@@ -412,17 +422,25 @@ export class PersistenceService {
     const placeholders = normalizedIds.map(() => "?").join(", ");
     const rows = this.db
       .prepare(
-        `SELECT blueprint_id AS blueprintId, blueprint_json AS blueprintJson
+        `SELECT blueprint_id AS blueprintId, blueprint_json AS blueprintJson, runtime_capability_json AS runtimeCapabilityJson
          FROM blueprints
          WHERE archived = 0 AND blueprint_id IN (${placeholders})
          ORDER BY blueprint_id ASC`
       )
-      .all(...normalizedIds) as Array<{ blueprintId: number; blueprintJson: string }>;
-    const blueprints: BlueprintDefinition[] = [];
+      .all(...normalizedIds) as Array<{ blueprintId: number; blueprintJson: string; runtimeCapabilityJson: string | null }>;
+    const blueprints: PersistedBlueprintRecord[] = [];
     for (const row of rows) {
       try {
         const parsed = JSON.parse(row.blueprintJson) as unknown;
-        blueprints.push(coerceBlueprintDefinition(parsed, `persistedBlueprint(${row.blueprintId})`));
+        const blueprint = coerceBlueprintDefinition(parsed, `persistedBlueprint(${row.blueprintId})`);
+        const runtimeCapability = this.parsePersistedRuntimeCapabilityJson(
+          row.runtimeCapabilityJson,
+          blueprint.id
+        );
+        blueprints.push({
+          blueprint,
+          runtimeCapability
+        });
       } catch (error) {
         console.warn("[persist] failed to parse blueprint", row.blueprintId, error);
       }
@@ -437,6 +455,9 @@ export class PersistenceService {
     const characterId = Math.max(1, this.clampInteger(request.createdByAccountId, 1, 0x7fffffff));
     const blueprintId = this.clampInteger(request.blueprint.id, 1, 0xffff);
     const blueprintJson = JSON.stringify(request.blueprint);
+    const runtimeCapabilityJson = request.runtimeCapability
+      ? JSON.stringify(request.runtimeCapability)
+      : null;
     const authoredViaProfile = typeof request.blueprint.metadata?.authoredViaProfile === "string"
       ? request.blueprint.metadata.authoredViaProfile
       : null;
@@ -448,10 +469,10 @@ export class PersistenceService {
       this.db
         .prepare(
           `INSERT INTO blueprints (
-             blueprint_id, blueprint_json, authored_via_profile, created_by_player_id, created_at, updated_at, archived
-           ) VALUES (?, ?, ?, ?, ?, ?, 0)`
+             blueprint_id, blueprint_json, runtime_capability_json, authored_via_profile, created_by_player_id, created_at, updated_at, archived
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
         )
-        .run(blueprintId, blueprintJson, authoredViaProfile, characterId, now, now);
+        .run(blueprintId, blueprintJson, runtimeCapabilityJson, authoredViaProfile, characterId, now, now);
       const insertAccess = this.db.prepare(
         `INSERT OR REPLACE INTO character_blueprint_access (
            character_id, blueprint_id, access_tag, granted_at, granted_by_character_id
@@ -828,8 +849,8 @@ export class PersistenceService {
       const upsertCharacter = this.db.prepare(
         `INSERT INTO characters (
             player_id, x, y, z, yaw, pitch, vx, vy, vz, health,
-            primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            active_hotbar_slot, primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(player_id) DO UPDATE SET
            x=excluded.x,
            y=excluded.y,
@@ -840,6 +861,7 @@ export class PersistenceService {
            vy=excluded.vy,
            vz=excluded.vz,
            health=excluded.health,
+           active_hotbar_slot=excluded.active_hotbar_slot,
            primary_mouse_slot=excluded.primary_mouse_slot,
            secondary_mouse_slot=excluded.secondary_mouse_slot,
            updated_at=excluded.updated_at,
@@ -871,6 +893,7 @@ export class PersistenceService {
             snapshot.vy,
             snapshot.vz,
             this.clampInteger(snapshot.health, 0, PLAYER_MAX_HEALTH),
+            this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             this.clampInteger(snapshot.secondaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             now,
@@ -906,8 +929,8 @@ export class PersistenceService {
       .prepare(
         `INSERT INTO characters (
             player_id, x, y, z, yaw, pitch, vx, vy, vz, health,
-            primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            active_hotbar_slot, primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(player_id) DO UPDATE SET
            x=excluded.x,
            y=excluded.y,
@@ -918,6 +941,7 @@ export class PersistenceService {
            vy=excluded.vy,
            vz=excluded.vz,
            health=excluded.health,
+           active_hotbar_slot=excluded.active_hotbar_slot,
            primary_mouse_slot=excluded.primary_mouse_slot,
            secondary_mouse_slot=excluded.secondary_mouse_slot,
            updated_at=excluded.updated_at,
@@ -934,6 +958,7 @@ export class PersistenceService {
         snapshot.vy,
         snapshot.vz,
         this.clampInteger(snapshot.health, 0, PLAYER_MAX_HEALTH),
+        this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         this.clampInteger(snapshot.secondaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         now,
@@ -1023,6 +1048,7 @@ export class PersistenceService {
       CREATE TABLE IF NOT EXISTS blueprints (
         blueprint_id INTEGER PRIMARY KEY,
         blueprint_json TEXT NOT NULL,
+        runtime_capability_json TEXT,
         authored_via_profile TEXT,
         created_by_player_id INTEGER,
         created_at INTEGER NOT NULL,
@@ -1130,6 +1156,7 @@ export class PersistenceService {
     this.ensureCharacterColumn("active_hotbar_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("primary_mouse_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("secondary_mouse_slot", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureBlueprintColumn("runtime_capability_json", "TEXT");
     this.migrateLegacyAbilityAccessToBlueprintAccess();
   }
 
@@ -1141,6 +1168,238 @@ export class PersistenceService {
       return;
     }
     this.db.exec(`ALTER TABLE characters ADD COLUMN ${columnName} ${columnTypeSql}`);
+  }
+
+  private ensureBlueprintColumn(columnName: string, columnTypeSql: string): void {
+    const existing = this.db
+      .prepare("SELECT 1 FROM pragma_table_info('blueprints') WHERE name = ? LIMIT 1")
+      .get(columnName) as { 1: number } | undefined;
+    if (existing) {
+      return;
+    }
+    this.db.exec(`ALTER TABLE blueprints ADD COLUMN ${columnName} ${columnTypeSql}`);
+  }
+
+  private parsePersistedRuntimeCapabilityJson(
+    raw: string | null,
+    fallbackBlueprintId: number
+  ): BlueprintRuntimeCapabilityEntry | null {
+    if (typeof raw !== "string" || raw.trim().length <= 0) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Partial<BlueprintRuntimeCapabilityEntry>;
+      if (!parsed || typeof parsed !== "object") {
+        return null;
+      }
+      const blueprintId = this.clampInteger(
+        typeof parsed.blueprintId === "number" ? parsed.blueprintId : fallbackBlueprintId,
+        1,
+        0xffff
+      );
+      const activations = this.parseRuntimeActivationSpecs(parsed.activations);
+      return {
+        blueprintId,
+        ability: parsed.ability ?? null,
+        item: parsed.item ?? null,
+        platform: parsed.platform ?? null,
+        activations
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private parseRuntimeActivationSpecs(raw: unknown): RuntimeActivationSpec[] {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const specs: RuntimeActivationSpec[] = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      const typed = entry as Partial<RuntimeActivationSpec>;
+      const activationId = typeof typed.activationId === "string" ? typed.activationId.trim() : "";
+      const source = typed.source === "ability" || typed.source === "item" ? typed.source : null;
+      const channel = this.clampInteger(
+        typeof typed.channel === "number" ? typed.channel : 0,
+        0,
+        255
+      );
+      const cooldownSeconds = typeof typed.cooldownSeconds === "number" && Number.isFinite(typed.cooldownSeconds)
+        ? Math.max(0, typed.cooldownSeconds)
+        : 0;
+      const consumeQuantity = this.clampInteger(
+        typeof typed.consumeQuantity === "number" ? typed.consumeQuantity : 0,
+        0,
+        0xffff
+      );
+      if (!source || activationId.length <= 0) {
+        continue;
+      }
+      specs.push({
+        activationId,
+        source,
+        channel,
+        cooldownSeconds,
+        consumeQuantity,
+        effects: this.parseRuntimeActivationEffects(typed.effects)
+      });
+    }
+    return specs;
+  }
+
+  private parseRuntimeActivationEffects(raw: unknown): RuntimeActivationEffectSpec[] {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const effects: RuntimeActivationEffectSpec[] = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      const typed = entry as Partial<RuntimeActivationEffectSpec> & Record<string, unknown>;
+      if (typed.type === "restore_health") {
+        effects.push({
+          type: "restore_health",
+          amount: this.clampInteger(
+            typeof typed.amount === "number" ? typed.amount : 0,
+            0,
+            0xffff
+          )
+        });
+        continue;
+      }
+      if (typed.type === "spawn_projectile") {
+        const projectile = this.parseRuntimeProjectileProfile(typed.projectile);
+        if (!projectile) {
+          continue;
+        }
+        effects.push({
+          type: "spawn_projectile",
+          projectile
+        });
+        continue;
+      }
+      if (typed.type === "apply_melee_hit") {
+        const melee = this.parseRuntimeMeleeProfile(typed.melee);
+        if (!melee) {
+          continue;
+        }
+        effects.push({
+          type: "apply_melee_hit",
+          melee
+        });
+        continue;
+      }
+      if (typed.type === "set_player_render_appearance") {
+        const normalized: {
+          type: "set_player_render_appearance";
+          renderArchetypeId?: number;
+          materialVariantId?: number;
+          tintColorRgb?: number;
+          uniformScalePct?: number;
+        } = {
+          type: "set_player_render_appearance"
+        };
+        if (typeof typed.renderArchetypeId === "number" && Number.isFinite(typed.renderArchetypeId)) {
+          normalized.renderArchetypeId = this.clampInteger(typed.renderArchetypeId, 0, 0xffff);
+        }
+        if (typeof typed.materialVariantId === "number" && Number.isFinite(typed.materialVariantId)) {
+          normalized.materialVariantId = this.clampInteger(typed.materialVariantId, 0, 0xffff);
+        }
+        if (typeof typed.tintColorRgb === "number" && Number.isFinite(typed.tintColorRgb)) {
+          normalized.tintColorRgb = this.clampInteger(typed.tintColorRgb, 0, 0xffffff);
+        }
+        if (typeof typed.uniformScalePct === "number" && Number.isFinite(typed.uniformScalePct)) {
+          normalized.uniformScalePct = this.clampInteger(typed.uniformScalePct, 1, 1000);
+        }
+        effects.push(normalized);
+        continue;
+      }
+      if (typed.type === "set_equipped_slot_tint") {
+        const slot = typed.slot;
+        if (slot !== "weapon" && slot !== "head" && slot !== "body" && slot !== "legs" && slot !== "accessory") {
+          continue;
+        }
+        effects.push({
+          type: "set_equipped_slot_tint",
+          slot,
+          tintColorRgb: this.clampInteger(
+            typeof typed.tintColorRgb === "number" ? typed.tintColorRgb : 0xffffff,
+            0,
+            0xffffff
+          )
+        });
+      }
+    }
+    return effects;
+  }
+
+  private parseRuntimeProjectileProfile(raw: unknown): ProjectileAbilityProfile | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return null;
+    }
+    const typed = raw as Partial<ProjectileAbilityProfile>;
+    if (
+      typeof typed.kind !== "number" ||
+      typeof typed.speed !== "number" ||
+      typeof typed.damage !== "number" ||
+      typeof typed.radius !== "number" ||
+      typeof typed.cooldownSeconds !== "number" ||
+      typeof typed.lifetimeSeconds !== "number" ||
+      typeof typed.spawnForwardOffset !== "number" ||
+      typeof typed.spawnVerticalOffset !== "number"
+    ) {
+      return null;
+    }
+    const profile: ProjectileAbilityProfile = {
+      kind: typed.kind,
+      speed: typed.speed,
+      damage: typed.damage,
+      radius: typed.radius,
+      cooldownSeconds: typed.cooldownSeconds,
+      lifetimeSeconds: typed.lifetimeSeconds,
+      spawnForwardOffset: typed.spawnForwardOffset,
+      spawnVerticalOffset: typed.spawnVerticalOffset
+    };
+    if (typeof typed.maxRange === "number") profile.maxRange = typed.maxRange;
+    if (typeof typed.gravity === "number") profile.gravity = typed.gravity;
+    if (typeof typed.drag === "number") profile.drag = typed.drag;
+    if (typeof typed.maxSpeed === "number") profile.maxSpeed = typed.maxSpeed;
+    if (typeof typed.minSpeed === "number") profile.minSpeed = typed.minSpeed;
+    if (typeof typed.pierceCount === "number") profile.pierceCount = typed.pierceCount;
+    if (typeof typed.despawnOnDamageableHit === "boolean") {
+      profile.despawnOnDamageableHit = typed.despawnOnDamageableHit;
+    }
+    if (typeof typed.despawnOnWorldHit === "boolean") {
+      profile.despawnOnWorldHit = typed.despawnOnWorldHit;
+    }
+    return profile;
+  }
+
+  private parseRuntimeMeleeProfile(raw: unknown): MeleeAbilityProfile | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return null;
+    }
+    const typed = raw as Partial<MeleeAbilityProfile>;
+    if (
+      typeof typed.damage !== "number" ||
+      typeof typed.range !== "number" ||
+      typeof typed.radius !== "number" ||
+      typeof typed.cooldownSeconds !== "number" ||
+      typeof typed.arcDegrees !== "number"
+    ) {
+      return null;
+    }
+    return {
+      damage: typed.damage,
+      range: typed.range,
+      radius: typed.radius,
+      cooldownSeconds: typed.cooldownSeconds,
+      arcDegrees: typed.arcDegrees
+    };
   }
 
   private migrateLegacyAbilityAccessToBlueprintAccess(): void {

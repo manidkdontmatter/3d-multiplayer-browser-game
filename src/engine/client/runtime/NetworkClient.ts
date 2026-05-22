@@ -9,6 +9,7 @@ import {
   coerceRuntimeMapConfig,
   INVENTORY_OP_DROP,
   INVENTORY_OP_DROP_HOTBAR_SLOT,
+  INVENTORY_OP_CRAFT,
   INVENTORY_OP_EQUIP,
   INVENTORY_OP_EXECUTE_HOTBAR_SLOT,
   INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
@@ -26,8 +27,8 @@ import {
 import {
   NType,
   type AbilityCommand,
-  type CarrierVolumeEnteredMessage,
-  type CarrierVolumeExitedMessage,
+  type ReferenceFrameVolumeEnteredMessage,
+  type ReferenceFrameVolumeExitedMessage,
   type CreatorCommandWire,
   type ItemCommand,
   type MapTransferCommand,
@@ -38,7 +39,7 @@ import {
 } from "../../shared/netcode";
 import { SERVER_TICK_RATE } from "../../shared/config";
 import type {
-  LocationRootState,
+  WorldAnchorState,
   MovementInput,
   ProjectileState,
   RemotePlayerState,
@@ -89,7 +90,7 @@ export class NetworkClient {
   private readonly pendingInventoryActionFeedback: InventoryActionFeedback[] = [];
   private readonly pendingSettingsState: SettingsState[] = [];
   private readonly pendingServerAlerts: ServerAlertState[] = [];
-  private readonly activeCarrierVolumeMembershipKeys = new Set<string>();
+  private readonly activeReferenceFrameVolumeMembershipKeys = new Set<string>();
 
   public constructor() {
     this.ackBuffer = new AckReconciliationBuffer((_acceptedAtMs, _serverTick) => {});
@@ -111,7 +112,7 @@ export class NetworkClient {
         this.pendingInventoryActionFeedback.length = 0;
         this.pendingSettingsState.length = 0;
         this.pendingServerAlerts.length = 0;
-        this.activeCarrierVolumeMembershipKeys.clear();
+        this.activeReferenceFrameVolumeMembershipKeys.clear();
       },
       () => {
         // Errors are expected when server is unavailable during local-only workflows.
@@ -418,6 +419,20 @@ export class NetworkClient {
     });
   }
 
+  public queueCraftRecipe(recipeId: number): void {
+    this.queueItemCommand({
+      action: INVENTORY_OP_CRAFT,
+      pickupNid: 0,
+      itemInstanceId: recipeId,
+      quantity: 0,
+      equipmentSlot: 0,
+      sourceSlot: 0,
+      targetSlot: 0,
+      activationChannel: 0,
+      payloadKind: 0
+    });
+  }
+
   public consumeAbilityEvents(): AbilityEventBatch | null {
     return this.abilities.consumeAbilityEvents();
   }
@@ -492,7 +507,11 @@ export class NetworkClient {
     return this.snapshots.getLocalPlayerPose(this.localPlayerNid);
   }
 
-  public getLocationRoots(): LocationRootState[] {
+  public getWorldAnchors(): WorldAnchorState[] {
+    return this.snapshots.getWorldAnchors();
+  }
+
+  public getLocationRoots(): WorldAnchorState[] {
     return this.snapshots.getLocationRoots();
   }
 
@@ -539,11 +558,11 @@ export class NetworkClient {
   }
 
   public getActiveCarrierFramePids(): number[] {
-    if (this.activeCarrierVolumeMembershipKeys.size === 0) {
+    if (this.activeReferenceFrameVolumeMembershipKeys.size === 0) {
       return [];
     }
     const framePids = new Set<number>();
-    for (const key of this.activeCarrierVolumeMembershipKeys) {
+    for (const key of this.activeReferenceFrameVolumeMembershipKeys) {
       const separator = key.indexOf(":");
       if (separator <= 0) continue;
       const framePid = Number(key.slice(0, separator));
@@ -667,11 +686,11 @@ export class NetworkClient {
       onInventoryStateMessage: (message) => {
         this.inventory.processInventoryJson(message.inventoryJson);
       },
-      onCarrierVolumeEnteredMessage: (message) => {
-        this.applyCarrierVolumeEntered(message);
+      onReferenceFrameVolumeEnteredMessage: (message) => {
+        this.applyReferenceFrameVolumeEntered(message);
       },
-      onCarrierVolumeExitedMessage: (message) => {
-        this.applyCarrierVolumeExited(message);
+      onReferenceFrameVolumeExitedMessage: (message) => {
+        this.applyReferenceFrameVolumeExited(message);
       },
       onInventoryActionResultMessage: (message) => {
         this.pendingInventoryActionFeedback.push({
@@ -795,22 +814,22 @@ export class NetworkClient {
     return Math.max(0, raw);
   }
 
-  private applyCarrierVolumeEntered(message: CarrierVolumeEnteredMessage): void {
+  private applyReferenceFrameVolumeEntered(message: ReferenceFrameVolumeEnteredMessage): void {
     const framePid = Math.floor(Number(message.framePid));
     const volumeId = typeof message.volumeId === "string" ? message.volumeId : "";
     if (!Number.isFinite(framePid) || volumeId.length === 0) {
       return;
     }
-    this.activeCarrierVolumeMembershipKeys.add(`${framePid}:${volumeId}`);
+    this.activeReferenceFrameVolumeMembershipKeys.add(`${framePid}:${volumeId}`);
   }
 
-  private applyCarrierVolumeExited(message: CarrierVolumeExitedMessage): void {
+  private applyReferenceFrameVolumeExited(message: ReferenceFrameVolumeExitedMessage): void {
     const framePid = Math.floor(Number(message.framePid));
     const volumeId = typeof message.volumeId === "string" ? message.volumeId : "";
     if (!Number.isFinite(framePid) || volumeId.length === 0) {
       return;
     }
-    this.activeCarrierVolumeMembershipKeys.delete(`${framePid}:${volumeId}`);
+    this.activeReferenceFrameVolumeMembershipKeys.delete(`${framePid}:${volumeId}`);
   }
 }
 

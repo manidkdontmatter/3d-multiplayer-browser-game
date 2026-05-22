@@ -277,6 +277,10 @@ function main(): void {
     "GameSimulation must use ServerReplicationCoordinator as replication boundary"
   );
   assert(
+    !gameSimulation.includes("return blueprint ? buildAbilityDefinitionFromBlueprint(blueprint) : null;"),
+    "GameSimulation runtime ability resolution must not reconstruct abilities from raw blueprint fallback"
+  );
+  assert(
     gameSimulation.includes("createPlayerLifecycleSystem("),
     "GameSimulation must keep player-session lifecycle wiring behind a dedicated factory method"
   );
@@ -320,6 +324,139 @@ function main(): void {
       !gameRegistration.includes("buildPlatformCatalog("),
     "Game registration must not keep ad hoc legacy catalog builders"
   );
+  assert(
+    gameRegistration.includes("injectBlueprintRuntimeCapabilities("),
+    "Game registration must inject canonical blueprint runtime capabilities"
+  );
+
+  const persistenceService = read("src/engine/server/persistence/PersistenceService.ts");
+  assert(
+    persistenceService.includes("runtime_capability_json"),
+    "PersistenceService must persist blueprint runtime capability payloads"
+  );
+
+  const blueprintProjection = read("src/game/shared/blueprintContentProjection.ts");
+  assert(
+    !blueprintProjection.includes("hotbarAbilityIds: [1, 2"),
+    "Blueprint projection defaults must be derived from runtime capability activations, not hardcoded ids"
+  );
+  assert(
+    !blueprintProjection.includes("unlockedAbilityIds: [1, 2"),
+    "Blueprint projection unlocked defaults must be derived from runtime capability activations, not hardcoded ids"
+  );
+
+  const sharedNetcodeRefFrame = read("src/engine/shared/netcode.ts");
+  assert(
+    sharedNetcodeRefFrame.includes("ReferenceFrameVolumeEnteredMessage"),
+    "Netcode must expose reference-frame volume messages as canonical protocol naming"
+  );
+  assert(
+    !sharedNetcodeRefFrame.includes("CarrierVolumeEnteredMessage"),
+    "Netcode must not expose legacy carrier-volume message names"
+  );
+  assert(
+    !sharedNetcodeRefFrame.includes("CarrierVolumeExitedMessage"),
+    "Netcode must not expose legacy carrier-volume message names"
+  );
+
+  const movingReferenceFrames = read("src/engine/shared/movingReferenceFrames.ts");
+  assert(
+    !movingReferenceFrames.includes("CarrierVolume"),
+    "movingReferenceFrames.ts must not expose legacy carrier-volume naming"
+  );
+
+  const worldPhysics = read("src/engine/shared/worldPhysics.ts");
+  assert(
+    !worldPhysics.includes("definition.kind ==="),
+    "worldPhysics static collider generation must be data-driven, not location-kind gated"
+  );
+  assert(
+    !worldPhysics.includes("LocationRootDefinition"),
+    "worldPhysics.ts must use WorldAnchorDefinition terminology"
+  );
+
+  const navBuilder = read("src/engine/server/navigation/NavigationWorldBuilder.ts");
+  assert(
+    !navBuilder.includes("definition.kind ==="),
+    "NavigationWorldBuilder geometry generation must be data-driven, not location-kind gated"
+  );
+
+  const itemInventorySystem = read("src/engine/server/items/ItemInventorySystem.ts");
+  assert(
+    !itemInventorySystem.includes("category ==="),
+    "ItemInventorySystem runtime gameplay logic must not branch on item category"
+  );
+  assert(
+    !itemInventorySystem.includes("changed = this.tryAssignHotbarSlot("),
+    "ItemInventorySystem applyCommand must route hotbar assign through ActionEffectPipeline"
+  );
+  assert(
+    !itemInventorySystem.includes("changed = this.tryClearHotbarSlot("),
+    "ItemInventorySystem applyCommand must route hotbar clear through ActionEffectPipeline"
+  );
+  assert(
+    !itemInventorySystem.includes("changed = this.tryMoveOrSwapHotbarSlot("),
+    "ItemInventorySystem applyCommand must route hotbar move through ActionEffectPipeline"
+  );
+  assert(
+    !itemInventorySystem.includes("changed = this.tryDropHotbarSlot("),
+    "ItemInventorySystem applyCommand must route hotbar drop through ActionEffectPipeline"
+  );
+
+  const actionEffectPipeline = read("src/engine/server/combat/actions/ActionEffectPipeline.ts");
+  const requiredEffects = [
+    'type: "equip_item_instance"',
+    'type: "unequip_slot"',
+    'type: "consume_item_quantity"',
+    'type: "pickup_world_item"',
+    'type: "drop_item_instance"',
+    'type: "assign_hotbar_slot"',
+    'type: "clear_hotbar_slot"',
+    'type: "move_hotbar_slot"',
+    'type: "drop_hotbar_slot"',
+    'type: "reference_frame_volume_entered"',
+    'type: "reference_frame_volume_exited"',
+    'type: "pilot_reference_frame_begin"',
+    'type: "pilot_reference_frame_end"'
+  ] as const;
+  for (const marker of requiredEffects) {
+    assert(
+      actionEffectPipeline.includes(marker),
+      `ActionEffectPipeline must include required effect coverage marker: ${marker}`
+    );
+  }
+  assert(
+    actionEffectPipeline.includes("onEffectEvaluated"),
+    "ActionEffectPipeline must expose structured effect evaluation audit hook"
+  );
+
+  assert(
+    !gameSimulation.includes("toCarrierMembershipKey(") &&
+      !gameSimulation.includes("parseCarrierMembershipKey("),
+    "GameSimulation must use reference-frame membership helper naming, not legacy carrier naming"
+  );
+  assert(
+    gameSimulation.includes('type: "pilot_reference_frame_begin"') &&
+      gameSimulation.includes('type: "pilot_reference_frame_end"'),
+    "GameSimulation reference-frame pilot state transitions must execute through ActionEffectPipeline effects"
+  );
+  assert(
+    gameSimulation.includes("effectAuditSuccessCountByType") &&
+      gameSimulation.includes("pilotedReferenceFrameByUserId"),
+    "GameSimulation runtime stats must track effect audit counters and piloted reference-frame state"
+  );
+
+  const gameServer = read("src/engine/server/GameServer.ts");
+  assert(
+    gameServer.includes("piloted_frames=") && gameServer.includes("effect_top="),
+    "GameServer health logs must expose piloted frame count and top effect counters"
+  );
+
+  const worldData = read("src/game/shared/worldData.ts");
+  assert(
+    !worldData.includes("LocationRootDefinition"),
+    "worldData.ts must use WorldAnchorDefinition terminology"
+  );
 
   const serverArchetypes = JSON.parse(read("src/game/server/archetypes/server-archetypes.json")) as Record<string, unknown>;
   assert(
@@ -336,6 +473,23 @@ function main(): void {
     !entityFactory.includes('?? ["base"]'),
     "EntityFactory must not silently fall back to base components for unknown presets"
   );
+
+  const directAppearanceWriteCall = "setEntityRenderAppearanceByEid(";
+  const appearanceWriteAllowList = new Set<string>([
+    "src/engine/server/appearance/AppearanceSystem.ts",
+    "src/engine/server/ecs/SimulationEcs.ts"
+  ]);
+  const serverFiles = listFiles("src/engine/server").filter((file) => file.endsWith(".ts"));
+  for (const file of serverFiles) {
+    if (appearanceWriteAllowList.has(file)) {
+      continue;
+    }
+    const content = read(file);
+    assert(
+      !content.includes(directAppearanceWriteCall),
+      `${file} must not call ${directAppearanceWriteCall}; route through AppearanceSystem`
+    );
+  }
 
   console.log("architecture-guards passed");
 }

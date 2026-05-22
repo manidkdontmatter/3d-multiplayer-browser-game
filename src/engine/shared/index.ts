@@ -6,6 +6,7 @@
 export * from "./abilities";
 export * from "./alerts";
 export * from "./blueprint";
+export * from "./blueprintRuntimeCapabilities";
 export * from "./clientLocalSettings";
 export * from "./config";
 export * from "./creator";

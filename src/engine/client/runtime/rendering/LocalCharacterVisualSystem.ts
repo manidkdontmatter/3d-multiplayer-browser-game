@@ -19,6 +19,8 @@ import {
 } from "../animation/characterAnimationLibrary";
 import type { PlayerPose } from "../types";
 import { normalizeModelToGround } from "./CharacterVisualShared";
+import { applyGroupTint, buildRenderArchetypeGroup } from "./RenderArchetypeVisualBuilder";
+import { applyCharacterAttachmentTransform } from "./CharacterAttachmentLayout";
 
 const REMOTE_ANIMATION_SPEED_CAP = PLAYER_SPRINT_SPEED * 2.2;
 const LOCAL_FIRST_PERSON_ONLY_LAYER = 11;
@@ -27,6 +29,16 @@ const REMOTE_CHARACTER_MODEL_YAW_OFFSET = 0;
 
 interface LocalPlayerVisual {
   root: Group;
+  weaponRoot: Group | null;
+  weaponArchetypeId: number;
+  headRoot: Group | null;
+  headArchetypeId: number;
+  bodyRoot: Group | null;
+  bodyArchetypeId: number;
+  legsRoot: Group | null;
+  legsArchetypeId: number;
+  accessoryRoot: Group | null;
+  accessoryArchetypeId: number;
   animator: CharacterAnimationController | null;
   vrm: VRM | null;
   lastX: number;
@@ -50,7 +62,21 @@ export class LocalCharacterVisualSystem {
 
   public syncLocalPlayer(
     localPose: PlayerPose,
-    options: { frameDeltaSeconds: number; grounded: boolean; movementMode: MovementMode }
+    options: {
+      frameDeltaSeconds: number;
+      grounded: boolean;
+      movementMode: MovementMode;
+      equippedWeaponArchetypeId: number;
+      equippedWeaponTintColorRgb: number;
+      equippedHeadArchetypeId: number;
+      equippedHeadTintColorRgb: number;
+      equippedBodyArchetypeId: number;
+      equippedBodyTintColorRgb: number;
+      equippedLegsArchetypeId: number;
+      equippedLegsTintColorRgb: number;
+      equippedAccessoryArchetypeId: number;
+      equippedAccessoryTintColorRgb: number;
+    }
   ): void {
     if (!this.localPlayerVisual) {
       this.tryBuildVisual();
@@ -82,6 +108,36 @@ export class LocalCharacterVisualSystem {
     visual.lastX = localPose.x;
     visual.lastY = renderY;
     visual.lastZ = localPose.z;
+    this.syncAttachmentVisual(
+      visual,
+      "weapon",
+      options.equippedWeaponArchetypeId,
+      options.equippedWeaponTintColorRgb
+    );
+    this.syncAttachmentVisual(
+      visual,
+      "head",
+      options.equippedHeadArchetypeId,
+      options.equippedHeadTintColorRgb
+    );
+    this.syncAttachmentVisual(
+      visual,
+      "body",
+      options.equippedBodyArchetypeId,
+      options.equippedBodyTintColorRgb
+    );
+    this.syncAttachmentVisual(
+      visual,
+      "legs",
+      options.equippedLegsArchetypeId,
+      options.equippedLegsTintColorRgb
+    );
+    this.syncAttachmentVisual(
+      visual,
+      "accessory",
+      options.equippedAccessoryArchetypeId,
+      options.equippedAccessoryTintColorRgb
+    );
     visual.animator?.update(dt, {
       horizontalSpeed: visual.horizontalSpeed,
       verticalSpeed: visual.verticalSpeed,
@@ -146,6 +202,16 @@ export class LocalCharacterVisualSystem {
 
     return {
       root,
+      weaponRoot: null,
+      weaponArchetypeId: 0,
+      headRoot: null,
+      headArchetypeId: 0,
+      bodyRoot: null,
+      bodyArchetypeId: 0,
+      legsRoot: null,
+      legsArchetypeId: 0,
+      accessoryRoot: null,
+      accessoryArchetypeId: 0,
       animator,
       vrm,
       lastX: 0,
@@ -185,4 +251,87 @@ export class LocalCharacterVisualSystem {
         this.visualBuildRequested = false;
       });
   }
+
+  private syncAttachmentVisual(
+    visual: LocalPlayerVisual,
+    slot: "weapon" | "head" | "body" | "legs" | "accessory",
+    archetypeId: number,
+    tintColorRgb: number
+  ): void {
+    const currentRoot = this.getAttachmentRoot(visual, slot);
+    const currentArchetypeId = this.getAttachmentArchetypeId(visual, slot);
+    const normalizedArchetypeId = Math.max(0, Math.floor(archetypeId));
+    if (normalizedArchetypeId <= 0) {
+      if (currentRoot) {
+        visual.root.remove(currentRoot);
+      }
+      this.setAttachmentVisual(visual, slot, null, 0);
+      return;
+    }
+    let nextRoot = currentRoot;
+    if (!nextRoot || currentArchetypeId !== normalizedArchetypeId) {
+      if (nextRoot) {
+        visual.root.remove(nextRoot);
+      }
+      const attachment = buildRenderArchetypeGroup(normalizedArchetypeId);
+      if (!attachment) {
+        this.setAttachmentVisual(visual, slot, null, 0);
+        return;
+      }
+      applyCharacterAttachmentTransform(slot, attachment);
+      visual.root.add(attachment);
+      nextRoot = attachment;
+      this.setAttachmentVisual(visual, slot, nextRoot, normalizedArchetypeId);
+    }
+    if (nextRoot) {
+      applyGroupTint(nextRoot, tintColorRgb);
+    }
+  }
+
+  private getAttachmentRoot(visual: LocalPlayerVisual, slot: "weapon" | "head" | "body" | "legs" | "accessory"): Group | null {
+    if (slot === "weapon") return visual.weaponRoot;
+    if (slot === "head") return visual.headRoot;
+    if (slot === "body") return visual.bodyRoot;
+    if (slot === "legs") return visual.legsRoot;
+    return visual.accessoryRoot;
+  }
+
+  private getAttachmentArchetypeId(visual: LocalPlayerVisual, slot: "weapon" | "head" | "body" | "legs" | "accessory"): number {
+    if (slot === "weapon") return visual.weaponArchetypeId;
+    if (slot === "head") return visual.headArchetypeId;
+    if (slot === "body") return visual.bodyArchetypeId;
+    if (slot === "legs") return visual.legsArchetypeId;
+    return visual.accessoryArchetypeId;
+  }
+
+  private setAttachmentVisual(
+    visual: LocalPlayerVisual,
+    slot: "weapon" | "head" | "body" | "legs" | "accessory",
+    root: Group | null,
+    archetypeId: number
+  ): void {
+    if (slot === "weapon") {
+      visual.weaponRoot = root;
+      visual.weaponArchetypeId = archetypeId;
+      return;
+    }
+    if (slot === "head") {
+      visual.headRoot = root;
+      visual.headArchetypeId = archetypeId;
+      return;
+    }
+    if (slot === "body") {
+      visual.bodyRoot = root;
+      visual.bodyArchetypeId = archetypeId;
+      return;
+    }
+    if (slot === "legs") {
+      visual.legsRoot = root;
+      visual.legsArchetypeId = archetypeId;
+      return;
+    }
+    visual.accessoryRoot = root;
+    visual.accessoryArchetypeId = archetypeId;
+  }
+
 }

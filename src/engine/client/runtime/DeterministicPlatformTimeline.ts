@@ -27,6 +27,10 @@ export class DeterministicPlatformTimeline {
       states.push({
         nid: definition.pid,
         modelId: PLATFORM_MODEL_ID_BY_KIND[definition.kind],
+        renderArchetypeId: PLATFORM_MODEL_ID_BY_KIND[definition.kind],
+        materialVariantId: 0,
+        tintColorRgb: 0xffffff,
+        uniformScalePct: 100,
         x: pose.x,
         y: pose.y,
         z: pose.z,

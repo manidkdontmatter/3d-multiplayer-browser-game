@@ -19,6 +19,8 @@ import { UiRuntime } from "./UiRuntime";
 import { PlayerCountPanel } from "./PlayerCountPanel";
 import { InteractPrompt } from "./InteractPrompt";
 import { AlertFeed } from "./AlertFeed";
+import { PlayerHealthBar } from "./PlayerHealthBar";
+import { ClientKinematicsPanel, type ClientKinematicsSnapshot } from "./ClientKinematicsPanel";
 
 export class ClientUiManager {
   private readonly runtime: UiRuntime;
@@ -27,6 +29,8 @@ export class ClientUiManager {
   private readonly playerCountPanel: PlayerCountPanel;
   private readonly interactPrompt: InteractPrompt;
   private readonly alertFeed: AlertFeed;
+  private readonly playerHealthBar: PlayerHealthBar;
+  private readonly clientKinematicsPanel: ClientKinematicsPanel;
   private diagnosticsVisible = false;
 
   private constructor(documentRef: Document, abilityHudOptions: AbilityHudOptions) {
@@ -47,7 +51,11 @@ export class ClientUiManager {
     this.playerCountPanel = PlayerCountPanel.mount(this.runtime.getLayer("gameplay"), documentRef);
     this.interactPrompt = InteractPrompt.mount(this.runtime.getLayer("gameplay"), documentRef);
     this.alertFeed = AlertFeed.mount(this.runtime.getLayer("gameplay"), documentRef);
+    this.playerHealthBar = PlayerHealthBar.mount(this.runtime.getLayer("gameplay"), documentRef);
+    this.clientKinematicsPanel = ClientKinematicsPanel.mount(this.runtime.getLayer("gameplay"), documentRef);
     this.diagnosticsPanel.setVisible(false);
+    this.playerCountPanel.setVisible(false);
+    this.clientKinematicsPanel.setVisible(false);
   }
 
   public static mount(documentRef: Document, abilityHudOptions: AbilityHudOptions): ClientUiManager {
@@ -94,9 +102,15 @@ export class ClientUiManager {
     this.abilityHud.setInventoryState(state);
   }
 
+  public setBenchCraftingAvailable(available: boolean): void {
+    this.abilityHud.setBenchCraftingAvailable(available);
+  }
+
   public toggleDiagnostics(): boolean {
     this.diagnosticsVisible = !this.diagnosticsVisible;
     this.diagnosticsPanel.setVisible(this.diagnosticsVisible);
+    this.playerCountPanel.setVisible(this.diagnosticsVisible);
+    this.clientKinematicsPanel.setVisible(this.diagnosticsVisible);
     return this.diagnosticsVisible;
   }
 
@@ -121,6 +135,17 @@ export class ClientUiManager {
 
   public showAlert(message: string, severity: AlertSeverity = "info"): void {
     this.alertFeed.enqueue(message, severity);
+  }
+
+  public updateLocalPlayerHealth(currentHealth: number | null, maxHealth: number | null, deltaSeconds: number): void {
+    this.playerHealthBar.update(currentHealth, maxHealth, deltaSeconds);
+  }
+
+  public updateClientKinematics(snapshot: ClientKinematicsSnapshot): void {
+    if (!this.diagnosticsVisible) {
+      return;
+    }
+    this.clientKinematicsPanel.update(snapshot);
   }
 }
 

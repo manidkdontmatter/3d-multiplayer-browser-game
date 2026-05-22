@@ -6,24 +6,17 @@
 import { clampHotbarSlotIndex } from "../../../shared/index";
 import type { AbilityDefinition } from "../../../shared/index";
 import { resolveProjectileProfile } from "../../../shared/index";
+import type { RuntimeActivationSpec } from "../../../shared/index";
 import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";
 import { getHotbarSlot } from "../../ecs/HotbarComponents";
+import type { ActionEffectPipeline } from "../actions/ActionEffectPipeline";
 
 export interface AbilityExecutionSystemOptions {
   readonly getElapsedSeconds: () => number;
   readonly resolveAbilityById: (unlockedAbilityIds: readonly number[], abilityId: number) => AbilityDefinition | null;
-  readonly broadcastAbilityUse: (playerNid: number, ability: AbilityDefinition, x: number, y: number, z: number) => void;
+  readonly resolveAbilityActivationSpec?: (abilityId: number) => RuntimeActivationSpec | null;
   readonly ecsComponents: WorldWithComponents["components"];
-  readonly spawnProjectile: (request: {
-    ownerNid: number; kind: number;
-    x: number; y: number; z: number;
-    vx: number; vy: number; vz: number;
-    radius: number; damage: number; lifetimeSeconds: number;
-    maxRange: number; gravity: number; drag: number;
-    maxSpeed: number; minSpeed: number; pierceCount: number;
-    despawnOnDamageableHit: boolean; despawnOnWorldHit: boolean;
-  }) => void;
-  readonly applyMeleeHit: (playerEid: number, meleeProfile: NonNullable<AbilityDefinition["melee"]>) => void;
+  readonly effectPipeline: ActionEffectPipeline;
 }
 
 export class AbilityExecutionSystem {
@@ -61,10 +54,9 @@ export class AbilityExecutionSystem {
 
   private executeAbilityByEid(eid: number, ability: AbilityDefinition): boolean {
     const c = this.options.ecsComponents;
-    const pp = ability.projectile;
-    const mp = ability.melee;
-    const cooldown = pp?.cooldownSeconds ?? mp?.cooldownSeconds;
-    if (cooldown === undefined) return false;
+    const runtimeSpec = this.options.resolveAbilityActivationSpec?.(ability.id) ?? null;
+    if (!runtimeSpec) return false;
+    const cooldown = runtimeSpec.cooldownSeconds;
 
     const elapsed = this.options.getElapsedSeconds();
     const lastFired = c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY;
@@ -75,18 +67,35 @@ export class AbilityExecutionSystem {
     const x = c.Position.x[eid] ?? 0;
     const y = c.Position.y[eid] ?? 0;
     const z = c.Position.z[eid] ?? 0;
-    this.options.broadcastAbilityUse(ownerNid, ability, x, y, z);
+    this.options.effectPipeline.execute({
+      type: "broadcast_ability_use",
+      ownerNid,
+      abilityId: ability.id,
+      x,
+      y,
+      z
+    });
 
-    if (pp) {
-      const yaw = c.Yaw.value[eid] ?? 0;
-      const pitch = c.Pitch.value[eid] ?? 0;
-      this.spawnProjectileFromEid(ownerNid, x, y, z, yaw, pitch, pp);
-      return true;
+    for (const effect of runtimeSpec.effects) {
+      if (effect.type === "spawn_projectile") {
+        const yaw = c.Yaw.value[eid] ?? 0;
+        const pitch = c.Pitch.value[eid] ?? 0;
+        this.spawnProjectileFromEid(ownerNid, x, y, z, yaw, pitch, effect.projectile);
+        return true;
+      }
+      if (effect.type === "apply_melee_hit") {
+        this.options.effectPipeline.execute({
+          type: "apply_melee_hit",
+          attackerEid: eid,
+          damage: effect.melee.damage,
+          range: effect.melee.range,
+          radius: effect.melee.radius,
+          arcDegrees: effect.melee.arcDegrees
+        });
+        return true;
+      }
     }
-    if (mp) {
-      this.options.applyMeleeHit(eid, mp);
-    }
-    return true;
+    return false;
   }
 
   private spawnProjectileFromEid(
@@ -103,7 +112,8 @@ export class AbilityExecutionSystem {
     const sx = x + d.x * resolved.spawnForwardOffset;
     const sy = y + resolved.spawnVerticalOffset + d.y * resolved.spawnForwardOffset;
     const sz = z + d.z * resolved.spawnForwardOffset;
-    this.options.spawnProjectile({
+    this.options.effectPipeline.execute({
+      type: "spawn_projectile",
       ownerNid,
       kind: resolved.kind,
       x: sx, y: sy, z: sz,

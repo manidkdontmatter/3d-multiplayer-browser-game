@@ -30,6 +30,7 @@ import {
   Scene,
   ShaderMaterial,
   SphereGeometry,
+  TorusGeometry,
   SRGBColorSpace,
   Texture,
   Vector3,
@@ -185,6 +186,18 @@ export interface WorldEnvironmentOptions {
   clientLocalSettings?: ClientLocalSettings;
 }
 
+interface RuntimePortalMarkerDefinition {
+  mapInstanceId: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
+const RUNTIME_PORTAL_MARKERS: readonly RuntimePortalMarkerDefinition[] = Object.freeze([
+  { mapInstanceId: "map-a", x: 12, y: 34, z: 0 },
+  { mapInstanceId: "map-b", x: 0, y: 4, z: 0 }
+]);
+
 const VOID_SKY_LAYERS: readonly VoidSkyLayerDefinition[] = [
   {
     id: "skybox1",
@@ -314,6 +327,8 @@ export class WorldEnvironment {
   private worldTextureRequestsIssued = false;
   private skyboxRequestsIssued = false;
   private grassInstancesAdded = false;
+  private portalMarkersGroup: Group | null = null;
+  private activePortalMarkerMapInstanceId: string | null = null;
 
   public constructor(canvas: HTMLCanvasElement, options: WorldEnvironmentOptions = {}) {
     const params = new URLSearchParams(window.location.search);
@@ -391,6 +406,7 @@ export class WorldEnvironment {
     this.maybeApplyDeferredVisuals();
     this.updateGrassLod(localPose.x, localPose.z);
     this.updateEnvironment(localPose, locationRoots);
+    this.syncPortalMarkersFromRuntimeMapConfig();
     this.updateVoidSkyPosition();
     this.updateAnchoredEnvironmentVfx();
     this.renderer.clear(true, true, true);
@@ -412,6 +428,11 @@ export class WorldEnvironment {
     this.renderer.dispose();
     this.grassCellBatches.length = 0;
     this.pendingGrassInstances = null;
+    if (this.portalMarkersGroup) {
+      this.scene.remove(this.portalMarkersGroup);
+      this.portalMarkersGroup = null;
+      this.activePortalMarkerMapInstanceId = null;
+    }
   }
 
   private initializeScene(): void {
@@ -622,7 +643,7 @@ export class WorldEnvironment {
     }
 
     for (const root of locationRoots) {
-      const definition = getLocationDefinitionByArchetypeId(root.locationArchetypeId);
+      const definition = getLocationDefinitionByArchetypeId(root.worldAnchorArchetypeId);
       for (const childVolume of definition?.environmentVolumes ?? []) {
         const volume = transformLocationEnvironmentVolume(root, childVolume);
         const preset = ENVIRONMENT_PRESETS.get(volume.environmentPresetId);
@@ -1117,6 +1138,63 @@ diffuseColor.a *= grassFade;`
     return (timeSeconds: number) => {
       windTime.value = Number.isFinite(timeSeconds) ? timeSeconds : 0;
     };
+  }
+
+  private syncPortalMarkersFromRuntimeMapConfig(): void {
+    const mapInstanceId = this.readRuntimeMapInstanceId();
+    if (mapInstanceId === this.activePortalMarkerMapInstanceId) {
+      return;
+    }
+    if (this.portalMarkersGroup) {
+      this.scene.remove(this.portalMarkersGroup);
+      this.portalMarkersGroup = null;
+    }
+    this.activePortalMarkerMapInstanceId = mapInstanceId;
+    if (!mapInstanceId) {
+      return;
+    }
+    const marker = RUNTIME_PORTAL_MARKERS.find((entry) => entry.mapInstanceId === mapInstanceId);
+    if (!marker) {
+      return;
+    }
+    const group = new Group();
+    const ringMaterial = new MeshStandardMaterial({
+      color: 0x3ec3ff,
+      emissive: 0x12496b,
+      emissiveIntensity: 0.8,
+      roughness: 0.25,
+      metalness: 0.15
+    });
+    const pillarMaterial = new MeshStandardMaterial({
+      color: 0x95e5ff,
+      emissive: 0x1a3f53,
+      emissiveIntensity: 0.65,
+      roughness: 0.2,
+      metalness: 0.12
+    });
+    const ring = new Mesh(new TorusGeometry(1.45, 0.16, 18, 40), ringMaterial);
+    ring.rotation.x = Math.PI * 0.5;
+    ring.position.set(marker.x, marker.y + 0.2, marker.z);
+    ring.renderOrder = 20;
+    group.add(ring);
+    const pillar = new Mesh(new CylinderGeometry(0.14, 0.14, 3.1, 16), pillarMaterial);
+    pillar.position.set(marker.x, marker.y + 1.55, marker.z);
+    pillar.renderOrder = 20;
+    group.add(pillar);
+    this.scene.add(group);
+    this.portalMarkersGroup = group;
+  }
+
+  private readRuntimeMapInstanceId(): string | null {
+    const globalObject = globalThis as unknown as {
+      __runtimeMapConfig?: { instanceId?: unknown };
+    };
+    const value = globalObject.__runtimeMapConfig?.instanceId;
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
   }
 
 }

@@ -5,6 +5,7 @@
  */
 import { Group, Mesh, MeshStandardMaterial, BoxGeometry, CapsuleGeometry, type Object3D, type Scene } from "three";
 import { getFallbackAvatarVisual } from "./VisualRegistry";
+import { applyGroupTint, buildRenderArchetypeGroup } from "./RenderArchetypeVisualBuilder";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type VRM, type VRMHumanoid } from "@pixiv/three-vrm";
 import { MOVEMENT_MODE_GROUNDED, PLAYER_EYE_HEIGHT, PLAYER_SPRINT_SPEED } from "../../../shared/index";
@@ -29,12 +30,23 @@ import {
   removeNormalizedHumanoidRigs,
   type SourceBoneBinding
 } from "./CharacterVisualShared";
+import { applyCharacterAttachmentTransform } from "./CharacterAttachmentLayout";
 
 const REMOTE_ANIMATION_SPEED_CAP = PLAYER_SPRINT_SPEED * 2.2;
 const REMOTE_CHARACTER_MODEL_YAW_OFFSET = 0;
 
 interface RemotePlayerVisual {
   root: Group;
+  weaponRoot: Group | null;
+  weaponArchetypeId: number;
+  headRoot: Group | null;
+  headArchetypeId: number;
+  bodyRoot: Group | null;
+  bodyArchetypeId: number;
+  legsRoot: Group | null;
+  legsArchetypeId: number;
+  accessoryRoot: Group | null;
+  accessoryArchetypeId: number;
   animator: CharacterAnimationController | null;
   humanoid: VRMHumanoid | null;
   lastX: number;
@@ -107,6 +119,11 @@ export class RemoteCharacterVisualSystem {
       visual.lastX = remotePlayer.x;
       visual.lastY = renderY;
       visual.lastZ = remotePlayer.z;
+      this.syncAttachmentVisual(visual, "weapon", remotePlayer.equippedWeaponArchetypeId, remotePlayer.equippedWeaponTintColorRgb);
+      this.syncAttachmentVisual(visual, "head", remotePlayer.equippedHeadArchetypeId, remotePlayer.equippedHeadTintColorRgb);
+      this.syncAttachmentVisual(visual, "body", remotePlayer.equippedBodyArchetypeId, remotePlayer.equippedBodyTintColorRgb);
+      this.syncAttachmentVisual(visual, "legs", remotePlayer.equippedLegsArchetypeId, remotePlayer.equippedLegsTintColorRgb);
+      this.syncAttachmentVisual(visual, "accessory", remotePlayer.equippedAccessoryArchetypeId, remotePlayer.equippedAccessoryTintColorRgb);
       visual.animator?.update(dt, {
         horizontalSpeed: visual.horizontalSpeed,
         verticalSpeed: visual.verticalSpeed,
@@ -251,6 +268,16 @@ export class RemoteCharacterVisualSystem {
     }
     return {
       root,
+      weaponRoot: null,
+      weaponArchetypeId: 0,
+      headRoot: null,
+      headArchetypeId: 0,
+      bodyRoot: null,
+      bodyArchetypeId: 0,
+      legsRoot: null,
+      legsArchetypeId: 0,
+      accessoryRoot: null,
+      accessoryArchetypeId: 0,
       animator,
       humanoid,
       lastX: 0,
@@ -269,4 +296,87 @@ export class RemoteCharacterVisualSystem {
     const gltf = getLoadedAsset<GLTF>(CHARACTER_MALE_ASSET_ID);
     return ((gltf?.userData as { vrm?: VRM } | undefined)?.vrm) ?? null;
   }
+
+  private syncAttachmentVisual(
+    visual: RemotePlayerVisual,
+    slot: "weapon" | "head" | "body" | "legs" | "accessory",
+    archetypeId: number,
+    tintColorRgb: number
+  ): void {
+    const currentRoot = this.getAttachmentRoot(visual, slot);
+    const currentArchetypeId = this.getAttachmentArchetypeId(visual, slot);
+    const normalizedArchetypeId = Math.max(0, Math.floor(archetypeId));
+    if (normalizedArchetypeId <= 0) {
+      if (currentRoot) {
+        visual.root.remove(currentRoot);
+      }
+      this.setAttachmentVisual(visual, slot, null, 0);
+      return;
+    }
+    let nextRoot = currentRoot;
+    if (!nextRoot || currentArchetypeId !== normalizedArchetypeId) {
+      if (nextRoot) {
+        visual.root.remove(nextRoot);
+      }
+      const attachment = buildRenderArchetypeGroup(normalizedArchetypeId);
+      if (!attachment) {
+        this.setAttachmentVisual(visual, slot, null, 0);
+        return;
+      }
+      applyCharacterAttachmentTransform(slot, attachment);
+      visual.root.add(attachment);
+      nextRoot = attachment;
+      this.setAttachmentVisual(visual, slot, nextRoot, normalizedArchetypeId);
+    }
+    if (nextRoot) {
+      applyGroupTint(nextRoot, tintColorRgb);
+    }
+  }
+
+  private getAttachmentRoot(visual: RemotePlayerVisual, slot: "weapon" | "head" | "body" | "legs" | "accessory"): Group | null {
+    if (slot === "weapon") return visual.weaponRoot;
+    if (slot === "head") return visual.headRoot;
+    if (slot === "body") return visual.bodyRoot;
+    if (slot === "legs") return visual.legsRoot;
+    return visual.accessoryRoot;
+  }
+
+  private getAttachmentArchetypeId(visual: RemotePlayerVisual, slot: "weapon" | "head" | "body" | "legs" | "accessory"): number {
+    if (slot === "weapon") return visual.weaponArchetypeId;
+    if (slot === "head") return visual.headArchetypeId;
+    if (slot === "body") return visual.bodyArchetypeId;
+    if (slot === "legs") return visual.legsArchetypeId;
+    return visual.accessoryArchetypeId;
+  }
+
+  private setAttachmentVisual(
+    visual: RemotePlayerVisual,
+    slot: "weapon" | "head" | "body" | "legs" | "accessory",
+    root: Group | null,
+    archetypeId: number
+  ): void {
+    if (slot === "weapon") {
+      visual.weaponRoot = root;
+      visual.weaponArchetypeId = archetypeId;
+      return;
+    }
+    if (slot === "head") {
+      visual.headRoot = root;
+      visual.headArchetypeId = archetypeId;
+      return;
+    }
+    if (slot === "body") {
+      visual.bodyRoot = root;
+      visual.bodyArchetypeId = archetypeId;
+      return;
+    }
+    if (slot === "legs") {
+      visual.legsRoot = root;
+      visual.legsArchetypeId = archetypeId;
+      return;
+    }
+    visual.accessoryRoot = root;
+    visual.accessoryArchetypeId = archetypeId;
+  }
+
 }

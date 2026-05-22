@@ -9,6 +9,20 @@ export type WorldWithComponents = {
   components: {
     NetworkId: { value: number[] };
     ModelId: { value: number[] };
+    RenderArchetypeId: { value: number[] };
+    MaterialVariantId: { value: number[] };
+    TintColorRgb: { value: number[] };
+    UniformScalePct: { value: number[] };
+    EquippedWeaponArchetypeId: { value: number[] };
+    EquippedWeaponTintColorRgb: { value: number[] };
+    EquippedHeadArchetypeId: { value: number[] };
+    EquippedHeadTintColorRgb: { value: number[] };
+    EquippedBodyArchetypeId: { value: number[] };
+    EquippedBodyTintColorRgb: { value: number[] };
+    EquippedLegsArchetypeId: { value: number[] };
+    EquippedLegsTintColorRgb: { value: number[] };
+    EquippedAccessoryArchetypeId: { value: number[] };
+    EquippedAccessoryTintColorRgb: { value: number[] };
     Position: { x: number[]; y: number[]; z: number[] };
     Rotation: { x: number[]; y: number[]; z: number[]; w: number[] };
     Velocity: { x: number[]; y: number[]; z: number[] };

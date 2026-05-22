@@ -12,7 +12,7 @@ import {
   MODEL_ID_PROJECTILE_PRIMARY,
 } from "../../../shared/index";
 import type {
-  LocationRootState,
+  WorldAnchorState,
   ProjectileState,
   RemotePlayerState,
   WorldEntityState
@@ -107,19 +107,23 @@ export class SnapshotStore {
     return this.toPlayerState(rawEntity);
   }
 
-  public getLocationRoots(): LocationRootState[] {
-    const output: LocationRootState[] = [];
+  public getWorldAnchors(): WorldAnchorState[] {
+    const output: WorldAnchorState[] = [];
     for (const rawEntity of this.entities.values()) {
       if (rawEntity.ntype !== NType.WorldAnchorEntity) {
         continue;
       }
-      const location = this.toLocationRootState(rawEntity);
-      if (!location) {
+      const worldAnchor = this.toWorldAnchorState(rawEntity);
+      if (!worldAnchor) {
         continue;
       }
-      output.push(location);
+      output.push(worldAnchor);
     }
     return output;
+  }
+
+  public getLocationRoots(): WorldAnchorState[] {
+    return this.getWorldAnchors();
   }
 
   public getProjectiles(): ProjectileState[] {
@@ -167,6 +171,26 @@ export class SnapshotStore {
     const grounded = raw.grounded;
     const health = raw.health;
     const maxHealth = raw.maxHealth;
+    const equippedWeaponArchetypeId =
+      typeof raw.equippedWeaponArchetypeId === "number" ? raw.equippedWeaponArchetypeId : 0;
+    const equippedWeaponTintColorRgb =
+      typeof raw.equippedWeaponTintColorRgb === "number" ? raw.equippedWeaponTintColorRgb : 0xffffff;
+    const equippedHeadArchetypeId =
+      typeof raw.equippedHeadArchetypeId === "number" ? raw.equippedHeadArchetypeId : 0;
+    const equippedHeadTintColorRgb =
+      typeof raw.equippedHeadTintColorRgb === "number" ? raw.equippedHeadTintColorRgb : 0xffffff;
+    const equippedBodyArchetypeId =
+      typeof raw.equippedBodyArchetypeId === "number" ? raw.equippedBodyArchetypeId : 0;
+    const equippedBodyTintColorRgb =
+      typeof raw.equippedBodyTintColorRgb === "number" ? raw.equippedBodyTintColorRgb : 0xffffff;
+    const equippedLegsArchetypeId =
+      typeof raw.equippedLegsArchetypeId === "number" ? raw.equippedLegsArchetypeId : 0;
+    const equippedLegsTintColorRgb =
+      typeof raw.equippedLegsTintColorRgb === "number" ? raw.equippedLegsTintColorRgb : 0xffffff;
+    const equippedAccessoryArchetypeId =
+      typeof raw.equippedAccessoryArchetypeId === "number" ? raw.equippedAccessoryArchetypeId : 0;
+    const equippedAccessoryTintColorRgb =
+      typeof raw.equippedAccessoryTintColorRgb === "number" ? raw.equippedAccessoryTintColorRgb : 0xffffff;
 
     if (
       typeof nid !== "number" ||
@@ -180,6 +204,16 @@ export class SnapshotStore {
     return {
       nid,
       modelId,
+      equippedWeaponArchetypeId,
+      equippedWeaponTintColorRgb,
+      equippedHeadArchetypeId,
+      equippedHeadTintColorRgb,
+      equippedBodyArchetypeId,
+      equippedBodyTintColorRgb,
+      equippedLegsArchetypeId,
+      equippedLegsTintColorRgb,
+      equippedAccessoryArchetypeId,
+      equippedAccessoryTintColorRgb,
       x: position.x,
       y: position.y,
       z: position.z,
@@ -191,21 +225,21 @@ export class SnapshotStore {
     };
   }
 
-  private toLocationRootState(raw: Record<string, unknown>): LocationRootState | null {
-    const locationKind = raw.locationKind;
+  private toWorldAnchorState(raw: Record<string, unknown>): WorldAnchorState | null {
+    const locationKind = raw.worldAnchorKind ?? raw.locationKind;
     if (typeof locationKind !== "number" || locationKind <= LOCATION_KIND_NONE) {
       return null;
     }
     const modelId = raw.modelId;
     const nid = raw.nid;
-    const locationPid = raw.locationPid;
+    const locationPid = raw.worldAnchorId ?? raw.locationPid;
     const position = this.readPosition(raw.position);
     const rotation = this.readRotation(raw.rotation);
-    const locationArchetypeId = raw.locationArchetypeId;
-    const locationSeed = raw.locationSeed;
-    const locationEnvironmentId = raw.locationEnvironmentId;
-    const locationStreamingRadius = raw.locationStreamingRadius;
-    const locationInfluenceRadius = raw.locationInfluenceRadius;
+    const locationArchetypeId = raw.worldAnchorArchetypeId ?? raw.locationArchetypeId;
+    const locationSeed = raw.worldAnchorSeed ?? raw.locationSeed;
+    const locationEnvironmentId = raw.worldAnchorEnvironmentId ?? raw.locationEnvironmentId;
+    const locationStreamingRadius = raw.worldAnchorStreamingRadius ?? raw.locationStreamingRadius;
+    const locationInfluenceRadius = raw.worldAnchorInfluenceRadius ?? raw.locationInfluenceRadius;
 
     if (
       typeof nid !== "number" ||
@@ -225,13 +259,13 @@ export class SnapshotStore {
     return {
       nid,
       modelId,
-      locationPid,
-      locationKind,
-      locationArchetypeId,
-      locationSeed,
-      locationEnvironmentId,
-      locationStreamingRadius,
-      locationInfluenceRadius,
+      worldAnchorId: locationPid,
+      worldAnchorKind: locationKind,
+      worldAnchorArchetypeId: locationArchetypeId,
+      worldAnchorSeed: locationSeed,
+      worldAnchorEnvironmentId: locationEnvironmentId,
+      worldAnchorStreamingRadius: locationStreamingRadius,
+      worldAnchorInfluenceRadius: locationInfluenceRadius,
       x: position.x,
       y: position.y,
       z: position.z,
@@ -280,9 +314,17 @@ export class SnapshotStore {
     const maxHealth = typeof raw.maxHealth === "number" ? raw.maxHealth : 0;
     const pickupDefinitionId = typeof raw.pickupDefinitionId === "number" ? raw.pickupDefinitionId : 0;
     const itemQuantity = typeof raw.itemQuantity === "number" ? raw.itemQuantity : 0;
+    const renderArchetypeId = typeof raw.renderArchetypeId === "number" ? raw.renderArchetypeId : modelId;
+    const materialVariantId = typeof raw.materialVariantId === "number" ? raw.materialVariantId : 0;
+    const tintColorRgb = typeof raw.tintColorRgb === "number" ? raw.tintColorRgb : 0xffffff;
+    const uniformScalePct = typeof raw.uniformScalePct === "number" ? raw.uniformScalePct : 100;
     return {
       nid,
       modelId,
+      renderArchetypeId,
+      materialVariantId,
+      tintColorRgb,
+      uniformScalePct,
       x: position.x,
       y: position.y,
       z: position.z,

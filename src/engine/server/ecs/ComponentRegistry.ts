@@ -34,7 +34,13 @@ export class ComponentRegistry {
 export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
   // Base components shared by all replicated entities
   base: [
-    "NetworkId", "ModelId", "Position", "Rotation",
+    "NetworkId", "ModelId", "RenderArchetypeId", "MaterialVariantId", "TintColorRgb", "UniformScalePct",
+    "EquippedWeaponArchetypeId", "EquippedWeaponTintColorRgb",
+    "EquippedHeadArchetypeId", "EquippedHeadTintColorRgb",
+    "EquippedBodyArchetypeId", "EquippedBodyTintColorRgb",
+    "EquippedLegsArchetypeId", "EquippedLegsTintColorRgb",
+    "EquippedAccessoryArchetypeId", "EquippedAccessoryTintColorRgb",
+    "Position", "Rotation",
     "Grounded", "MovementMode", "Health",
     "ItemArchetypeId", "ItemQuantity",
     "LocationPid", "LocationKind", "LocationArchetypeId", "LocationSeed",

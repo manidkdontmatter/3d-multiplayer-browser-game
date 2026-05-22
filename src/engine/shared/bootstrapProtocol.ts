@@ -6,7 +6,11 @@
 import type { RuntimeMapConfig } from "./world";
 
 export interface BootstrapRequest {
-  authKey: string | null;
+  /**
+   * Canonical bearer key name. Keep authKey as backward-compatible alias in request handlers.
+   */
+  accessKey?: string | null;
+  authKey?: string | null;
 }
 
 export interface BootstrapResponse {

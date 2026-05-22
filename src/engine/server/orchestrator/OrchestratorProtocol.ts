@@ -61,6 +61,7 @@ export interface GenericOrchestratorResponse {
 }
 
 export interface TransferRequest {
+  accessKey?: string | null;
   authKey: string | null;
   accountId: number;
   fromMapInstanceId: string;

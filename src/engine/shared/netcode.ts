@@ -24,8 +24,8 @@ export enum NType {
   CreatorCommand = 23,
   CreatorStateMessage = 24,
   ServerNetDiagnosticsMessage = 25,
-  CarrierVolumeEnteredMessage = 26,
-  CarrierVolumeExitedMessage = 27,
+  ReferenceFrameVolumeEnteredMessage = 26,
+  ReferenceFrameVolumeExitedMessage = 27,
   InventoryActionResultMessage = 28,
   PlayerSettingsCommand = 29,
   PlayerSettingsMessage = 30,
@@ -80,6 +80,20 @@ export const itemCommandSchema = defineSchema({
 
 export const runtimeEntitySchema = defineSchema({
   modelId: Binary.UInt16,
+  renderArchetypeId: Binary.UInt16,
+  materialVariantId: Binary.UInt16,
+  tintColorRgb: Binary.UInt32,
+  uniformScalePct: Binary.UInt16,
+  equippedWeaponArchetypeId: Binary.UInt16,
+  equippedWeaponTintColorRgb: Binary.UInt32,
+  equippedHeadArchetypeId: Binary.UInt16,
+  equippedHeadTintColorRgb: Binary.UInt32,
+  equippedBodyArchetypeId: Binary.UInt16,
+  equippedBodyTintColorRgb: Binary.UInt32,
+  equippedLegsArchetypeId: Binary.UInt16,
+  equippedLegsTintColorRgb: Binary.UInt32,
+  equippedAccessoryArchetypeId: Binary.UInt16,
+  equippedAccessoryTintColorRgb: Binary.UInt32,
   position: { type: Binary.Vector3, interp: true },
   rotation: { type: Binary.Quaternion, interp: true },
   grounded: Binary.Boolean,
@@ -92,6 +106,14 @@ export const runtimeEntitySchema = defineSchema({
 
 export const worldAnchorEntitySchema = defineSchema({
   modelId: Binary.UInt16,
+  worldAnchorId: Binary.Int32,
+  worldAnchorKind: Binary.UInt8,
+  worldAnchorArchetypeId: Binary.UInt16,
+  worldAnchorSeed: Binary.Int32,
+  worldAnchorEnvironmentId: Binary.UInt8,
+  worldAnchorStreamingRadius: Binary.Float32,
+  worldAnchorInfluenceRadius: Binary.Float32,
+  // Backward compatibility during migration.
   locationPid: Binary.Int32,
   locationKind: Binary.UInt8,
   locationArchetypeId: Binary.UInt16,
@@ -231,12 +253,12 @@ export const serverNetDiagnosticsMessageSchema = defineSchema({
   warningMask: Binary.UInt8
 });
 
-export const carrierVolumeEnteredMessageSchema = defineSchema({
+export const referenceFrameVolumeEnteredMessageSchema = defineSchema({
   framePid: Binary.Int32,
   volumeId: Binary.String
 });
 
-export const carrierVolumeExitedMessageSchema = defineSchema({
+export const referenceFrameVolumeExitedMessageSchema = defineSchema({
   framePid: Binary.Int32,
   volumeId: Binary.String
 });
@@ -264,8 +286,8 @@ ncontext.register(NType.PlayerSettingsCommand, playerSettingsCommandSchema);
 ncontext.register(NType.PlayerSettingsMessage, playerSettingsMessageSchema);
 ncontext.register(NType.ServerAlertMessage, serverAlertMessageSchema);
 ncontext.register(NType.ServerNetDiagnosticsMessage, serverNetDiagnosticsMessageSchema);
-ncontext.register(NType.CarrierVolumeEnteredMessage, carrierVolumeEnteredMessageSchema);
-ncontext.register(NType.CarrierVolumeExitedMessage, carrierVolumeExitedMessageSchema);
+ncontext.register(NType.ReferenceFrameVolumeEnteredMessage, referenceFrameVolumeEnteredMessageSchema);
+ncontext.register(NType.ReferenceFrameVolumeExitedMessage, referenceFrameVolumeExitedMessageSchema);
 
 export interface InputCommand {
   ntype: NType.InputCommand;
@@ -321,6 +343,20 @@ export interface RuntimeEntity {
   nid: number;
   ntype: NType.RuntimeEntity;
   modelId: number;
+  renderArchetypeId: number;
+  materialVariantId: number;
+  tintColorRgb: number;
+  uniformScalePct: number;
+  equippedWeaponArchetypeId: number;
+  equippedWeaponTintColorRgb: number;
+  equippedHeadArchetypeId: number;
+  equippedHeadTintColorRgb: number;
+  equippedBodyArchetypeId: number;
+  equippedBodyTintColorRgb: number;
+  equippedLegsArchetypeId: number;
+  equippedLegsTintColorRgb: number;
+  equippedAccessoryArchetypeId: number;
+  equippedAccessoryTintColorRgb: number;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   grounded: boolean;
@@ -335,6 +371,13 @@ export interface WorldAnchorEntity {
   nid: number;
   ntype: NType.WorldAnchorEntity;
   modelId: number;
+  worldAnchorId: number;
+  worldAnchorKind: number;
+  worldAnchorArchetypeId: number;
+  worldAnchorSeed: number;
+  worldAnchorEnvironmentId: number;
+  worldAnchorStreamingRadius: number;
+  worldAnchorInfluenceRadius: number;
   locationPid: number;
   locationKind: number;
   locationArchetypeId: number;
@@ -520,14 +563,14 @@ export interface ServerNetDiagnosticsMessage {
   warningMask: number;
 }
 
-export interface CarrierVolumeEnteredMessage {
-  ntype: NType.CarrierVolumeEnteredMessage;
+export interface ReferenceFrameVolumeEnteredMessage {
+  ntype: NType.ReferenceFrameVolumeEnteredMessage;
   framePid: number;
   volumeId: string;
 }
 
-export interface CarrierVolumeExitedMessage {
-  ntype: NType.CarrierVolumeExitedMessage;
+export interface ReferenceFrameVolumeExitedMessage {
+  ntype: NType.ReferenceFrameVolumeExitedMessage;
   framePid: number;
   volumeId: string;
 }

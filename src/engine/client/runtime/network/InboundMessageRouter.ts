@@ -6,8 +6,8 @@
 import { NType } from "../../../shared/netcode";
 import type {
   AbilityUseMessage,
-  CarrierVolumeEnteredMessage,
-  CarrierVolumeExitedMessage,
+  ReferenceFrameVolumeEnteredMessage,
+  ReferenceFrameVolumeExitedMessage,
   IdentityMessage,
   InputAckMessage,
   InventoryStateMessage,
@@ -26,8 +26,8 @@ export interface InboundMessageRouterHandlers {
   readonly onServerNetDiagnosticsMessage: (message: ServerNetDiagnosticsMessage) => void;
   readonly onMapTransferMessage: (message: MapTransferMessage) => void;
   readonly onInventoryStateMessage: (message: InventoryStateMessage) => void;
-  readonly onCarrierVolumeEnteredMessage: (message: CarrierVolumeEnteredMessage) => void;
-  readonly onCarrierVolumeExitedMessage: (message: CarrierVolumeExitedMessage) => void;
+  readonly onReferenceFrameVolumeEnteredMessage: (message: ReferenceFrameVolumeEnteredMessage) => void;
+  readonly onReferenceFrameVolumeExitedMessage: (message: ReferenceFrameVolumeExitedMessage) => void;
   readonly onInventoryActionResultMessage: (message: InventoryActionResultMessage) => void;
   readonly onPlayerSettingsMessage: (message: PlayerSettingsMessage) => void;
   readonly onServerAlertMessage: (message: ServerAlertMessage) => void;
@@ -45,8 +45,8 @@ export class InboundMessageRouter {
         | ServerNetDiagnosticsMessage
         | ServerPopulationMessage
         | MapTransferMessage
-        | CarrierVolumeEnteredMessage
-        | CarrierVolumeExitedMessage
+        | ReferenceFrameVolumeEnteredMessage
+        | ReferenceFrameVolumeExitedMessage
         | InventoryActionResultMessage
         | PlayerSettingsMessage
         | ServerAlertMessage
@@ -82,13 +82,13 @@ export class InboundMessageRouter {
         continue;
       }
 
-      if (typed?.ntype === NType.CarrierVolumeEnteredMessage) {
-        handlers.onCarrierVolumeEnteredMessage(typed);
+      if (typed?.ntype === NType.ReferenceFrameVolumeEnteredMessage) {
+        handlers.onReferenceFrameVolumeEnteredMessage(typed);
         continue;
       }
 
-      if (typed?.ntype === NType.CarrierVolumeExitedMessage) {
-        handlers.onCarrierVolumeExitedMessage(typed);
+      if (typed?.ntype === NType.ReferenceFrameVolumeExitedMessage) {
+        handlers.onReferenceFrameVolumeExitedMessage(typed);
         continue;
       }
 

@@ -9,6 +9,7 @@ import {
   MODEL_ID_PLATFORM_LINEAR,
   MODEL_ID_PLATFORM_ROTATING,
   PHYSICS_GROUP_SOLID,
+  resolvePlatformMotionProfile,
   samplePlatformTransform,
   normalizeYaw
 } from "../../shared/index";
@@ -76,7 +77,9 @@ export class PlatformSystem {
 
       const platform: PlatformEntity = {
         nid: 0,
-        modelId: definition.kind === 2 ? MODEL_ID_PLATFORM_ROTATING : MODEL_ID_PLATFORM_LINEAR,
+        modelId:
+          definition.modelId
+          ?? (resolvePlatformMotionProfile(definition) === "yaw_rotation" ? MODEL_ID_PLATFORM_ROTATING : MODEL_ID_PLATFORM_LINEAR),
         position: {
           x: pose.x,
           y: pose.y,

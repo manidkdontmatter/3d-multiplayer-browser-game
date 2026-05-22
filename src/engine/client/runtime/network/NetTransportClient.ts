@@ -40,8 +40,9 @@ export class NetTransportClient {
     this.currentServerUrl = serverUrl;
     try {
       this.disconnectActiveSocket("map-transfer-reconnect");
-      const handshake: { authVersion: number; authKey?: string; joinTicket?: string } = { authVersion: 1 };
+      const handshake: { authVersion: number; accessKey?: string; authKey?: string; joinTicket?: string } = { authVersion: 1 };
       if (typeof authKey === "string" && authKey.length > 0) {
+        handshake.accessKey = authKey;
         handshake.authKey = authKey;
       }
       if (typeof options?.joinTicket === "string" && options.joinTicket.length > 0) {

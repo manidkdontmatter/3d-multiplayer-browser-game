@@ -102,17 +102,9 @@ export class InputController {
     const forward = (this.heldKeys.has("KeyW") ? 1 : 0) + (this.heldKeys.has("KeyS") ? -1 : 0);
     const strafe = (this.heldKeys.has("KeyD") ? 1 : 0) + (this.heldKeys.has("KeyA") ? -1 : 0);
 
-    let normForward = forward;
-    let normStrafe = strafe;
-    if (normForward !== 0 && normStrafe !== 0) {
-      const norm = 1 / Math.sqrt(2);
-      normForward *= norm;
-      normStrafe *= norm;
-    }
-
     const movement: MovementInput = {
-      forward: normForward,
-      strafe: normStrafe,
+      forward,
+      strafe,
       jump: this.jumpQueued,
       toggleFlyPressed: this.toggleFlyQueued,
       sprint: this.heldKeys.has("ShiftLeft") || this.heldKeys.has("ShiftRight")

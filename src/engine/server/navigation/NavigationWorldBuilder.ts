@@ -348,7 +348,7 @@ function buildStaticLocationNavigationGeometry(
   definition: LocationRootDefinition,
   pose: NavigationFrameTransform
 ): NavigationGeometry {
-  if (definition.kind === "terrainIsland") {
+  if (definition.terrain) {
     const config = buildLocationTerrainConfig(definition);
     if (!config) {
       return emptyGeometry();
@@ -371,29 +371,34 @@ function buildStaticLocationNavigationGeometry(
   }
 
   const geometry = createGeometry();
-  if (definition.kind === "staticCastle") {
-    addTopQuad(geometry, pose, 0, 5, 0, 34, 24);
-    addTopQuad(geometry, pose, 0, 21, 0, 22, 14);
-    addTopQuad(geometry, pose, -26, 26, -18, 6, 6);
-    addTopQuad(geometry, pose, 26, 26, -18, 6, 6);
-    addTopQuad(geometry, pose, -26, 26, 18, 6, 6);
-    addTopQuad(geometry, pose, 26, 26, 18, 6, 6);
-  }
-  if (definition.kind === "testArena") {
-    addTopQuad(geometry, pose, 0, 2, 0, 42, 42);
-    addTopQuad(geometry, pose, 0, 16, -34, 12, 3);
+  const surfaces = definition.staticNavigationSurfaces ?? [];
+  for (const surface of surfaces) {
+    addTopQuad(
+      geometry,
+      pose,
+      surface.localCenterX,
+      surface.localTopY,
+      surface.localCenterZ,
+      surface.halfX,
+      surface.halfZ
+    );
   }
   return geometry;
 }
 
 function buildMovingFrameNavigationGeometry(definition: LocationRootDefinition): NavigationGeometry {
   const geometry = createGeometry();
-  if (definition.kind === "movingCastle") {
-    addTopQuad(geometry, identityPose(), 0, 9, 0, 42, 28);
-    addTopQuad(geometry, identityPose(), 0, 28, 0, 22, 14);
-  }
-  if (definition.kind === "movingTestPlatform") {
-    addTopQuad(geometry, identityPose(), 0, 0.5, 0, 60, 35);
+  const surfaces = definition.movingNavigationSurfaces ?? [];
+  for (const surface of surfaces) {
+    addTopQuad(
+      geometry,
+      identityPose(),
+      surface.localCenterX,
+      surface.localTopY,
+      surface.localCenterZ,
+      surface.halfX,
+      surface.halfZ
+    );
   }
   return geometry;
 }

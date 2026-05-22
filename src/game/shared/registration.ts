@@ -8,6 +8,7 @@ import {
   injectDerivedEffectDefinitions,
   injectTraitDefinitions,
   injectBlueprintCatalog,
+  injectBlueprintRuntimeCapabilities,
   getAllBlueprintDefinitions,
   type StatAllocationDefinition,
   type DerivedEffectDefinition,
@@ -166,6 +167,7 @@ export function registerGameContent(): void {
   injectBlueprintCatalog(blueprintsRaw as { version: unknown; blueprints: unknown });
 
   const runtimeCatalogs = projectBlueprintsToRuntimeCatalogs(getAllBlueprintDefinitions());
+  injectBlueprintRuntimeCapabilities(runtimeCatalogs.entries);
   injectAbilityCatalog(runtimeCatalogs.abilities);
   injectItemCatalog(runtimeCatalogs.items);
   injectPlatformCatalog(runtimeCatalogs.platforms);

@@ -10,16 +10,17 @@ import {
   PHYSICS_GROUP_SOLID
 } from "./physicsCollisionGroups";
 import {
-  buildLocationTerrainConfig,
-  sampleLocationTransform,
-  VOID_LOCATION_DEFINITIONS,
-  type LocationRootDefinition
+  getWorldAnchorReferenceFrameVolumes,
+  buildWorldAnchorTerrainConfig,
+  sampleWorldAnchorTransform,
+  WORLD_ANCHOR_DEFINITIONS,
+  type WorldAnchorDefinition
 } from "./worldLocations";
-import type { CarrierVolumeDefinition } from "./movingReferenceFrames";
+import type { ReferenceFrameVolumeDefinition } from "./movingReferenceFrames";
 
 export function createStaticWorldColliders(world: RAPIER.World): void {
   const mapInstanceId = resolveRuntimeMapInstanceId();
-  for (const definition of VOID_LOCATION_DEFINITIONS) {
+  for (const definition of WORLD_ANCHOR_DEFINITIONS) {
     if (definition.mapInstanceIds && definition.mapInstanceIds.length > 0) {
       if (mapInstanceId !== null && !definition.mapInstanceIds.includes(mapInstanceId)) {
         continue;
@@ -44,10 +45,10 @@ function resolveRuntimeMapInstanceId(): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function createStaticLocationColliders(world: RAPIER.World, definition: LocationRootDefinition): void {
-  const pose = sampleLocationTransform(definition, 0);
-  if (definition.kind === "terrainIsland") {
-    const config = buildLocationTerrainConfig(definition);
+function createStaticLocationColliders(world: RAPIER.World, definition: WorldAnchorDefinition): void {
+  const pose = sampleWorldAnchorTransform(definition, 0);
+  if (definition.terrain) {
+    const config = buildWorldAnchorTerrainConfig(definition);
     if (!config) {
       return;
     }
@@ -68,26 +69,25 @@ function createStaticLocationColliders(world: RAPIER.World, definition: Location
     return;
   }
 
-  if (definition.kind === "staticCastle") {
-    createFixedCuboid(world, pose.x, pose.y, pose.z, pose.yaw, 34, 5, 24);
-    createFixedCuboid(world, pose.x, pose.y + 13, pose.z, pose.yaw, 22, 8, 14);
-    createFixedCuboid(world, pose.x - 26, pose.y + 12, pose.z - 18, pose.yaw, 6, 14, 6);
-    createFixedCuboid(world, pose.x + 26, pose.y + 12, pose.z - 18, pose.yaw, 6, 14, 6);
-    createFixedCuboid(world, pose.x - 26, pose.y + 12, pose.z + 18, pose.yaw, 6, 14, 6);
-    createFixedCuboid(world, pose.x + 26, pose.y + 12, pose.z + 18, pose.yaw, 6, 14, 6);
-    return;
-  }
-
-  if (definition.kind === "testArena") {
-    createFixedCuboid(world, pose.x, pose.y, pose.z, pose.yaw, 42, 2, 42);
-    createFixedCuboid(world, pose.x, pose.y + 10, pose.z - 34, pose.yaw, 12, 6, 3);
+  const collisionVolumes = definition.staticCollisionVolumes ?? [];
+  for (const volume of collisionVolumes) {
+    createFixedCuboid(
+      world,
+      pose.x + volume.localCenterX,
+      pose.y + volume.localCenterY,
+      pose.z + volume.localCenterZ,
+      pose.yaw,
+      volume.halfX,
+      volume.halfY,
+      volume.halfZ
+    );
   }
 }
 
 export function createLocationKinematicCollider(
   world: RAPIER.World,
-  definition: LocationRootDefinition,
-  pose = sampleLocationTransform(definition, 0)
+  definition: WorldAnchorDefinition,
+  pose = sampleWorldAnchorTransform(definition, 0)
 ): { body: RAPIER.RigidBody; collider: RAPIER.Collider } {
   const body = world.createRigidBody(
     RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pose.x, pose.y, pose.z)
@@ -103,14 +103,14 @@ export function createLocationKinematicCollider(
   return { body, collider };
 }
 
-export function createLocationCarrierSensorColliders(
+export function createLocationReferenceFrameSensorColliders(
   world: RAPIER.World,
-  definition: LocationRootDefinition,
+  definition: WorldAnchorDefinition,
   body: RAPIER.RigidBody
 ): RAPIER.Collider[] {
   const colliders: RAPIER.Collider[] = [];
-  for (const volume of definition.carrierVolumes ?? []) {
-    const desc = createCarrierVolumeColliderDesc(volume);
+  for (const volume of getWorldAnchorReferenceFrameVolumes(definition)) {
+    const desc = createReferenceFrameVolumeColliderDesc(volume);
     if (!desc) {
       continue;
     }
@@ -128,7 +128,7 @@ export function createLocationCarrierSensorColliders(
   return colliders;
 }
 
-function createCarrierVolumeColliderDesc(volume: CarrierVolumeDefinition): RAPIER.ColliderDesc | null {
+function createReferenceFrameVolumeColliderDesc(volume: ReferenceFrameVolumeDefinition): RAPIER.ColliderDesc | null {
   if (volume.shape === "sphere") {
     const radius = Math.max(0, volume.radius ?? 0);
     return radius > 0 ? RAPIER.ColliderDesc.ball(radius) : null;
@@ -152,8 +152,16 @@ export function injectMovingLocationCollisionExtents(
 }
 
 function getMovingLocationCollisionHalfExtents(
-  definition: LocationRootDefinition
+  definition: WorldAnchorDefinition
 ): { halfX: number; halfY: number; halfZ: number } {
+  const perAnchor = definition.movingCollisionHalfExtents;
+  if (perAnchor) {
+    return {
+      halfX: Math.max(0.05, perAnchor.halfX),
+      halfY: Math.max(0.05, perAnchor.halfY),
+      halfZ: Math.max(0.05, perAnchor.halfZ)
+    };
+  }
   const entry = _movingLocationCollisionExtents.get(definition.kind);
   if (entry) return entry;
   return { halfX: 10, halfY: 4, halfZ: 10 };
