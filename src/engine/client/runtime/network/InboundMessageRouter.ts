@@ -10,10 +10,10 @@ import type {
   ReferenceFrameVolumeExitedMessage,
   IdentityMessage,
   InputAckMessage,
-  InventoryStateMessage,
-  ItemDefinitionMessage,
-  InventoryActionResultMessage,
-  CreatorActionResultMessage,
+  UiViewOpenMessage,
+  UiViewPatchMessage,
+  UiViewCloseMessage,
+  UiIntentResultMessage,
   PlayerSettingsMessage,
   ServerAlertMessage,
   MapTransferMessage,
@@ -27,12 +27,12 @@ export interface InboundMessageRouterHandlers {
   readonly onServerPopulationMessage: (message: ServerPopulationMessage) => void;
   readonly onServerNetDiagnosticsMessage: (message: ServerNetDiagnosticsMessage) => void;
   readonly onMapTransferMessage: (message: MapTransferMessage) => void;
-  readonly onInventoryStateMessage: (message: InventoryStateMessage) => void;
-  readonly onItemDefinitionMessage: (message: ItemDefinitionMessage) => void;
   readonly onReferenceFrameVolumeEnteredMessage: (message: ReferenceFrameVolumeEnteredMessage) => void;
   readonly onReferenceFrameVolumeExitedMessage: (message: ReferenceFrameVolumeExitedMessage) => void;
-  readonly onInventoryActionResultMessage: (message: InventoryActionResultMessage) => void;
-  readonly onCreatorActionResultMessage: (message: CreatorActionResultMessage) => void;
+  readonly onUiViewOpenMessage: (message: UiViewOpenMessage) => void;
+  readonly onUiViewPatchMessage: (message: UiViewPatchMessage) => void;
+  readonly onUiViewCloseMessage: (message: UiViewCloseMessage) => void;
+  readonly onUiIntentResultMessage: (message: UiIntentResultMessage) => void;
   readonly onPlayerSettingsMessage: (message: PlayerSettingsMessage) => void;
   readonly onServerAlertMessage: (message: ServerAlertMessage) => void;
   readonly onUnhandledMessage: (message: unknown) => void;
@@ -45,15 +45,15 @@ export class InboundMessageRouter {
         | IdentityMessage
         | InputAckMessage
         | AbilityUseMessage
-        | InventoryStateMessage
-        | ItemDefinitionMessage
         | ServerNetDiagnosticsMessage
         | ServerPopulationMessage
         | MapTransferMessage
         | ReferenceFrameVolumeEnteredMessage
         | ReferenceFrameVolumeExitedMessage
-        | InventoryActionResultMessage
-        | CreatorActionResultMessage
+        | UiViewOpenMessage
+        | UiViewPatchMessage
+        | UiViewCloseMessage
+        | UiIntentResultMessage
         | PlayerSettingsMessage
         | ServerAlertMessage
         | undefined;
@@ -83,15 +83,6 @@ export class InboundMessageRouter {
         continue;
       }
 
-      if (typed?.ntype === NType.InventoryStateMessage) {
-        handlers.onInventoryStateMessage(typed);
-        continue;
-      }
-      if (typed?.ntype === NType.ItemDefinitionMessage) {
-        handlers.onItemDefinitionMessage(typed);
-        continue;
-      }
-
       if (typed?.ntype === NType.ReferenceFrameVolumeEnteredMessage) {
         handlers.onReferenceFrameVolumeEnteredMessage(typed);
         continue;
@@ -102,12 +93,20 @@ export class InboundMessageRouter {
         continue;
       }
 
-      if (typed?.ntype === NType.InventoryActionResultMessage) {
-        handlers.onInventoryActionResultMessage(typed);
+      if (typed?.ntype === NType.UiViewOpenMessage) {
+        handlers.onUiViewOpenMessage(typed);
         continue;
       }
-      if (typed?.ntype === NType.CreatorActionResultMessage) {
-        handlers.onCreatorActionResultMessage(typed);
+      if (typed?.ntype === NType.UiViewPatchMessage) {
+        handlers.onUiViewPatchMessage(typed);
+        continue;
+      }
+      if (typed?.ntype === NType.UiViewCloseMessage) {
+        handlers.onUiViewCloseMessage(typed);
+        continue;
+      }
+      if (typed?.ntype === NType.UiIntentResultMessage) {
+        handlers.onUiIntentResultMessage(typed);
         continue;
       }
       if (typed?.ntype === NType.PlayerSettingsMessage) {

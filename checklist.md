@@ -1,75 +1,78 @@
-# Creator/Station Authoritative Runtime Plan
+# Unified UI View Protocol Completion Checklist
 
-This checklist tracks remaining work to make creator + inventory behavior fully server-authoritative and runtime-dynamic for player-authored content.
+This checklist defines completion for migrating creator + inventory to one canonical server-authoritative UI view replication system.
 
-Execution constraints:
-- Game code only in implementation passes.
-- No tests/guard rails during implementation passes.
+Constraints:
+- Game code only.
+- No tests/guard rails/browser automation.
 
-## 1) Runtime Item Descriptor Authority
+## 1) Protocol Foundations
 
-- [x] Add authoritative server->client runtime item descriptor replication (`ItemDefinitionMessage`).
-Acceptance criteria: Newly created runtime items resolve name/category/use metadata on the client without requiring static startup catalogs.
+- [x] Define canonical UI view wire messages in shared netcode:
+  - `UiViewOpenMessage`
+  - `UiViewPatchMessage`
+  - `UiViewCloseMessage`
+  - `UiIntentCommand`
+  - `UiIntentResultMessage`
+Acceptance criteria: all five contracts are schema-registered in nengi and typed in shared netcode.
 
-- [x] Ensure inventory decode does not drop valid item instances because client lacks a static definition.
-Acceptance criteria: Inventory snapshots preserve valid item entries by id/quantity/slot, with graceful UI fallback for unknown descriptors until descriptor replication arrives.
+- [x] Define keyed-partial patch contract and revision semantics.
+Acceptance criteria: open sends full state + revision; patch sends `baseRevision` and partial payload; mismatch path is explicit.
 
-- [x] Resolve item definitions server-side via static+runtime capability fallback in inventory flows.
-Acceptance criteria: Use/equip/drop/pickup/normalization paths handle runtime-authored items consistently.
+## 2) Server UI View Runtime
 
-## 2) Authoritative Creator Outcome UX
+- [x] Add a server UI view replication runtime responsible for:
+  - creating scoped views,
+  - tracking subscriptions,
+  - incrementing revisions,
+  - emitting open/patch/close,
+  - handling intent routing.
+Acceptance criteria: one reusable server-side runtime exists and is used by creator + inventory views.
 
-- [x] Remove client-side creator submit success/failure inference.
-Acceptance criteria: Client does not infer success from creator validation text.
+- [x] Add per-user view cache to avoid sending unchanged heavy sections.
+Acceptance criteria: unchanged large fields are omitted from patch payloads by keyed partial behavior.
 
-- [x] Emit authoritative server alerts for creator instantiate success/failure paths.
-Acceptance criteria: User-facing create outcomes are produced by server authority only.
+## 3) Creator Migration
 
-- [x] Add authoritative creator action result message channel (`CreatorActionResultMessage`) consumed directly by client UI.
-Acceptance criteria: Creator success/failure outcome rendering is based on explicit server result payloads, not inferred from other message types.
+- [x] Migrate creator station/session UI to `ui_view_*` messages.
+Acceptance criteria: creator panel state (draft, field definitions, render bundle, validation, production preview, descriptor refs) is delivered via UI view protocol, not legacy creator state message path.
 
-## 3) Creator Session Payload Completeness
+- [x] Migrate creator outcomes fully to `UiIntentResultMessage` and remove `CreatorActionResultMessage`.
+Acceptance criteria: creator action success/failure UX no longer depends on legacy creator result message.
 
-- [x] Include station session binding in creator state payload consumed by client.
-Acceptance criteria: Client can render creator context strictly from authoritative state without local assumptions.
+## 4) Inventory Migration
 
-- [x] Ensure creator panel renders from server snapshot payload only (draft/capacity/validation/preview/options) with no correctness-critical local recomputation.
-Acceptance criteria: Local UI logic is presentation-only; all gating and computed values are server-originated.
+- [x] Migrate inventory UI state to `ui_view_*` messages.
+Acceptance criteria: inventory state open/patch/close is served via UI view protocol.
 
-## 4) Runtime Descriptor Unification
+- [x] Migrate remaining inventory action pathways and outcomes fully to `UiIntentCommand` + `UiIntentResultMessage`.
+Acceptance criteria: inventory UI actions no longer depend on `ItemCommand`/`InventoryActionResultMessage`.
 
-- [x] Introduce unified runtime descriptor replication conventions (items first-class; ability/appearance extension hooks documented in code).
-Acceptance criteria: Descriptor delivery model is explicit and extensible, not ad hoc per feature.
+## 5) Descriptor Integration
 
-- [x] Remove remaining correctness dependence on startup static catalogs for dynamic creator/inventory flows.
-Acceptance criteria: Static catalogs are treated as baseline content seed only, not required for runtime-authored correctness.
+- [x] Ensure view payloads include descriptor references and server emits required descriptor upserts before/with relevant view state.
+Acceptance criteria: creator + inventory rendering has no correctness dependency on static startup catalogs.
 
-## 5) Final Sanity Pass (Code Inspection)
+## 6) Legacy Removal
 
-- [x] Verify station->creator->instantiate path remains single canonical authoritative flow.
-Acceptance criteria: No bypass path creates inventory items outside server-validated creator/session policy checks.
+- [x] Remove superseded legacy creator/inventory message handlers and emitters where replaced:
+  - legacy creator state message wiring
+  - legacy creator command/result message wiring
+  - legacy inventory state message wiring
+  - legacy inventory action-result specific UI wiring
+Acceptance criteria: no duplicate pathways for migrated creator/inventory UI flows.
 
-- [x] Verify inventory visibility and naming path is deterministic: instantiate -> authoritative descriptor+inventory messages -> UI render.
-Acceptance criteria: No "created but unknown/hidden item" regressions in code paths.
+## 7) Completion Audit
 
-## 6) Next Authority Hardening Wave
+- [x] Verify creator flow end-to-end by code inspection:
+  - station interaction opens creator UI view,
+  - edits send intents,
+  - server applies/validates,
+  - patches + intent results update UI.
 
-- [x] Replace remaining creator UI local presentation derivations with a server-authored creator render bundle.
-Acceptance criteria: Creator panel section layout data (grouped field rows / attribute rows / augment display rows / preview rows) comes from authoritative server payload, with client responsible only for rendering and input dispatch.
+- [x] Verify inventory flow end-to-end by code inspection:
+  - view open/patch reflects server inventory,
+  - actions send intents,
+  - server result + view updates are authoritative.
 
-- [x] Extend runtime descriptor-on-demand replication pattern to additional descriptor classes (ability/appearance-facing descriptors).
-Acceptance criteria: Dynamic runtime-authored definitions required for UI/visual rendering are replicated as needed from server authority, not assumed from startup seed catalogs.
-
-- [x] Unify creator/inventory outcome messaging contracts to avoid overlap and ambiguity.
-Acceptance criteria: For each action family, one canonical authoritative result channel drives user-facing outcome messaging.
-
-## 7) Follow-On Performance and Robustness
-
-- [x] Remove remaining static-catalog correctness dependencies from world/interact rendering paths.
-Acceptance criteria: Runtime descriptor replication fully covers dynamic gameplay render needs; static catalogs are baseline seed only.
-
-- [x] Add explicit schema/version tags to descriptor and creator-render payloads.
-Acceptance criteria: Payload migrations and compatibility checks are deterministic and debuggable.
-
-- [x] Reduce JSON-heavy payload overhead for high-churn channels (`CreatorStateMessage`, `InventoryStateMessage`) while preserving authority semantics.
-Acceptance criteria: Message contracts remain authoritative but use tighter payload shapes for lower overhead under high CCU/churn.
+- [x] Verify no required creator/inventory client-facing functionality depends on static catalogs for correctness.

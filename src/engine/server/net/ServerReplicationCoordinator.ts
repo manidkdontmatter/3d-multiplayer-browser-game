@@ -4,7 +4,6 @@
  * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
  */
 import type { AbilityDefinition } from "../../shared/index";
-import type { CreatorSessionSnapshot } from "../../shared/index";
 import { NType } from "../../shared/netcode";
 import { NetReplicationBridge } from "../netcode/NetReplicationBridge";
 import type { WorldWithComponents } from "../ecs/SimulationEcsTypes";
@@ -80,10 +79,6 @@ export class ServerReplicationCoordinator<TUser extends ReplicationUser> {
 
   public queueAbilityDefinitionMessage(user: TUser, ability: AbilityDefinition): void {
     this.replicationMessaging.queueAbilityDefinitionMessage(user, ability);
-  }
-
-  public queueCreatorStateMessage(user: TUser, snapshot: CreatorSessionSnapshot): void {
-    this.replicationMessaging.queueCreatorStateMessage(user, snapshot);
   }
 
   public broadcastAbilityUseMessage(playerNid: number, ability: AbilityDefinition, x: number, y: number, z: number): void {

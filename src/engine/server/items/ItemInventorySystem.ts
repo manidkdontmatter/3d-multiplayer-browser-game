@@ -45,8 +45,6 @@ import {
   type PickupSpawnDefinition
 } from "../../shared/index";
 import { getBlueprintRuntimeActivationSpecsByBlueprintId } from "../../shared/index";
-import type { ItemCommand as ItemWireCommand } from "../../shared/netcode";
-import { NType } from "../../shared/netcode";
 import { GUEST_ACCOUNT_ID_BASE, type PersistedPickupState, type PersistenceService } from "../persistence/PersistenceService";
 import type { SimulationEcs } from "../ecs/SimulationEcs";
 import type { ActionEffectPipeline } from "../combat/actions/ActionEffectPipeline";
@@ -71,6 +69,12 @@ export interface ItemInventoryPlayerState {
   collider: RAPIER.Collider;
 }
 
+export interface ItemInventoryCommandResult {
+  ok: boolean;
+  action: number;
+  reason: string;
+}
+
 export interface ItemInventorySystemOptions<TUser> {
   readonly world: RAPIER.World;
   readonly ecs: SimulationEcs;
@@ -82,6 +86,7 @@ export interface ItemInventorySystemOptions<TUser> {
   };
   readonly persistence: PersistenceService;
   readonly getUserById: (userId: number) => TUser | undefined;
+  readonly publishInventoryUiView?: (userId: number, snapshot: InventorySnapshot) => void;
   readonly markPlayerCharacterDirty: (accountId: number) => void;
   readonly persistInventoryMutation: (
     accountId: number,
@@ -130,6 +135,18 @@ interface StationSessionPolicyContext {
   actorRequirementPolicy: "enforce" | "ignore";
 }
 
+interface InventoryWireCommand {
+  action?: number;
+  pickupNid?: number;
+  itemInstanceId?: number;
+  quantity?: number;
+  equipmentSlot?: number;
+  sourceSlot?: number;
+  targetSlot?: number;
+  activationChannel?: number;
+  payloadKind?: number;
+}
+
 interface PickupRuntimeState {
   pickupId: number;
   persistencePolicy: PickupPersistencePolicy;
@@ -144,7 +161,6 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
   private nextPickupId = 1;
   private criticalEventSequence = 1;
   private readonly stationInventoryBySessionId = new Map<string, MutableInventoryState>();
-  private readonly emittedDefinitionIdsByUserId = new Map<number, Set<number>>();
 
   public constructor(private readonly options: ItemInventorySystemOptions<TUser>) {
     this.mapInstanceId = this.resolveMapInstanceId(options.mapInstanceId);
@@ -174,34 +190,12 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
   }
 
   public queueInventoryStateForUser(userId: number): void {
-    const user = this.options.getUserById(userId);
     const player = this.getPlayerStateByUserId(userId);
-    if (!user || !player) {
+    if (!this.options.getUserById(userId) || !player) {
       return;
     }
     const snapshot = this.ensureInventoryLoaded(player.accountId);
-    const emittedDefinitionIds = this.emittedDefinitionIdsByUserId.get(userId) ?? new Set<number>();
-    this.emittedDefinitionIdsByUserId.set(userId, emittedDefinitionIds);
-    for (const item of snapshot.itemInstances) {
-      const definitionId = Math.max(0, Math.floor(item.definitionId));
-      if (definitionId <= 0 || emittedDefinitionIds.has(definitionId)) {
-        continue;
-      }
-      emittedDefinitionIds.add(definitionId);
-      const definition = getItemDefinitionById(definitionId) ?? getBlueprintRuntimeItemByBlueprintId(definitionId);
-      if (!definition) {
-        continue;
-      }
-      user.queueMessage({
-        ntype: NType.ItemDefinitionMessage,
-        version: 1,
-        itemJson: JSON.stringify(definition)
-      });
-    }
-    user.queueMessage({
-      ntype: NType.InventoryStateMessage,
-      inventoryJson: encodeInventorySnapshot(snapshot)
-    });
+    this.options.publishInventoryUiView?.(userId, snapshot);
   }
 
   public queuePendingInventorySnapshot(accountId: number, snapshot: InventorySnapshot): void {
@@ -212,10 +206,10 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     this.rebaseNextInventoryItemInstanceId(snapshot);
   }
 
-  public applyCommand(userId: number, command: Partial<ItemWireCommand>): void {
+  public applyCommand(userId: number, command: InventoryWireCommand): ItemInventoryCommandResult {
     const player = this.getPlayerStateByUserId(userId);
     if (!player) {
-      return;
+      return { ok: false, action: 0, reason: "player_missing" };
     }
     const action = this.normalizeAction(command.action);
     let changed = false;
@@ -289,16 +283,15 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       if (!changed) failureReason = "drop_hotbar_failed";
     }
 
-    this.queueInventoryActionResult(userId, action, changed, changed ? "ok" : failureReason);
-
     if (!changed) {
       this.queueInventoryStateForUser(userId);
-      return;
+      return { ok: false, action, reason: failureReason };
     }
 
     const inventory = this.ensureMutableInventory(player.accountId);
     this.persistInventory(player.accountId, inventory, action);
     this.queueInventoryStateForUser(userId);
+    return { ok: true, action, reason: "ok" };
   }
 
   public instantiateBlueprintItemForUser(
@@ -1370,19 +1363,6 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       }
     }
     return slots;
-  }
-
-  private queueInventoryActionResult(userId: number, action: number, ok: boolean, reason: string): void {
-    const user = this.options.getUserById(userId);
-    if (!user) {
-      return;
-    }
-    user.queueMessage({
-      ntype: NType.InventoryActionResultMessage,
-      action,
-      ok,
-      reason
-    });
   }
 
   private tryAssignHotbarSlot(

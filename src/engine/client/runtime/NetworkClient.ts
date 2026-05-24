@@ -19,7 +19,6 @@ import {
   INVENTORY_OP_USE,
   hotbarPayloadKindToWireValue,
   equipmentSlotToWireValue,
-  upsertItemDefinition,
   type RuntimeMapConfig,
   type AbilityDefinition,
   type EquipmentSlot
@@ -29,9 +28,8 @@ import {
   type AbilityCommand,
   type ReferenceFrameVolumeEnteredMessage,
   type ReferenceFrameVolumeExitedMessage,
-  type CreatorCommandWire,
-  type CreatorActionResultMessage,
-  type ItemCommand,
+  type UiIntentCommand as UiIntentWireCommand,
+  type UiIntentResultMessage,
   type MapTransferCommand,
   type PlayerSettingsCommand,
   type ServerAlertMessage,
@@ -60,8 +58,6 @@ import { SnapshotStore } from "./network/SnapshotStore";
 import type {
   AbilityEventBatch,
   AbilityState,
-  CreatorActionResultState,
-  InventoryActionFeedback,
   InventoryState,
   SettingsState,
   ServerAlertState,
@@ -89,10 +85,10 @@ export class NetworkClient {
   private serverPlayerCount: number | null = null;
   private serverNetDiagnostics: ServerNetDiagnosticsMessage | null = null;
   private pendingMapTransferInstruction: MapTransferInstruction | null = null;
-  private readonly pendingInventoryActionFeedback: InventoryActionFeedback[] = [];
-  private readonly pendingCreatorActionResults: CreatorActionResultState[] = [];
   private readonly pendingSettingsState: SettingsState[] = [];
   private readonly pendingServerAlerts: ServerAlertState[] = [];
+  private readonly pendingUiIntentResults: UiIntentResultMessage[] = [];
+  private nextUiIntentSequence = 1;
   private readonly activeReferenceFrameVolumeMembershipKeys = new Set<string>();
 
   public constructor() {
@@ -112,10 +108,10 @@ export class NetworkClient {
         this.serverPlayerCount = null;
         this.serverNetDiagnostics = null;
         this.pendingMapTransferInstruction = null;
-        this.pendingInventoryActionFeedback.length = 0;
-        this.pendingCreatorActionResults.length = 0;
         this.pendingSettingsState.length = 0;
         this.pendingServerAlerts.length = 0;
+        this.pendingUiIntentResults.length = 0;
+        this.nextUiIntentSequence = 1;
         this.activeReferenceFrameVolumeMembershipKeys.clear();
       },
       () => {
@@ -170,14 +166,13 @@ export class NetworkClient {
       this.queuedAbilityCommand = null;
     }
 
-    // Drain generalized creator commands and send as NType 23
-    const sessionId = this.creatorBridge.getStateStore().getCurrentSessionId();
-    const creatorPayloads = this.creatorBridge.drainCommands(sessionId);
+    const creatorPayloads = this.creatorBridge.drainCommands(this.creatorBridge.getStateStore().getCurrentSessionId());
+    const creatorViewId = this.creatorBridge.getStateStore().getCurrentViewId();
     for (const payload of creatorPayloads) {
-      this.transport.addCommand({
-        ntype: NType.CreatorCommand,
+      this.queueUiIntentForView(creatorViewId, JSON.stringify({
+        kind: "creator_payload",
         commandJson: payload
-      } satisfies CreatorCommandWire);
+      }));
     }
 
     this.transport.addCommand({
@@ -272,7 +267,7 @@ export class NetworkClient {
   }
 
   public queuePickupWorldItem(pickupNid: number, interactSlot = 0): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_PICKUP,
       pickupNid,
       itemInstanceId: 0,
@@ -286,7 +281,7 @@ export class NetworkClient {
   }
 
   public queueDropInventoryItem(itemInstanceId: number, quantity = 0): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_DROP,
       pickupNid: 0,
       itemInstanceId,
@@ -304,7 +299,7 @@ export class NetworkClient {
   }
 
   public queueUseInventoryItemWithChannel(itemInstanceId: number, activationChannel: number): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_USE,
       pickupNid: 0,
       itemInstanceId,
@@ -318,7 +313,7 @@ export class NetworkClient {
   }
 
   public queueEquipInventoryItem(itemInstanceId: number): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_EQUIP,
       pickupNid: 0,
       itemInstanceId,
@@ -332,7 +327,7 @@ export class NetworkClient {
   }
 
   public queueUnequipInventorySlot(slot: EquipmentSlot): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_UNEQUIP,
       pickupNid: 0,
       itemInstanceId: 0,
@@ -354,7 +349,7 @@ export class NetworkClient {
   }
 
   private queueAssignHotbarPayload(targetSlot: number, kind: "item_instance" | "ability" | "action", refId: number): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
       pickupNid: 0,
       itemInstanceId: refId,
@@ -368,7 +363,7 @@ export class NetworkClient {
   }
 
   public queueClearHotbarSlot(sourceSlot: number): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_CLEAR_HOTBAR_SLOT,
       pickupNid: 0,
       itemInstanceId: 0,
@@ -382,7 +377,7 @@ export class NetworkClient {
   }
 
   public queueMoveHotbarSlot(sourceSlot: number, targetSlot: number): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_MOVE_HOTBAR_SLOT,
       pickupNid: 0,
       itemInstanceId: 0,
@@ -396,7 +391,7 @@ export class NetworkClient {
   }
 
   public queueExecuteHotbarSlot(sourceSlot: number, activationChannel: number): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_EXECUTE_HOTBAR_SLOT,
       pickupNid: 0,
       itemInstanceId: 0,
@@ -410,7 +405,7 @@ export class NetworkClient {
   }
 
   public queueDropHotbarSlot(sourceSlot: number): void {
-    this.queueItemCommand({
+    this.queueInventoryUiIntent({
       action: INVENTORY_OP_DROP_HOTBAR_SLOT,
       pickupNid: 0,
       itemInstanceId: 0,
@@ -464,24 +459,6 @@ export class NetworkClient {
     return this.inventory.consumeState();
   }
 
-  public consumeInventoryActionFeedback(): InventoryActionFeedback[] {
-    if (this.pendingInventoryActionFeedback.length <= 0) {
-      return [];
-    }
-    const next = this.pendingInventoryActionFeedback.slice();
-    this.pendingInventoryActionFeedback.length = 0;
-    return next;
-  }
-
-  public consumeCreatorActionResults(): CreatorActionResultState[] {
-    if (this.pendingCreatorActionResults.length <= 0) {
-      return [];
-    }
-    const next = this.pendingCreatorActionResults.slice();
-    this.pendingCreatorActionResults.length = 0;
-    return next;
-  }
-
   public getInventoryState(): InventoryState {
     return this.inventory.getState();
   }
@@ -500,6 +477,28 @@ export class NetworkClient {
     const next = this.pendingServerAlerts.slice();
     this.pendingServerAlerts.length = 0;
     return next;
+  }
+
+  public consumeUiIntentResults(): UiIntentResultMessage[] {
+    if (this.pendingUiIntentResults.length <= 0) {
+      return [];
+    }
+    const next = this.pendingUiIntentResults.slice();
+    this.pendingUiIntentResults.length = 0;
+    return next;
+  }
+
+  public queueUiIntent(viewId: number, sequence: number, intentJson: string): void {
+    if (!this.transport.isConnected()) {
+      return;
+    }
+    this.transport.addCommand({
+      ntype: NType.UiIntentCommand,
+      viewId: this.clampUnsignedInt(viewId, 0xffff),
+      sequence: this.clampUnsignedInt(sequence, 0xffff),
+      intentJson
+    } satisfies UiIntentWireCommand);
+    this.transport.flush();
   }
 
   public getRemotePlayers(): RemotePlayerState[] {
@@ -690,43 +689,26 @@ export class NetworkClient {
           mapConfig
         };
       },
-      onInventoryStateMessage: (message) => {
-        this.inventory.processInventoryJson(message.inventoryJson);
-      },
-      onItemDefinitionMessage: (message) => {
-        if (this.clampUnsignedInt((message as { version?: number }).version ?? 0, 0xff) !== 1) {
-          return;
-        }
-        try {
-          const parsed = JSON.parse(message.itemJson) as unknown;
-          upsertItemDefinition(parsed);
-        } catch {
-          // Ignore malformed item definition messages.
-        }
-      },
       onReferenceFrameVolumeEnteredMessage: (message) => {
         this.applyReferenceFrameVolumeEntered(message);
       },
       onReferenceFrameVolumeExitedMessage: (message) => {
         this.applyReferenceFrameVolumeExited(message);
       },
-      onInventoryActionResultMessage: (message) => {
-        this.pendingInventoryActionFeedback.push({
-          action: this.clampUnsignedInt(message.action, 0xff),
-          ok: Boolean(message.ok),
-          reason: typeof message.reason === "string" ? message.reason : "unknown"
-        });
+      onUiViewOpenMessage: (message) => {
+        this.creatorBridge.getStateStore().processUiViewOpen(message.viewId, message.stateJson);
+        this.inventory.processUiViewOpen(message.viewId, message.stateJson);
       },
-      onCreatorActionResultMessage: (message: CreatorActionResultMessage) => {
-        if (this.clampUnsignedInt((message as { version?: number }).version ?? 0, 0xff) !== 1) {
-          return;
-        }
-        this.pendingCreatorActionResults.push({
-          ok: Boolean(message.ok),
-          message: typeof message.message === "string" ? message.message : "",
-          createdBlueprintId: this.clampUnsignedInt(message.createdBlueprintId, 0xffff),
-          createdItemInstanceId: this.clampUnsignedInt(message.createdItemInstanceId, 0x7fffffff)
-        });
+      onUiViewPatchMessage: (message) => {
+        this.creatorBridge.getStateStore().processUiViewPatch(message.viewId, message.patchJson);
+        this.inventory.processUiViewPatch(message.viewId, message.patchJson);
+      },
+      onUiViewCloseMessage: (message) => {
+        this.creatorBridge.getStateStore().processUiViewClose(message.viewId);
+        this.inventory.processUiViewClose(message.viewId);
+      },
+      onUiIntentResultMessage: (message) => {
+        this.pendingUiIntentResults.push(message);
       },
       onPlayerSettingsMessage: (message) => {
         try {
@@ -753,7 +735,6 @@ export class NetworkClient {
         if (this.abilities.processMessage(message)) {
           return;
         }
-        this.creatorBridge.processMessage(message);
       }
     });
 
@@ -780,23 +761,45 @@ export class NetworkClient {
     };
   }
 
-  private queueItemCommand(command: Omit<ItemCommand, "ntype">): void {
+  private queueInventoryUiIntent(command: {
+    action: number;
+    pickupNid: number;
+    itemInstanceId: number;
+    quantity: number;
+    equipmentSlot: number;
+    sourceSlot: number;
+    targetSlot: number;
+    activationChannel: number;
+    payloadKind: number;
+  }): void {
+    const viewId = this.inventory.getCurrentViewId();
+    this.queueUiIntentForView(viewId, JSON.stringify({
+      kind: "inventory_command",
+      command
+    }));
+  }
+
+  private queueUiIntentForView(viewId: number, intentJson: string): void {
     if (!this.transport.isConnected()) {
       return;
     }
+    const normalizedViewId = this.clampUnsignedInt(viewId, 0xffff);
+    if (normalizedViewId <= 0) {
+      return;
+    }
     this.transport.addCommand({
-      ntype: NType.ItemCommand,
-      action: this.clampUnsignedInt(command.action, 0xff),
-      pickupNid: this.clampUnsignedInt(command.pickupNid, 0xffff),
-      itemInstanceId: this.clampUnsignedInt(command.itemInstanceId, 0xffffffff),
-      quantity: this.clampUnsignedInt(command.quantity, 0xffff),
-      equipmentSlot: this.clampUnsignedInt(command.equipmentSlot, 0xff),
-      sourceSlot: this.clampUnsignedInt(command.sourceSlot, 0xff),
-      targetSlot: this.clampUnsignedInt(command.targetSlot, 0xff),
-      activationChannel: this.clampUnsignedInt(command.activationChannel, 0xff),
-      payloadKind: this.clampUnsignedInt(command.payloadKind, 0xff)
-    } satisfies ItemCommand);
+      ntype: NType.UiIntentCommand,
+      viewId: normalizedViewId,
+      sequence: this.allocateUiIntentSequence(),
+      intentJson
+    } satisfies UiIntentWireCommand);
     this.transport.flush();
+  }
+
+  private allocateUiIntentSequence(): number {
+    const sequence = this.nextUiIntentSequence;
+    this.nextUiIntentSequence = this.nextUiIntentSequence >= 0xffff ? 1 : this.nextUiIntentSequence + 1;
+    return sequence;
   }
 
   private getOrCreateQueuedAbilityCommand(): QueuedAbilityCommand {

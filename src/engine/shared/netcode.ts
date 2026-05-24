@@ -5,10 +5,6 @@
  */
 import { Binary, Context, defineSchema } from "nengi";
 
-export const ITEM_DEFINITION_MESSAGE_VERSION = 1;
-export const CREATOR_STATE_MESSAGE_VERSION = 1;
-export const CREATOR_ACTION_RESULT_MESSAGE_VERSION = 1;
-
 export enum NType {
   InputCommand = 1,
   RuntimeEntity = 2,
@@ -16,7 +12,7 @@ export enum NType {
   InputAckMessage = 5,
   AbilityDefinitionMessage = 8,
   AbilityStateMessage = 9,
-  ItemDefinitionMessage = 10,
+  // 10 reserved for retired legacy item-definition descriptor wire message.
   AbilityCommand = 11,
   AbilityUseMessage = 13,
   ServerPopulationMessage = 14,
@@ -24,18 +20,20 @@ export enum NType {
   MapTransferCommand = 18,
   MapTransferMessage = 19,
   WorldAnchorEntity = 20,
-  ItemCommand = 21,
-  InventoryStateMessage = 22,
-  CreatorCommand = 23,
-  CreatorStateMessage = 24,
+  // 21-24 reserved for retired legacy creator/inventory wire messages.
   ServerNetDiagnosticsMessage = 25,
   ReferenceFrameVolumeEnteredMessage = 26,
   ReferenceFrameVolumeExitedMessage = 27,
-  InventoryActionResultMessage = 28,
+  // 28 reserved for retired legacy inventory action-result wire message.
   PlayerSettingsCommand = 29,
   PlayerSettingsMessage = 30,
   ServerAlertMessage = 31,
-  CreatorActionResultMessage = 32
+  // 32 reserved for retired legacy creator action-result wire message.
+  UiViewOpenMessage = 33,
+  UiViewPatchMessage = 34,
+  UiViewCloseMessage = 35,
+  UiIntentCommand = 36,
+  UiIntentResultMessage = 37
 }
 
 export const inputCommandSchema = defineSchema({
@@ -70,18 +68,6 @@ export const abilityCommandSchema = defineSchema({
 
 export const mapTransferCommandSchema = defineSchema({
   targetMapInstanceId: Binary.String
-});
-
-export const itemCommandSchema = defineSchema({
-  action: Binary.UInt8,
-  pickupNid: Binary.UInt16,
-  itemInstanceId: Binary.UInt32,
-  quantity: Binary.UInt16,
-  equipmentSlot: Binary.UInt8,
-  sourceSlot: Binary.UInt8,
-  targetSlot: Binary.UInt8,
-  activationChannel: Binary.UInt8,
-  payloadKind: Binary.UInt8
 });
 
 export const runtimeEntitySchema = defineSchema({
@@ -218,32 +204,11 @@ export const mapTransferMessageSchema = defineSchema({
   cubeCount: Binary.UInt16
 });
 
-export const inventoryStateMessageSchema = defineSchema({
-  inventoryJson: Binary.String
-});
 // Runtime descriptor convention:
 // - Authoritative server sends descriptor messages on-demand for dynamic/runtime-authored content.
 // - Client caches descriptors as render/UI metadata only (not gameplay authority).
 // - Snapshot payloads reference ids; descriptor messages provide presentation fields by id.
 // - Additional descriptor channels (ability/appearance/etc) should follow the same pattern.
-export const itemDefinitionMessageSchema = defineSchema({
-  version: Binary.UInt8,
-  itemJson: Binary.String
-});
-export const inventoryActionResultMessageSchema = defineSchema({
-  action: Binary.UInt8,
-  ok: Binary.Boolean,
-  reason: Binary.String
-});
-
-export const creatorCommandSchema = defineSchema({
-  commandJson: Binary.String
-});
-
-export const creatorStateMessageSchema = defineSchema({
-  version: Binary.UInt8,
-  stateJson: Binary.String
-});
 export const playerSettingsCommandSchema = defineSchema({
   settingsJson: Binary.String
 });
@@ -254,12 +219,33 @@ export const serverAlertMessageSchema = defineSchema({
   text: Binary.String,
   severity: Binary.UInt8
 });
-export const creatorActionResultMessageSchema = defineSchema({
-  version: Binary.UInt8,
+export const uiViewOpenMessageSchema = defineSchema({
+  viewId: Binary.UInt16,
+  viewType: Binary.String,
+  revision: Binary.UInt16,
+  stateJson: Binary.String
+});
+export const uiViewPatchMessageSchema = defineSchema({
+  viewId: Binary.UInt16,
+  baseRevision: Binary.UInt16,
+  revision: Binary.UInt16,
+  patchJson: Binary.String
+});
+export const uiViewCloseMessageSchema = defineSchema({
+  viewId: Binary.UInt16,
+  reason: Binary.String
+});
+export const uiIntentCommandSchema = defineSchema({
+  viewId: Binary.UInt16,
+  sequence: Binary.UInt16,
+  intentJson: Binary.String
+});
+export const uiIntentResultMessageSchema = defineSchema({
+  viewId: Binary.UInt16,
+  sequence: Binary.UInt16,
   ok: Binary.Boolean,
   message: Binary.String,
-  createdBlueprintId: Binary.UInt16,
-  createdItemInstanceId: Binary.UInt32
+  resultJson: Binary.String
 });
 
 export const serverNetDiagnosticsMessageSchema = defineSchema({
@@ -289,7 +275,6 @@ export const referenceFrameVolumeExitedMessageSchema = defineSchema({
 export const ncontext = new Context();
 ncontext.register(NType.InputCommand, inputCommandSchema);
 ncontext.register(NType.AbilityCommand, abilityCommandSchema);
-ncontext.register(NType.ItemCommand, itemCommandSchema);
 ncontext.register(NType.RuntimeEntity, runtimeEntitySchema);
 ncontext.register(NType.WorldAnchorEntity, worldAnchorEntitySchema);
 ncontext.register(NType.IdentityMessage, identityMessageSchema);
@@ -301,15 +286,14 @@ ncontext.register(NType.ServerPopulationMessage, serverPopulationMessageSchema);
 ncontext.register(NType.AbilityOwnershipMessage, abilityOwnershipMessageSchema);
 ncontext.register(NType.MapTransferCommand, mapTransferCommandSchema);
 ncontext.register(NType.MapTransferMessage, mapTransferMessageSchema);
-ncontext.register(NType.InventoryStateMessage, inventoryStateMessageSchema);
-ncontext.register(NType.ItemDefinitionMessage, itemDefinitionMessageSchema);
-ncontext.register(NType.InventoryActionResultMessage, inventoryActionResultMessageSchema);
-ncontext.register(NType.CreatorCommand, creatorCommandSchema);
-ncontext.register(NType.CreatorStateMessage, creatorStateMessageSchema);
 ncontext.register(NType.PlayerSettingsCommand, playerSettingsCommandSchema);
 ncontext.register(NType.PlayerSettingsMessage, playerSettingsMessageSchema);
 ncontext.register(NType.ServerAlertMessage, serverAlertMessageSchema);
-ncontext.register(NType.CreatorActionResultMessage, creatorActionResultMessageSchema);
+ncontext.register(NType.UiViewOpenMessage, uiViewOpenMessageSchema);
+ncontext.register(NType.UiViewPatchMessage, uiViewPatchMessageSchema);
+ncontext.register(NType.UiViewCloseMessage, uiViewCloseMessageSchema);
+ncontext.register(NType.UiIntentCommand, uiIntentCommandSchema);
+ncontext.register(NType.UiIntentResultMessage, uiIntentResultMessageSchema);
 ncontext.register(NType.ServerNetDiagnosticsMessage, serverNetDiagnosticsMessageSchema);
 ncontext.register(NType.ReferenceFrameVolumeEnteredMessage, referenceFrameVolumeEnteredMessageSchema);
 ncontext.register(NType.ReferenceFrameVolumeExitedMessage, referenceFrameVolumeExitedMessageSchema);
@@ -349,19 +333,6 @@ export interface AbilityCommand {
 export interface MapTransferCommand {
   ntype: NType.MapTransferCommand;
   targetMapInstanceId: string;
-}
-
-export interface ItemCommand {
-  ntype: NType.ItemCommand;
-  action: number;
-  pickupNid: number;
-  itemInstanceId: number;
-  quantity: number;
-  equipmentSlot: number;
-  sourceSlot: number;
-  targetSlot: number;
-  activationChannel: number;
-  payloadKind: number;
 }
 
 export interface RuntimeEntity {
@@ -509,35 +480,6 @@ export interface MapTransferMessage {
   cubeCount: number;
 }
 
-export interface InventoryStateMessage {
-  ntype: NType.InventoryStateMessage;
-  inventoryJson: string;
-}
-export interface ItemDefinitionMessage {
-  ntype: NType.ItemDefinitionMessage;
-  version: number;
-  itemJson: string;
-}
-export interface InventoryActionResultMessage {
-  ntype: NType.InventoryActionResultMessage;
-  action: number;
-  ok: boolean;
-  reason: string;
-}
-
-// ── Generalized creator network messages ───────────────────────────────────────
-
-export interface CreatorCommandWire {
-  ntype: NType.CreatorCommand;
-  commandJson: string;
-}
-
-export interface CreatorStateMessageWire {
-  ntype: NType.CreatorStateMessage;
-  version: number;
-  stateJson: string;
-}
-
 export interface PlayerSettingsCommand {
   ntype: NType.PlayerSettingsCommand;
   settingsJson: string;
@@ -554,13 +496,43 @@ export interface ServerAlertMessage {
   severity: number;
 }
 
-export interface CreatorActionResultMessage {
-  ntype: NType.CreatorActionResultMessage;
-  version: number;
+
+export interface UiViewOpenMessage {
+  ntype: NType.UiViewOpenMessage;
+  viewId: number;
+  viewType: string;
+  revision: number;
+  stateJson: string;
+}
+
+export interface UiViewPatchMessage {
+  ntype: NType.UiViewPatchMessage;
+  viewId: number;
+  baseRevision: number;
+  revision: number;
+  patchJson: string;
+}
+
+export interface UiViewCloseMessage {
+  ntype: NType.UiViewCloseMessage;
+  viewId: number;
+  reason: string;
+}
+
+export interface UiIntentCommand {
+  ntype: NType.UiIntentCommand;
+  viewId: number;
+  sequence: number;
+  intentJson: string;
+}
+
+export interface UiIntentResultMessage {
+  ntype: NType.UiIntentResultMessage;
+  viewId: number;
+  sequence: number;
   ok: boolean;
   message: string;
-  createdBlueprintId: number;
-  createdItemInstanceId: number;
+  resultJson: string;
 }
 
 export type CreatorCommandAction =

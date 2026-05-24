@@ -7,9 +7,7 @@ import { GameSimulation } from "../GameSimulation";
 import type { InventorySnapshot } from "../../shared/items";
 import { coercePlayerSettings, type PlayerSettings } from "../../shared/playerSettings";
 import {
-  decodeCreatorCommandPayloadJson,
-  NType,
-  normalizeCreatorCommandFromPayload
+  NType
 } from "../../shared/netcode";
 import { MapProcessIpcChannel } from "../ipc/MapProcessIpcChannel";
 import { GUEST_ACCOUNT_ID_BASE, PersistenceService, type PlayerSnapshot } from "../persistence/PersistenceService";
@@ -18,7 +16,6 @@ import { ServerCommandRouter } from "./ServerCommandRouter";
 import type { ServerNetworkUser } from "./ServerNetworkTypes";
 
 const MAP_TRANSFER_DISCONNECT_DELAY_MS = 800;
-const MAX_CREATOR_COMMAND_JSON_BYTES = 16384;
 const MAX_MAP_TRANSFER_TARGET_ID_CHARS = 256;
 const MAP_PORTAL_ARRIVAL_CAMERA_Y = 4;
 const MAP_PORTAL_ARRIVAL_OVERRIDES: Readonly<Record<string, { x: number; y: number; z: number; yaw: number }>> = Object.freeze({
@@ -113,21 +110,12 @@ export class ServerNetworkEventRouter {
     this.commandRouter.route(user, commands, {
       onInputCommands: (inputCommands) => this.simulation.applyInputCommands(user.id, inputCommands),
       onAbilityCommand: (commandUser, command) => this.simulation.applyAbilityCommand(commandUser, command),
-      onItemCommand: (commandUser, command) =>
-        this.simulation.applyItemCommand(commandUser, command),
+      onUiIntentCommand: (commandUser, command) =>
+        this.simulation.applyUiIntentCommand(commandUser, command),
       onMapTransferCommand: (commandUser, command) =>
         void this.handleMapTransferCommand(commandUser, command.targetMapInstanceId),
       onPlayerSettingsCommand: (commandUser, command) => {
         this.simulation.applyPlayerSettingsCommand(commandUser, command);
-      },
-      onCreatorCommand: (commandUser, command) => {
-        const payload = decodeCreatorCommandPayloadJson(command.commandJson, MAX_CREATOR_COMMAND_JSON_BYTES);
-        if (!payload) {
-          console.warn("[server] malformed creator command payload dropped");
-          return;
-        }
-        const normalized = normalizeCreatorCommandFromPayload(payload);
-        this.simulation.applyCreatorCommand(commandUser, normalized);
       }
     });
   }

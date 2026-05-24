@@ -11,7 +11,7 @@ import {
   encodeAbilityAttributeMask,
   NType
 } from "../../shared/index";
-import type { AbilityDefinition, CreatorSessionSnapshot, MovementMode } from "../../shared/index";
+import type { AbilityDefinition, MovementMode } from "../../shared/index";
 
 
 export interface ReplicationUser {
@@ -48,13 +48,6 @@ export interface ReplicationMessagingSystemOptions<TUser extends ReplicationUser
 }
 
 export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
-  private readonly creatorStateCacheByUserId = new Map<number, {
-    fieldDefinitionsJson: string;
-    renderBundleJson: string;
-    itemDescriptorsJson: string;
-    availableBlueprintsJson: string;
-  }>();
-
   public constructor(private readonly options: ReplicationMessagingSystemOptions<TUser>) {}
 
   public syncUserViewPosition(userId: number, x: number, y: number, z: number): void {
@@ -194,46 +187,6 @@ export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
     user.queueMessage({
       ntype: NType.AbilityOwnershipMessage,
       unlockedAbilityIds: normalized
-    });
-  }
-
-  public queueCreatorStateMessage(user: TUser, snapshot: CreatorSessionSnapshot): void {
-    const serialized = {
-      fieldDefinitionsJson: JSON.stringify(snapshot.fieldDefinitions),
-      renderBundleJson: JSON.stringify(snapshot.renderBundle),
-      itemDescriptorsJson: JSON.stringify(snapshot.itemDescriptors ?? []),
-      availableBlueprintsJson: JSON.stringify(snapshot.availableBlueprints)
-    };
-    const previous = this.creatorStateCacheByUserId.get(user.id) ?? null;
-    const payload = {
-      fieldDefinitionsJson:
-        previous?.fieldDefinitionsJson === serialized.fieldDefinitionsJson ? "" : serialized.fieldDefinitionsJson,
-      renderBundleJson:
-        previous?.renderBundleJson === serialized.renderBundleJson ? "" : serialized.renderBundleJson,
-      itemDescriptorsJson:
-        previous?.itemDescriptorsJson === serialized.itemDescriptorsJson ? "" : serialized.itemDescriptorsJson,
-      availableBlueprintsJson:
-        previous?.availableBlueprintsJson === serialized.availableBlueprintsJson ? "" : serialized.availableBlueprintsJson
-    };
-    this.creatorStateCacheByUserId.set(user.id, serialized);
-    user.queueMessage({
-      ntype: NType.CreatorStateMessage,
-      version: 1,
-      stateJson: JSON.stringify({
-        sessionId: Math.max(0, Math.floor(snapshot.sessionId)),
-        ackSequence: Math.max(0, Math.floor(snapshot.ackSequence)),
-        profileId: snapshot.profileId,
-        stationSessionId: snapshot.stationSessionId ?? null,
-        draftJson: JSON.stringify(snapshot.draft),
-        fieldDefinitionsJson: payload.fieldDefinitionsJson,
-        renderBundleJson: payload.renderBundleJson,
-        capacityJson: JSON.stringify(snapshot.capacity),
-        validationJson: JSON.stringify(snapshot.validation),
-        productionPreviewJson: JSON.stringify(snapshot.productionPreview ?? null),
-        itemDescriptorsJson: payload.itemDescriptorsJson,
-        availableBlueprintCount: Math.max(0, Math.floor(snapshot.availableBlueprintCount)),
-        availableBlueprintsJson: payload.availableBlueprintsJson
-      })
     });
   }
 

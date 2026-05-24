@@ -88,12 +88,6 @@ export interface MapTransferInstruction {
 
 export type InventoryState = InventorySnapshot;
 
-export interface InventoryActionFeedback {
-  action: number;
-  ok: boolean;
-  reason: string;
-}
-
 export interface SettingsState {
   settings: PlayerSettings;
 }
@@ -103,10 +97,4 @@ export interface ServerAlertState {
   severity: AlertSeverity;
 }
 
-export interface CreatorActionResultState {
-  ok: boolean;
-  message: string;
-  createdBlueprintId: number;
-  createdItemInstanceId: number;
-}
 

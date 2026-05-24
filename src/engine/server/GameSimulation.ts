@@ -42,7 +42,9 @@ import { sortedUniqueContains } from "../shared/sortedNumberList";
 import {
   NType,
   type AbilityCommand as AbilityWireCommand,
-  type ItemCommand as ItemWireCommand,
+  type UiIntentCommand as UiIntentWireCommand,
+  decodeCreatorCommandPayloadJson,
+  normalizeCreatorCommandFromPayload,
   type InputCommand as InputWireCommand,
   type PlayerSettingsCommand as PlayerSettingsWireCommand
 } from "../shared/netcode";
@@ -94,6 +96,7 @@ import {
 } from "../shared/appearance/AppearancePolicy";
 import { AppearanceSystem } from "./appearance/AppearanceSystem";
 import type { AppearanceIntentSource } from "./appearance/AppearanceSystem";
+import { UiViewReplicationRuntime } from "./ui/UiViewReplicationRuntime";
 
 type UserLike = {
   id: number; queueMessage: (message: unknown) => void; accountId?: number;
@@ -138,6 +141,18 @@ const DEFAULT_ACTOR_CAPABILITIES: Readonly<Record<string, number>> = Object.free
   "creator.publish.global": 0,
   "blueprint.instantiate.restricted": 0
 });
+const MAX_CREATOR_COMMAND_JSON_BYTES = 4096;
+type InventoryWireCommand = {
+  action?: number;
+  pickupNid?: number;
+  itemInstanceId?: number;
+  quantity?: number;
+  equipmentSlot?: number;
+  sourceSlot?: number;
+  targetSlot?: number;
+  activationChannel?: number;
+  payloadKind?: number;
+};
 const PORTAL_TRANSFER_ZONES: readonly PortalTransferZone[] = Object.freeze([
   { sourceMapInstanceId: "map-a", targetMapInstanceId: "map-b", centerX: 12, centerY: 34, centerZ: 0, sensorRadius: 2.2 },
   { sourceMapInstanceId: "map-b", targetMapInstanceId: "map-a", centerX: 0, centerY: 4, centerZ: 0, sensorRadius: 2.2 }
@@ -186,6 +201,7 @@ export class GameSimulation {
   private readonly playerMovementSystem: PlayerMovementSystem;
   private readonly npcMovementSystem: CharacterMovementSystem;
   private readonly npcAiSystem: NpcAiSystem;
+  private readonly uiViewRuntime = new UiViewReplicationRuntime();
   private readonly playerLifecycleSystem: PlayerLifecycleSystem<UserLike>;
   private readonly alertDispatcher: ServerAlertDispatcher<UserLike>;
   private readonly archetypes: ServerArchetypeCatalog;
@@ -382,6 +398,13 @@ export class GameSimulation {
       replication: this.replication,
       persistence: this.persistence,
       getUserById: (userId) => this.usersById.get(userId),
+      publishInventoryUiView: (userId, snapshot) => {
+        const user = this.usersById.get(userId);
+        if (!user) {
+          return;
+        }
+        this.uiViewRuntime.publish(user, "inventory", this.buildInventoryUiViewPayload(snapshot));
+      },
       markPlayerCharacterDirty: (accountId) => this.persistenceSyncSystem.markAccountDirty(accountId, { dirtyCharacter: true, dirtyAbilityState: false }),
       persistInventoryMutation: (accountId, snapshot, action, eventId, eventAtMs) => {
         if (!this.ipcChannel?.isAvailable()) {
@@ -888,6 +911,7 @@ export class GameSimulation {
     this.referenceFrameMembershipByUserId.delete(user.id);
     this.pilotControlIntentByUserId.delete(user.id);
     this.releaseUserPilotSeat(user.id);
+    this.uiViewRuntime.closeAllForUser(user);
     this.playerLifecycleSystem.removeUser(user);
   }
 
@@ -909,6 +933,134 @@ export class GameSimulation {
     }
     this.applyForgetAbilityIntent(user, command);
     this.abilityCommandHandler.apply(user, command);
+  }
+
+  public applyUiIntentCommand(user: UserLike, command: UiIntentWireCommand): void {
+    const viewId = typeof command.viewId === "number" && Number.isFinite(command.viewId)
+      ? Math.max(0, Math.min(0xffff, Math.floor(command.viewId)))
+      : 0;
+    const sequence = typeof command.sequence === "number" && Number.isFinite(command.sequence)
+      ? Math.max(0, Math.min(0xffff, Math.floor(command.sequence)))
+      : 0;
+    if (viewId <= 0) {
+      user.queueMessage({
+        ntype: NType.UiIntentResultMessage,
+        viewId,
+        sequence,
+        ok: false,
+        message: "UI intent rejected: invalid view id.",
+        resultJson: "{}"
+      });
+      return;
+    }
+    const viewType = this.uiViewRuntime.resolveViewTypeByUserAndId(user.id, viewId);
+    if (!viewType) {
+      user.queueMessage({
+        ntype: NType.UiIntentResultMessage,
+        viewId,
+        sequence,
+        ok: false,
+        message: `UI intent rejected: unknown view ${viewId}.`,
+        resultJson: "{}"
+      });
+      return;
+    }
+    let parsedIntent: unknown = null;
+    try {
+      parsedIntent = JSON.parse(command.intentJson);
+    } catch {
+      user.queueMessage({
+        ntype: NType.UiIntentResultMessage,
+        viewId,
+        sequence,
+        ok: false,
+        message: "UI intent rejected: malformed intent json.",
+        resultJson: "{}"
+      });
+      return;
+    }
+    if (!parsedIntent || typeof parsedIntent !== "object") {
+      user.queueMessage({
+        ntype: NType.UiIntentResultMessage,
+        viewId,
+        sequence,
+        ok: false,
+        message: "UI intent rejected: invalid payload.",
+        resultJson: "{}"
+      });
+      return;
+    }
+    const intent = parsedIntent as { kind?: unknown; commandJson?: unknown; command?: unknown };
+    if (viewType === "creator") {
+      if (intent.kind !== "creator_payload" || typeof intent.commandJson !== "string") {
+        user.queueMessage({
+          ntype: NType.UiIntentResultMessage,
+          viewId,
+          sequence,
+          ok: false,
+          message: "UI intent rejected: invalid creator payload.",
+          resultJson: "{}"
+        });
+        return;
+      }
+      const payload = decodeCreatorCommandPayloadJson(intent.commandJson, MAX_CREATOR_COMMAND_JSON_BYTES);
+      if (!payload) {
+        user.queueMessage({
+          ntype: NType.UiIntentResultMessage,
+          viewId,
+          sequence,
+          ok: false,
+          message: "UI intent rejected: creator payload decode failed.",
+          resultJson: "{}"
+        });
+        return;
+      }
+      const normalized = normalizeCreatorCommandFromPayload(payload);
+      this.applyCreatorCommand(user, normalized);
+      user.queueMessage({
+        ntype: NType.UiIntentResultMessage,
+        viewId,
+        sequence,
+        ok: true,
+        message: "",
+        resultJson: "{}"
+      });
+      return;
+    }
+    if (viewType === "inventory") {
+      if (intent.kind !== "inventory_command" || !intent.command || typeof intent.command !== "object") {
+        user.queueMessage({
+          ntype: NType.UiIntentResultMessage,
+          viewId,
+          sequence,
+          ok: false,
+          message: "UI intent rejected: invalid inventory command payload.",
+          resultJson: "{}"
+        });
+        return;
+      }
+      const result = this.applyItemCommand(user, intent.command as InventoryWireCommand);
+      user.queueMessage({
+        ntype: NType.UiIntentResultMessage,
+        viewId,
+        sequence,
+        ok: result.ok,
+        message: result.ok ? "" : result.reason,
+        resultJson: JSON.stringify({
+          action: result.action,
+          reason: result.reason
+        })
+      });
+      return;
+    }
+    user.queueMessage({
+      ntype: NType.UiIntentResultMessage,
+      viewId,
+      sequence,
+      ok: false,
+      message: `UI intent rejected: unsupported view type "${viewType}".`,
+      resultJson: "{}"
+    });
   }
 
   public applyCreatorCommand(user: UserLike, command: {
@@ -993,7 +1145,7 @@ export class GameSimulation {
         if (failedCreatorState) {
           creatorSnapshotToReplicate = failedCreatorState;
         }
-        this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+        this.publishCreatorStateForUser(user, creatorSnapshotToReplicate);
         return;
       }
       if (command.instantiateCreatedBlueprint && createdItem) {
@@ -1010,7 +1162,7 @@ export class GameSimulation {
           if (failedCreatorState) {
             creatorSnapshotToReplicate = failedCreatorState;
           }
-          this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+          this.publishCreatorStateForUser(user, creatorSnapshotToReplicate);
           return;
         }
       }
@@ -1058,7 +1210,7 @@ export class GameSimulation {
           if (failedCreatorState) {
             creatorSnapshotToReplicate = failedCreatorState;
           }
-          this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+          this.publishCreatorStateForUser(user, creatorSnapshotToReplicate);
           return;
         }
         this.creatorSystem.overrideSessionStatus(
@@ -1119,7 +1271,7 @@ export class GameSimulation {
         creatorSnapshotToReplicate = nextCreatorState;
       }
     }
-    this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+    this.publishCreatorStateForUser(user, creatorSnapshotToReplicate);
   }
 
   private applyForkBlueprintFromItemInstance(
@@ -1178,7 +1330,7 @@ export class GameSimulation {
     }
     const snap = this.creatorSystem.synchronizeSessionAvailability(user.id);
     if (snap) {
-      this.replication.queueCreatorStateMessage(user, snap);
+      this.publishCreatorStateForUser(user, snap);
     }
     this.queueCreatorActionResultForUser(
       user,
@@ -1189,16 +1341,18 @@ export class GameSimulation {
     );
   }
 
-  public applyItemCommand(user: UserLike, command: Partial<ItemWireCommand>): void {
-    if (typeof this.simulationEcs.getPlayerEidByUserId(user.id) !== "number") return;
+  public applyItemCommand(user: UserLike, command: InventoryWireCommand): { ok: boolean; action: number; reason: string } {
+    if (typeof this.simulationEcs.getPlayerEidByUserId(user.id) !== "number") {
+      return { ok: false, action: 0, reason: "player_missing" };
+    }
     const action = typeof command.action === "number" ? Math.floor(command.action) : 0;
     const pickupNid = typeof command.pickupNid === "number" ? Math.floor(command.pickupNid) : 0;
     const interactSlot = typeof command.payloadKind === "number" ? Math.max(0, Math.floor(command.payloadKind)) : 0;
     if (action === INVENTORY_OP_PICKUP && pickupNid <= 0) {
       this.applyWorldInteractIntent(user.id, interactSlot);
-      return;
+      return { ok: true, action, reason: "ok" };
     }
-    this.itemInventorySystem.applyCommand(user.id, command);
+    return this.itemInventorySystem.applyCommand(user.id, command);
   }
 
   public applyPlayerSettingsCommand(user: UserLike, command: Partial<PlayerSettingsWireCommand>): void {
@@ -1236,7 +1390,7 @@ export class GameSimulation {
       this.replication.queueAbilityOwnershipMessage(user, before.unlockedAbilityIds);
       this.replication.queueAbilityStateMessageFromSnapshot(user, before);
       const snap = this.creatorSystem.synchronizeSessionAvailability(user.id);
-      if (snap) this.replication.queueCreatorStateMessage(user, snap);
+      if (snap) this.publishCreatorStateForUser(user, snap);
       return;
     }
 
@@ -1251,7 +1405,7 @@ export class GameSimulation {
     this.replication.queueAbilityOwnershipMessage(user, after.unlockedAbilityIds);
     this.replication.queueAbilityStateMessageFromSnapshot(user, after);
     const snap = this.creatorSystem.synchronizeSessionAvailability(user.id);
-    if (snap) this.replication.queueCreatorStateMessage(user, snap);
+    if (snap) this.publishCreatorStateForUser(user, snap);
     if (hotbarChanged) this.persistenceSyncSystem.markAccountDirty(accountId, { dirtyCharacter: false, dirtyAbilityState: true });
   }
 
@@ -1322,7 +1476,7 @@ export class GameSimulation {
           stationInteraction.creatorProfileId,
           stationInteraction.sessionId
         );
-        this.replication.queueCreatorStateMessage(user, creatorState);
+        this.publishCreatorStateForUser(user, creatorState);
       }
       return;
     }
@@ -2131,18 +2285,49 @@ export class GameSimulation {
     createdBlueprintId = 0,
     createdItemInstanceId = 0
   ): void {
+    const creatorViewId = this.uiViewRuntime.resolveViewIdByUserAndType(user.id, "creator");
     user.queueMessage({
-      ntype: NType.CreatorActionResultMessage,
-      version: 1,
+      ntype: NType.UiIntentResultMessage,
+      viewId: Math.max(0, Math.min(0xffff, Math.floor(creatorViewId))),
+      sequence: 0,
       ok,
       message,
-      createdBlueprintId: Math.max(0, Math.min(0xffff, Math.floor(createdBlueprintId))),
-      createdItemInstanceId: Math.max(0, Math.min(0x7fffffff, Math.floor(createdItemInstanceId)))
+      resultJson: JSON.stringify({
+        createdBlueprintId: Math.max(0, Math.min(0xffff, Math.floor(createdBlueprintId))),
+        createdItemInstanceId: Math.max(0, Math.min(0x7fffffff, Math.floor(createdItemInstanceId)))
+      })
     });
   }
 
   public queueServerAlertForAccount(accountId: number, text: string, severity: AlertSeverity = "info"): void {
     this.alertDispatcher.queueForAccountId(accountId, text, severity);
+  }
+
+  private publishCreatorStateForUser(user: UserLike, snapshot: import("../shared/index").CreatorSessionSnapshot): void {
+    this.uiViewRuntime.publish(user, "creator", {
+      kind: "creator",
+      state: snapshot
+    });
+  }
+
+  private buildInventoryUiViewPayload(snapshot: InventorySnapshot): Record<string, unknown> {
+    const descriptorById = new Map<number, unknown>();
+    for (const entry of snapshot.itemInstances) {
+      const definitionId = Math.max(0, Math.floor(entry.definitionId));
+      if (definitionId <= 0 || descriptorById.has(definitionId)) {
+        continue;
+      }
+      const descriptor = getItemDefinitionById(definitionId) ?? getBlueprintRuntimeItemByBlueprintId(definitionId);
+      if (!descriptor) {
+        continue;
+      }
+      descriptorById.set(definitionId, descriptor);
+    }
+    return {
+      kind: "inventory",
+      state: snapshot,
+      itemDescriptors: Array.from(descriptorById.values())
+    };
   }
 
   public broadcastServerAlert(text: string, severity: AlertSeverity = "info"): void {
@@ -2406,7 +2591,7 @@ export class GameSimulation {
           availableTemplateBlueprintIds,
           "ability_creator"
         );
-        this.replication.queueCreatorStateMessage(user, creatorState);
+        this.publishCreatorStateForUser(user, creatorState);
         this.itemInventorySystem.queueInventoryStateForUser(user.id);
         this.refreshEquippedVisualAppearanceForUser(user.id);
       },

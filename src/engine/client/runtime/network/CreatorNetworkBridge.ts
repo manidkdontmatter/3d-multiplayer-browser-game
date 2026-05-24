@@ -103,10 +103,6 @@ export class CreatorNetworkBridge {
     return jsonPayloads;
   }
 
-  public processMessage(message: unknown): boolean {
-    return this.stateStore.processMessage(message);
-  }
-
   public consumeState(): CreatorClientState | null {
     return this.stateStore.consumeState();
   }

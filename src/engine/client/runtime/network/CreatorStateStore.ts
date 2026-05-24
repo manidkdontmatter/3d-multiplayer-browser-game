@@ -3,7 +3,7 @@
  * Scope: It belongs to the engine client runtime layer.
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
-import { NType, type CreatorStateMessageWire, type CreatorStatePayload } from "../../../shared/netcode";
+import type { CreatorStatePayload } from "../../../shared/netcode";
 import type {
   BlueprintDefinition,
   CreatorDraft,
@@ -35,35 +35,79 @@ export interface CreatorClientState {
 export class CreatorStateStore {
   private currentState: CreatorClientState | null = null;
   private pendingState: CreatorClientState | null = null;
+  private currentViewId = 0;
 
   public reset(): void {
     this.currentState = null;
     this.pendingState = null;
-  }
-
-  public processMessage(message: unknown): boolean {
-    const typed = message as CreatorStateMessageWire | undefined;
-    if (typed?.ntype !== NType.CreatorStateMessage) return false;
-    if (typeof typed.version !== "number" || !Number.isFinite(typed.version) || Math.floor(typed.version) !== 1) {
-      return true;
-    }
-
-    try {
-      const payload = JSON.parse(typed.stateJson) as CreatorStatePayload;
-      const nextState = this.toState(payload);
-      if (!nextState) return true;
-      this.currentState = nextState;
-      this.pendingState = nextState;
-    } catch {
-      // Malformed JSON — ignore
-    }
-    return true;
+    this.currentViewId = 0;
   }
 
   public consumeState(): CreatorClientState | null {
     const pending = this.pendingState;
     this.pendingState = null;
     return pending;
+  }
+
+  public processUiViewOpen(viewId: number, stateJson: string): boolean {
+    const parsed = this.parseViewPayload(stateJson);
+    if (!parsed) {
+      return false;
+    }
+    const nextState = this.toState(parsed);
+    if (!nextState) {
+      return false;
+    }
+    this.currentViewId = this.clampInt(viewId, 0xffff);
+    this.currentState = nextState;
+    this.pendingState = nextState;
+    return true;
+  }
+
+  public processUiViewPatch(viewId: number, patchJson: string): boolean {
+    const normalizedViewId = this.clampInt(viewId, 0xffff);
+    if (normalizedViewId <= 0 || this.currentViewId !== normalizedViewId || !this.currentState) {
+      return false;
+    }
+    let patch: unknown = null;
+    try {
+      patch = JSON.parse(patchJson);
+    } catch {
+      return false;
+    }
+    if (!patch || typeof patch !== "object") {
+      return false;
+    }
+    const statePatch = (patch as { state?: unknown }).state;
+    if (!statePatch || typeof statePatch !== "object") {
+      return false;
+    }
+    const merged = {
+      ...this.currentState,
+      ...(statePatch as Record<string, unknown>)
+    };
+    const nextState = this.toState(this.toPayloadLike(merged));
+    if (!nextState) {
+      return false;
+    }
+    this.currentState = nextState;
+    this.pendingState = nextState;
+    return true;
+  }
+
+  public processUiViewClose(viewId: number): boolean {
+    const normalizedViewId = this.clampInt(viewId, 0xffff);
+    if (this.currentViewId <= 0 || this.currentViewId !== normalizedViewId) {
+      return false;
+    }
+    this.currentViewId = 0;
+    this.currentState = null;
+    this.pendingState = null;
+    return true;
+  }
+
+  public getCurrentViewId(): number {
+    return this.currentViewId;
   }
 
   public getCurrentSessionId(): number {
@@ -139,6 +183,36 @@ export class CreatorStateStore {
     } catch {
       return null;
     }
+  }
+
+  private parseViewPayload(stateJson: string): CreatorStatePayload | null {
+    try {
+      const parsed = JSON.parse(stateJson) as { kind?: unknown; state?: unknown };
+      if (!parsed || parsed.kind !== "creator" || !parsed.state || typeof parsed.state !== "object") {
+        return null;
+      }
+      return this.toPayloadLike(parsed.state as Record<string, unknown>);
+    } catch {
+      return null;
+    }
+  }
+
+  private toPayloadLike(raw: Record<string, unknown>): CreatorStatePayload {
+    return {
+      sessionId: this.clampInt(Number(raw.sessionId ?? 0), 0xffff),
+      ackSequence: this.clampInt(Number(raw.ackSequence ?? 0), 0xffff),
+      profileId: String(raw.profileId ?? "ability_creator"),
+      stationSessionId: typeof raw.stationSessionId === "string" ? raw.stationSessionId : null,
+      draftJson: JSON.stringify(raw.draft ?? {}),
+      fieldDefinitionsJson: JSON.stringify(raw.fieldDefinitions ?? []),
+      renderBundleJson: JSON.stringify(raw.renderBundle ?? {}),
+      capacityJson: JSON.stringify(raw.capacity ?? {}),
+      validationJson: JSON.stringify(raw.validation ?? {}),
+      productionPreviewJson: JSON.stringify(raw.productionPreview ?? null),
+      itemDescriptorsJson: JSON.stringify(raw.itemDescriptors ?? []),
+      availableBlueprintCount: this.clampInt(Number(raw.availableBlueprintCount ?? 0), 0xffff),
+      availableBlueprintsJson: JSON.stringify(raw.availableBlueprints ?? [])
+    };
   }
 
   private parseProfileId(raw: unknown): CreatorProfileId {

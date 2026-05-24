@@ -421,8 +421,7 @@ export class GameClientApp {
     this.applyAbilityEvents();
     this.applyAbilityCreatorEvents();
     this.applyInventoryEvents();
-    this.applyCreatorActionResultEvents();
-    this.applyInventoryFeedbackEvents();
+    this.applyUiIntentResultEvents();
     this.applySettingsEvents();
     this.applyServerAlertEvents();
     this.maybeFlushSettingsDebounced();
@@ -585,33 +584,22 @@ export class GameClientApp {
     this.ui.setHotbarAssignments(this.hotbarAbilityIds);
   }
 
-  private applyCreatorActionResultEvents(): void {
-    const results = this.network.consumeCreatorActionResults();
-    for (const result of results) {
-      const text = result.message.trim();
-      if (text.length <= 0) {
-        continue;
-      }
-      this.ui.showAlert(text, result.ok ? "success" : "warning");
-    }
-  }
-
-  private applyInventoryFeedbackEvents(): void {
-    const feedbacks = this.network.consumeInventoryActionFeedback();
-    for (const feedback of feedbacks) {
-      if (feedback.ok) {
-        continue;
-      }
-      console.warn(`[inventory] action=${feedback.action} failed reason=${feedback.reason}`);
-    }
-  }
-
   private applySettingsEvents(): void {
     const state = this.network.consumeSettingsState();
     if (!state) {
       return;
     }
     this.applyPlayerSettingsPatch(state.settings, false);
+  }
+
+  private applyUiIntentResultEvents(): void {
+    const results = this.network.consumeUiIntentResults();
+    for (const result of results) {
+      const text = typeof result.message === "string" ? result.message.trim() : "";
+      if (text.length > 0 && text.toLowerCase() !== "ok") {
+        this.ui.showAlert(text, result.ok ? "success" : "warning");
+      }
+    }
   }
 
   private applyServerAlertEvents(): void {

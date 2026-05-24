@@ -6,18 +6,16 @@
 import { NType } from "../../shared/netcode";
 import type {
   AbilityCommand as AbilityWireCommand,
-  CreatorCommandWire,
   InputCommand as InputWireCommand,
-  ItemCommand as ItemWireCommand,
   MapTransferCommand as MapTransferWireCommand,
-  PlayerSettingsCommand as PlayerSettingsWireCommand
+  PlayerSettingsCommand as PlayerSettingsWireCommand,
+  UiIntentCommand as UiIntentWireCommand
 } from "../../shared/netcode";
 
 export interface ServerCommandRouterHandlers<TUser> {
   readonly onInputCommands: (commands: Partial<InputWireCommand>[]) => void;
   readonly onAbilityCommand: (user: TUser, command: Partial<AbilityWireCommand>) => void;
-  readonly onCreatorCommand: (user: TUser, command: CreatorCommandWire) => void;
-  readonly onItemCommand: (user: TUser, command: Partial<ItemWireCommand>) => void;
+  readonly onUiIntentCommand: (user: TUser, command: UiIntentWireCommand) => void;
   readonly onMapTransferCommand: (user: TUser, command: Partial<MapTransferWireCommand>) => void;
   readonly onPlayerSettingsCommand: (user: TUser, command: PlayerSettingsWireCommand) => void;
 }
@@ -33,18 +31,12 @@ export class ServerCommandRouter<TUser> {
         continue;
       }
 
-      if (ntype === NType.CreatorCommand) {
-        handlers.onCreatorCommand(user, rawCommand as CreatorCommandWire);
-        continue;
-      }
-
       if (ntype === NType.MapTransferCommand) {
         handlers.onMapTransferCommand(user, rawCommand as Partial<MapTransferWireCommand>);
         continue;
       }
-
-      if (ntype === NType.ItemCommand) {
-        handlers.onItemCommand(user, rawCommand as Partial<ItemWireCommand>);
+      if (ntype === NType.UiIntentCommand) {
+        handlers.onUiIntentCommand(user, rawCommand as UiIntentWireCommand);
         continue;
       }
       if (ntype === NType.PlayerSettingsCommand) {
