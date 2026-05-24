@@ -102,4 +102,12 @@ export class ServerReplicationCoordinator<TUser extends ReplicationUser> {
     this.replicationMessaging.queueReferenceFrameVolumeExited(userId, framePid, volumeId);
   }
 
+  public getLiveReplicationCounts(): {
+    nearEntities: number;
+    farEntities: number;
+    totalEntities: number;
+  } {
+    return this.replicationBridge.getLiveReplicationCounts();
+  }
+
 }

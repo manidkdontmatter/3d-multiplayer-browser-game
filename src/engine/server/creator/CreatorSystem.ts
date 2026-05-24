@@ -13,11 +13,15 @@ import {
   sanitizeCreatorName,
   stepCreatorFieldValue,
   validateCreatorDraft,
+  buildCreatorProductionPreview,
   CUSTOM_BLUEPRINT_ID_START,
+  getItemDefinitionById,
+  getBlueprintRuntimeItemByBlueprintId,
   type BlueprintAccessTag,
   type CreatorDraft,
   type CreatorProfileId,
-  type CreatorSessionSnapshot
+  type CreatorSessionSnapshot,
+  type ItemDefinition
 } from "../../shared/index";
 import {
   cloneBlueprintDefinition,
@@ -32,7 +36,13 @@ interface CreatorSessionState {
   sessionId: number;
   ackSequence: number;
   statusMessage: string;
+  stationSessionId: string | null;
   draft: CreatorDraft;
+}
+
+interface CreatorCommandPolicy {
+  tierMaxOverride: number | null;
+  actorRequirementPolicy: "enforce" | "ignore";
 }
 
 export interface CreatorApplyResult {
@@ -51,10 +61,12 @@ export class CreatorSystem {
     userId: number,
     accountId: number,
     availableTemplateBlueprintIds: readonly number[],
-    defaultProfileId: CreatorProfileId = DEFAULT_CREATOR_PROFILE_ID
+    defaultProfileId: CreatorProfileId = DEFAULT_CREATOR_PROFILE_ID,
+    stationSessionId: string | null = null
   ): CreatorSessionSnapshot {
     this.hydrateAccessibleBlueprintIds(accountId, "blueprint.template", availableTemplateBlueprintIds);
-    const session = this.createSessionState(accountId, defaultProfileId);
+    const session = this.createSessionState(accountId, defaultProfileId, stationSessionId);
+    this.ensureSessionHasValidBaseBlueprint(session);
     this.sessionsByUserId.set(userId, session);
     return this.buildSnapshot(session);
   }
@@ -68,7 +80,12 @@ export class CreatorSystem {
     if (!session) {
       return null;
     }
+    this.ensureSessionHasValidBaseBlueprint(session);
     return this.buildSnapshot(session);
+  }
+
+  public getSessionStationSessionId(userId: number): string | null {
+    return this.sessionsByUserId.get(userId)?.stationSessionId ?? null;
   }
 
   public getAccessibleBlueprintIds(
@@ -160,6 +177,8 @@ export class CreatorSystem {
     userId: number;
     accountId: number;
     availableTemplateBlueprintIds: readonly number[];
+    creatorPolicy?: CreatorCommandPolicy | null;
+    deferCreatedBlueprintRegistration?: boolean;
     command: {
       sessionId: number;
       sequence: number;
@@ -179,6 +198,7 @@ export class CreatorSystem {
     const session =
       this.sessionsByUserId.get(params.userId) ??
       this.createAndStoreSession(params.userId, params.accountId, DEFAULT_CREATOR_PROFILE_ID);
+    this.ensureSessionHasValidBaseBlueprint(session);
 
     const sequence = this.normalizeSequence(params.command.sequence, session.ackSequence);
     const requestedSessionId = this.normalizeSequence(params.command.sessionId, 0);
@@ -255,8 +275,10 @@ export class CreatorSystem {
     }
 
     if (params.command.submitCreate && baseBlueprint && this.isBlueprintAvailableToProfile(session, baseBlueprint)) {
+      const policyAdjustedDraft = this.applyCreatorPolicyToDraft(session.draft, params.creatorPolicy ?? null);
+      session.draft = policyAdjustedDraft;
       const validation = validateCreatorDraft(
-        session.draft,
+        policyAdjustedDraft,
         baseBlueprint,
         this.resolveAvailableBlueprintsForProfile(session.accountId, session.draft.profileId).length
       );
@@ -266,10 +288,26 @@ export class CreatorSystem {
       } else {
         const created = compileBlueprintFromCreatorDraft({
           nextId: this.allocateBlueprintId(),
-          draft: session.draft,
+          draft: policyAdjustedDraft,
           baseBlueprint
         });
-        this.customizedBlueprintById.set(created.blueprint.id, created.blueprint);
+        if (params.creatorPolicy?.actorRequirementPolicy === "ignore" && created.blueprint.templateProfiles) {
+          const templateProfiles = { ...created.blueprint.templateProfiles };
+          const itemProfile = templateProfiles.item_creator;
+          if (itemProfile?.productionContract) {
+            templateProfiles.item_creator = {
+              ...itemProfile,
+              productionContract: {
+                ...itemProfile.productionContract,
+                actorRequirements: []
+              }
+            };
+            created.blueprint = cloneBlueprintDefinition(created.blueprint, { templateProfiles });
+          }
+        }
+        if (!params.deferCreatedBlueprintRegistration) {
+          this.customizedBlueprintById.set(created.blueprint.id, created.blueprint);
+        }
         createdBlueprint = created.blueprint;
         session.statusMessage = `Created "${created.blueprint.name}".`;
         explicitStatus = true;
@@ -293,6 +331,36 @@ export class CreatorSystem {
     };
   }
 
+  public overrideSessionStatus(userId: number, message: string): void {
+    const session = this.sessionsByUserId.get(userId);
+    if (!session) {
+      return;
+    }
+    session.statusMessage = message.trim().length > 0 ? message : session.statusMessage;
+  }
+
+  public createDerivedBlueprintFromExisting(params: {
+    sourceBlueprint: BlueprintDefinition;
+    name: string;
+    authoredViaProfile: CreatorProfileId;
+    derivedFromInstanceId?: number;
+  }): BlueprintDefinition {
+    const nextId = this.allocateBlueprintId();
+    const created = cloneBlueprintDefinition(params.sourceBlueprint, {
+      id: nextId,
+      key: `custom-${nextId}`,
+      name: sanitizeCreatorName(params.name),
+      description: `${sanitizeCreatorName(params.name)} | profile: ${params.authoredViaProfile}`,
+      metadata: {
+        authoredViaProfile: params.authoredViaProfile,
+        derivedFromBlueprintId: params.sourceBlueprint.id,
+        derivedFromInstanceId: params.derivedFromInstanceId
+      }
+    });
+    this.customizedBlueprintById.set(created.id, created);
+    return created;
+  }
+
   private allocateBlueprintId(): number {
     while (this.nextCustomBlueprintId <= 0xffff) {
       const candidate = this.nextCustomBlueprintId++;
@@ -308,17 +376,22 @@ export class CreatorSystem {
     accountId: number,
     profileId: CreatorProfileId
   ): CreatorSessionState {
-    const session = this.createSessionState(accountId, profileId);
+    const session = this.createSessionState(accountId, profileId, null);
     this.sessionsByUserId.set(userId, session);
     return session;
   }
 
-  private createSessionState(accountId: number, profileId: CreatorProfileId): CreatorSessionState {
+  private createSessionState(
+    accountId: number,
+    profileId: CreatorProfileId,
+    stationSessionId: string | null
+  ): CreatorSessionState {
     return {
       accountId,
       sessionId: this.nextSessionId++,
       ackSequence: 0,
       statusMessage: "Select a base blueprint to begin.",
+      stationSessionId: typeof stationSessionId === "string" && stationSessionId.length > 0 ? stationSessionId : null,
       draft: {
         name: "New Creation",
         profileId,
@@ -326,6 +399,26 @@ export class CreatorSystem {
         fieldValues: {}
       }
     };
+  }
+
+  private ensureSessionHasValidBaseBlueprint(session: CreatorSessionState): void {
+    const availableBlueprints = this.resolveAvailableBlueprintsForProfile(
+      session.accountId,
+      session.draft.profileId
+    );
+    if (availableBlueprints.length <= 0) {
+      return;
+    }
+    const currentBase = this.resolveBlueprintDefinitionById(session.draft.baseBlueprintId);
+    if (currentBase && this.isBlueprintAvailableToProfile(session, currentBase)) {
+      return;
+    }
+    const fallbackBase = availableBlueprints[0] ?? null;
+    if (!fallbackBase) {
+      return;
+    }
+    session.draft = createDraftFromBlueprint(fallbackBase, session.draft.profileId);
+    session.statusMessage = `Selected "${fallbackBase.name}".`;
   }
 
   private buildSnapshot(session: CreatorSessionState): CreatorSessionSnapshot {
@@ -346,19 +439,128 @@ export class CreatorSystem {
     const validation = baseBlueprint && this.isBlueprintAvailableToProfile(session, baseBlueprint)
       ? validateCreatorDraft(session.draft, baseBlueprint, availableBlueprints.length)
       : { valid: false, message: "Select a base blueprint first.", errors: ["No base blueprint"] };
+    const fieldDefinitions = baseBlueprint && this.isBlueprintAvailableToProfile(session, baseBlueprint)
+      ? getCreatorFieldDefinitions(session.draft, baseBlueprint)
+      : [];
+    const renderBundle = this.buildRenderBundle(fieldDefinitions);
+    const productionPreview = baseBlueprint && this.isBlueprintAvailableToProfile(session, baseBlueprint)
+      ? buildCreatorProductionPreview(session.draft, baseBlueprint)
+      : null;
+    const itemDescriptors = this.resolveSnapshotItemDescriptors(baseBlueprint, session.draft.profileId, productionPreview);
     return {
       sessionId: session.sessionId,
       ackSequence: session.ackSequence,
       profileId: session.draft.profileId,
+      stationSessionId: session.stationSessionId,
       draft: session.draft,
+      fieldDefinitions,
+      renderBundle,
       capacity,
       validation: {
         valid: validation.valid,
         message: session.statusMessage || validation.message,
         errors: validation.errors
       },
+      productionPreview,
+      itemDescriptors,
       availableBlueprintCount: availableBlueprints.length,
       availableBlueprints
+    };
+  }
+
+  private resolveSnapshotItemDescriptors(
+    baseBlueprint: BlueprintDefinition | null,
+    profileId: CreatorProfileId,
+    productionPreview: {
+      consumableCosts: readonly { itemDefinitionId: number; quantity: number }[];
+      requiredItemDefinitionIds: readonly number[];
+      selectedAugmentDefinitionIds: readonly number[];
+    } | null
+  ): ItemDefinition[] {
+    const ids = new Set<number>();
+    for (const cost of productionPreview?.consumableCosts ?? []) {
+      if (cost.itemDefinitionId > 0) ids.add(cost.itemDefinitionId);
+    }
+    for (const requiredId of productionPreview?.requiredItemDefinitionIds ?? []) {
+      if (requiredId > 0) ids.add(requiredId);
+    }
+    for (const augmentId of productionPreview?.selectedAugmentDefinitionIds ?? []) {
+      if (augmentId > 0) ids.add(augmentId);
+    }
+    const templateProfile = baseBlueprint ? getBlueprintTemplateProfile(baseBlueprint, profileId) : null;
+    for (const augmentIdRaw of Object.keys(templateProfile?.augmentMappings ?? {})) {
+      const augmentId = Number.parseInt(augmentIdRaw, 10);
+      if (Number.isFinite(augmentId) && augmentId > 0) {
+        ids.add(augmentId);
+      }
+    }
+    const descriptors: ItemDefinition[] = [];
+    for (const definitionId of ids) {
+      const definition = getItemDefinitionById(definitionId) ?? getBlueprintRuntimeItemByBlueprintId(definitionId);
+      if (definition) {
+        descriptors.push(definition);
+      }
+    }
+    descriptors.sort((a, b) => a.id - b.id);
+    return descriptors;
+  }
+
+  private buildRenderBundle(
+    fieldDefinitions: readonly {
+      id: string;
+      groupId: string;
+      groupLabel: string;
+    }[]
+  ): {
+    fieldGroupOrder: readonly string[];
+    fieldGroupLabels: Readonly<Record<string, string>>;
+    nonAttributeFieldIds: readonly string[];
+    attributeFieldIds: readonly string[];
+    augmentFieldIds: readonly string[];
+    tierFieldId: string | null;
+    readyAppearanceFieldId: string | null;
+    activationAppearanceFieldId: string | null;
+  } {
+    const fieldGroupOrder: string[] = [];
+    const fieldGroupLabels: Record<string, string> = {};
+    const nonAttributeFieldIds: string[] = [];
+    const attributeFieldIds: string[] = [];
+    const augmentFieldIds: string[] = [];
+    let tierFieldId: string | null = null;
+    let readyAppearanceFieldId: string | null = null;
+    let activationAppearanceFieldId: string | null = null;
+    for (const definition of fieldDefinitions) {
+      if (!fieldGroupLabels[definition.groupId]) {
+        fieldGroupOrder.push(definition.groupId);
+        fieldGroupLabels[definition.groupId] = definition.groupLabel;
+      }
+      if (definition.id === "tier") {
+        tierFieldId = definition.id;
+      }
+      if (definition.id === "ready_appearance") {
+        readyAppearanceFieldId = definition.id;
+      }
+      if (definition.id === "activation_appearance") {
+        activationAppearanceFieldId = definition.id;
+      }
+      if (definition.id.startsWith("augment_slot_")) {
+        augmentFieldIds.push(definition.id);
+      }
+      if (definition.groupId === "attributes") {
+        attributeFieldIds.push(definition.id);
+      } else {
+        nonAttributeFieldIds.push(definition.id);
+      }
+    }
+    return {
+      fieldGroupOrder,
+      fieldGroupLabels,
+      nonAttributeFieldIds,
+      attributeFieldIds,
+      augmentFieldIds,
+      tierFieldId,
+      readyAppearanceFieldId,
+      activationAppearanceFieldId
     };
   }
 
@@ -417,5 +619,33 @@ export class CreatorSystem {
       return 0;
     }
     return Math.max(0, Math.min(0xffff, Math.floor(raw)));
+  }
+
+  private applyCreatorPolicyToDraft(
+    draft: CreatorDraft,
+    policy: CreatorCommandPolicy | null
+  ): CreatorDraft {
+    if (!policy || draft.profileId !== "item_creator") {
+      return draft;
+    }
+    if (!Number.isFinite(policy.tierMaxOverride) || (policy.tierMaxOverride ?? 0) <= 0) {
+      return draft;
+    }
+    const tierLimit = Math.max(1, Math.floor(policy.tierMaxOverride as number));
+    const currentRaw = draft.fieldValues?.tier;
+    if (typeof currentRaw !== "number" || !Number.isFinite(currentRaw)) {
+      return draft;
+    }
+    const currentTier = Math.max(1, Math.floor(currentRaw));
+    if (currentTier <= tierLimit) {
+      return draft;
+    }
+    return {
+      ...draft,
+      fieldValues: {
+        ...draft.fieldValues,
+        tier: tierLimit
+      }
+    };
   }
 }

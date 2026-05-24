@@ -108,7 +108,7 @@ async function getJson(path) {
 async function waitForMapsReady(timeoutMs = 20_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const { payload } = await getJson("/health");
+    const { payload } = await getJson("/metrics");
     const maps = Array.isArray(payload?.maps) ? payload.maps : [];
     const readyCount = maps.filter((map) => map?.ready === true).length;
     if (readyCount >= 2) {
@@ -180,7 +180,7 @@ async function runExpiryDenialCheck() {
 }
 
 async function runCrashRestartCheck() {
-  const { payload: healthBefore } = await getJson("/health");
+  const { payload: healthBefore } = await getJson("/metrics");
   const mapsBefore = Array.isArray(healthBefore?.maps) ? healthBefore.maps : [];
   const mapABefore = findMap(mapsBefore, "map-a");
   const mapBBefore = findMap(mapsBefore, "map-b");
@@ -201,7 +201,7 @@ async function runCrashRestartCheck() {
   const start = Date.now();
   let recovered = false;
   while (Date.now() - start < 25_000) {
-    const { payload } = await getJson("/health");
+    const { payload } = await getJson("/metrics");
     const maps = Array.isArray(payload?.maps) ? payload.maps : [];
     const mapA = findMap(maps, "map-a");
     const mapB = findMap(maps, "map-b");

@@ -5,6 +5,10 @@
  */
 import { Binary, Context, defineSchema } from "nengi";
 
+export const ITEM_DEFINITION_MESSAGE_VERSION = 1;
+export const CREATOR_STATE_MESSAGE_VERSION = 1;
+export const CREATOR_ACTION_RESULT_MESSAGE_VERSION = 1;
+
 export enum NType {
   InputCommand = 1,
   RuntimeEntity = 2,
@@ -12,6 +16,7 @@ export enum NType {
   InputAckMessage = 5,
   AbilityDefinitionMessage = 8,
   AbilityStateMessage = 9,
+  ItemDefinitionMessage = 10,
   AbilityCommand = 11,
   AbilityUseMessage = 13,
   ServerPopulationMessage = 14,
@@ -29,7 +34,8 @@ export enum NType {
   InventoryActionResultMessage = 28,
   PlayerSettingsCommand = 29,
   PlayerSettingsMessage = 30,
-  ServerAlertMessage = 31
+  ServerAlertMessage = 31,
+  CreatorActionResultMessage = 32
 }
 
 export const inputCommandSchema = defineSchema({
@@ -215,6 +221,15 @@ export const mapTransferMessageSchema = defineSchema({
 export const inventoryStateMessageSchema = defineSchema({
   inventoryJson: Binary.String
 });
+// Runtime descriptor convention:
+// - Authoritative server sends descriptor messages on-demand for dynamic/runtime-authored content.
+// - Client caches descriptors as render/UI metadata only (not gameplay authority).
+// - Snapshot payloads reference ids; descriptor messages provide presentation fields by id.
+// - Additional descriptor channels (ability/appearance/etc) should follow the same pattern.
+export const itemDefinitionMessageSchema = defineSchema({
+  version: Binary.UInt8,
+  itemJson: Binary.String
+});
 export const inventoryActionResultMessageSchema = defineSchema({
   action: Binary.UInt8,
   ok: Binary.Boolean,
@@ -226,6 +241,7 @@ export const creatorCommandSchema = defineSchema({
 });
 
 export const creatorStateMessageSchema = defineSchema({
+  version: Binary.UInt8,
   stateJson: Binary.String
 });
 export const playerSettingsCommandSchema = defineSchema({
@@ -237,6 +253,13 @@ export const playerSettingsMessageSchema = defineSchema({
 export const serverAlertMessageSchema = defineSchema({
   text: Binary.String,
   severity: Binary.UInt8
+});
+export const creatorActionResultMessageSchema = defineSchema({
+  version: Binary.UInt8,
+  ok: Binary.Boolean,
+  message: Binary.String,
+  createdBlueprintId: Binary.UInt16,
+  createdItemInstanceId: Binary.UInt32
 });
 
 export const serverNetDiagnosticsMessageSchema = defineSchema({
@@ -279,12 +302,14 @@ ncontext.register(NType.AbilityOwnershipMessage, abilityOwnershipMessageSchema);
 ncontext.register(NType.MapTransferCommand, mapTransferCommandSchema);
 ncontext.register(NType.MapTransferMessage, mapTransferMessageSchema);
 ncontext.register(NType.InventoryStateMessage, inventoryStateMessageSchema);
+ncontext.register(NType.ItemDefinitionMessage, itemDefinitionMessageSchema);
 ncontext.register(NType.InventoryActionResultMessage, inventoryActionResultMessageSchema);
 ncontext.register(NType.CreatorCommand, creatorCommandSchema);
 ncontext.register(NType.CreatorStateMessage, creatorStateMessageSchema);
 ncontext.register(NType.PlayerSettingsCommand, playerSettingsCommandSchema);
 ncontext.register(NType.PlayerSettingsMessage, playerSettingsMessageSchema);
 ncontext.register(NType.ServerAlertMessage, serverAlertMessageSchema);
+ncontext.register(NType.CreatorActionResultMessage, creatorActionResultMessageSchema);
 ncontext.register(NType.ServerNetDiagnosticsMessage, serverNetDiagnosticsMessageSchema);
 ncontext.register(NType.ReferenceFrameVolumeEnteredMessage, referenceFrameVolumeEnteredMessageSchema);
 ncontext.register(NType.ReferenceFrameVolumeExitedMessage, referenceFrameVolumeExitedMessageSchema);
@@ -488,6 +513,11 @@ export interface InventoryStateMessage {
   ntype: NType.InventoryStateMessage;
   inventoryJson: string;
 }
+export interface ItemDefinitionMessage {
+  ntype: NType.ItemDefinitionMessage;
+  version: number;
+  itemJson: string;
+}
 export interface InventoryActionResultMessage {
   ntype: NType.InventoryActionResultMessage;
   action: number;
@@ -504,6 +534,7 @@ export interface CreatorCommandWire {
 
 export interface CreatorStateMessageWire {
   ntype: NType.CreatorStateMessage;
+  version: number;
   stateJson: string;
 }
 
@@ -523,12 +554,25 @@ export interface ServerAlertMessage {
   severity: number;
 }
 
+export interface CreatorActionResultMessage {
+  ntype: NType.CreatorActionResultMessage;
+  version: number;
+  ok: boolean;
+  message: string;
+  createdBlueprintId: number;
+  createdItemInstanceId: number;
+}
+
 export type CreatorCommandAction =
   | { kind: "set_name"; name: string }
   | { kind: "select_base_blueprint"; blueprintId: number }
   | { kind: "step_field"; fieldId: string; delta: number }
   | { kind: "set_field"; fieldId: string; valueJson: string }
   | { kind: "submit_create" }
+  | { kind: "submit_create_and_instantiate" }
+  | { kind: "fork_item_instance_blueprint"; itemInstanceId: number; name?: string }
+  | { kind: "inspect_actor_capabilities" }
+  | { kind: "set_actor_capability"; key: string; value: number }
   | { kind: "forget_blueprint"; blueprintId: number };
 
 export interface CreatorCommandPayload {
@@ -537,13 +581,133 @@ export interface CreatorCommandPayload {
   actions: CreatorCommandAction[];
 }
 
+export interface NormalizedCreatorCommand {
+  sessionId: number;
+  sequence: number;
+  setName?: boolean;
+  name?: string;
+  selectBaseBlueprint?: boolean;
+  baseBlueprintId?: number;
+  stepField?: boolean;
+  fieldId?: string;
+  fieldDelta?: number;
+  setField?: boolean;
+  fieldValueJson?: string;
+  submitCreate?: boolean;
+  instantiateCreatedBlueprint?: boolean;
+  forkItemInstanceBlueprint?: boolean;
+  itemInstanceId?: number;
+  inspectActorCapabilities?: boolean;
+  setActorCapability?: boolean;
+  capabilityKey?: string;
+  capabilityValue?: number;
+  forgetBlueprintId?: number;
+}
+
+export function encodeCreatorCommandPayload(payload: CreatorCommandPayload): string {
+  return JSON.stringify(payload);
+}
+
+export function decodeCreatorCommandPayloadJson(
+  commandJson: string,
+  maxBytes: number
+): CreatorCommandPayload | null {
+  if (typeof commandJson !== "string" || commandJson.length <= 0 || commandJson.length > maxBytes) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(commandJson) as CreatorCommandPayload;
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      !Number.isFinite(payload.sessionId) ||
+      !Number.isFinite(payload.sequence) ||
+      !Array.isArray(payload.actions)
+    ) {
+      return null;
+    }
+    return {
+      sessionId: Math.max(0, Math.min(0xffff, Math.floor(payload.sessionId))),
+      sequence: Math.max(0, Math.min(0xffff, Math.floor(payload.sequence))),
+      actions: payload.actions
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeCreatorCommandFromPayload(payload: CreatorCommandPayload): NormalizedCreatorCommand {
+  const normalized: NormalizedCreatorCommand = {
+    sessionId: payload.sessionId,
+    sequence: payload.sequence
+  };
+  for (const action of payload.actions) {
+    if (action.kind === "set_name") {
+      normalized.setName = true;
+      normalized.name = action.name;
+      continue;
+    }
+    if (action.kind === "select_base_blueprint") {
+      normalized.selectBaseBlueprint = true;
+      normalized.baseBlueprintId = action.blueprintId;
+      continue;
+    }
+    if (action.kind === "step_field") {
+      normalized.stepField = true;
+      normalized.fieldId = action.fieldId;
+      normalized.fieldDelta = action.delta;
+      continue;
+    }
+    if (action.kind === "set_field") {
+      normalized.setField = true;
+      normalized.fieldId = action.fieldId;
+      normalized.fieldValueJson = action.valueJson;
+      continue;
+    }
+    if (action.kind === "submit_create") {
+      normalized.submitCreate = true;
+      continue;
+    }
+    if (action.kind === "submit_create_and_instantiate") {
+      normalized.submitCreate = true;
+      normalized.instantiateCreatedBlueprint = true;
+      continue;
+    }
+    if (action.kind === "fork_item_instance_blueprint") {
+      normalized.forkItemInstanceBlueprint = true;
+      normalized.itemInstanceId = action.itemInstanceId;
+      normalized.name = action.name;
+      continue;
+    }
+    if (action.kind === "inspect_actor_capabilities") {
+      normalized.inspectActorCapabilities = true;
+      continue;
+    }
+    if (action.kind === "set_actor_capability") {
+      normalized.setActorCapability = true;
+      normalized.capabilityKey = action.key;
+      normalized.capabilityValue = action.value;
+      continue;
+    }
+    if (action.kind === "forget_blueprint") {
+      normalized.forgetBlueprintId = action.blueprintId;
+    }
+  }
+  return normalized;
+}
+
 export interface CreatorStatePayload {
   sessionId: number;
   ackSequence: number;
   profileId: string;
+  stationSessionId?: string | null;
   draftJson: string;
+  fieldDefinitionsJson: string;
+  renderBundleJson: string;
   capacityJson: string;
   validationJson: string;
+  productionPreviewJson?: string;
+  itemDescriptorsJson?: string;
   availableBlueprintCount: number;
   availableBlueprintsJson: string;
 }

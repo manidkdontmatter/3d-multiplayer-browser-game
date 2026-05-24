@@ -26,4 +26,22 @@ export class InteractPrompt {
     this.root.className = "interact-prompt-visible";
     this.root.textContent = text;
   }
+
+  public showActions(actions: ReadonlyArray<{ keyLabel: string; label: string; enabled?: boolean; disabledReason?: string }>): void {
+    if (actions.length <= 0) {
+      this.clear();
+      return;
+    }
+    this.root.className = "interact-prompt-visible";
+    this.root.textContent = actions.map((action) => {
+      const enabled = action.enabled !== false;
+      if (enabled) {
+        return `${action.keyLabel}  ${action.label}`;
+      }
+      const reason = typeof action.disabledReason === "string" && action.disabledReason.trim().length > 0
+        ? ` (${action.disabledReason.trim()})`
+        : "";
+      return `${action.keyLabel}  ${action.label} [Unavailable${reason}]`;
+    }).join("\n");
+  }
 }

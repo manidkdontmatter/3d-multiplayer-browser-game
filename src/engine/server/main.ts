@@ -114,7 +114,8 @@ function installOrchestratorHeartbeat(server: GameServer, ipcChannel: MapProcess
         pid: process.pid,
         onlinePlayers: runtime.onlinePlayers,
         uptimeSeconds: Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)),
-        atMs: Date.now()
+        atMs: Date.now(),
+        mapMetrics: server.getMapRuntimeMetricsSnapshot(Date.now())
       });
     } catch (error) {
       console.warn("[server] map-heartbeat failed", error);

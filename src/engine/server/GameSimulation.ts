@@ -8,8 +8,10 @@ import {
   type AlertSeverity,
   ABILITY_ID_NONE, ABILITY_ID_PUNCH,
   buildAbilityDefinitionFromBlueprint,
+  buildItemDefinitionFromBlueprint,
   clampHotbarSlotIndex, configurePlayerCharacterController,
   creatorProfileIdToGrantedAccessTags,
+  filterCreatorTemplateBlueprintIdsForStation,
   DEFAULT_HOTBAR_ABILITY_IDS, DEFAULT_VOID_SPAWN_ANCHOR, DEFAULT_UNLOCKED_ABILITY_IDS,
   HOTBAR_SLOT_COUNT, PLAYER_BODY_CENTER_HEIGHT, MOVEMENT_MODE_GROUNDED,
   PLAYER_CHARACTER_CONTROLLER_OFFSET, PLAYER_CAMERA_OFFSET_Y,
@@ -19,11 +21,19 @@ import {
   DEFAULT_PLAYER_SETTINGS,
   coercePlayerSettings,
   getBlueprintRuntimeAbilityByBlueprintId,
+  getBlueprintRuntimeItemByBlueprintId,
+  getBlueprintDefinitionsForProfile,
   getBlueprintRuntimeActivationSpecsByBlueprintId,
+  resolveReadyAppearanceRuntimeBinding,
+  resolveWorldInteractionActionBySlot,
+  worldInteractionSlotToKeyLabel,
   upsertBlueprintRuntimeCapabilityEntry,
   type RuntimeActivationSpec,
+  cloneBlueprintDefinition,
   sanitizeMovementMode,
   type BlueprintAccessTag,
+  type BlueprintDefinition,
+  type CreatorProfileId,
   type InventorySnapshot, type MovementMode, type PlayerSettings, SERVER_TICK_SECONDS
   , INVENTORY_OP_PICKUP, type EquipmentSlot
 } from "../shared/index";
@@ -117,6 +127,17 @@ interface PortalTransferZone {
 const PORTAL_TRANSFER_RETRIGGER_SECONDS = 2.0;
 const FALL_DAMAGE_MIN_IMPACT_SPEED = 14;
 const FALL_DAMAGE_PER_SPEED = 5;
+const DEFAULT_ACTOR_CAPABILITIES: Readonly<Record<string, number>> = Object.freeze({
+  strength: 10,
+  speed: 10,
+  intelligence: 10,
+  skill: 10,
+  "creator.author": 1,
+  "creator.clone": 1,
+  "creator.publish.template": 1,
+  "creator.publish.global": 0,
+  "blueprint.instantiate.restricted": 0
+});
 const PORTAL_TRANSFER_ZONES: readonly PortalTransferZone[] = Object.freeze([
   { sourceMapInstanceId: "map-a", targetMapInstanceId: "map-b", centerX: 12, centerY: 34, centerZ: 0, sensorRadius: 2.2 },
   { sourceMapInstanceId: "map-b", targetMapInstanceId: "map-a", centerX: 0, centerY: 4, centerZ: 0, sensorRadius: 2.2 }
@@ -197,6 +218,7 @@ export class GameSimulation {
   private readonly previousGroundedByEid = new Map<number, boolean>();
   private readonly minAirborneVyByEid = new Map<number, number>();
   private readonly playerSettingsByAccountId = new Map<number, PlayerSettings>();
+  private readonly actorCapabilitiesByAccountId = new Map<number, Record<string, number>>();
   private nextNpcPlayerAlertAtSeconds = 0; private elapsedSeconds = 0; private tickNumber = 0;
 
   public constructor(
@@ -460,29 +482,68 @@ export class GameSimulation {
       applyEntityRenderAppearanceByEid: (eid, patch) => {
         return this.applyRuntimeAppearancePatchByEid(eid, patch);
       },
-      findNearbyCraftBenchForPlayer: (userId, maxDistance) => {
-        const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
-        if (!playerState) {
+      resolveStationSessionPolicyContext: (sessionId) => {
+        const station = this.locationRootSystem.getStationBySessionId(sessionId);
+        if (!station) {
           return null;
         }
-        const bench = this.locationRootSystem.findNearbyCraftBench(
-          { x: playerState.x, y: playerState.y, z: playerState.z },
-          maxDistance
-        );
-        return bench ? { sessionId: bench.sessionId } : null;
+        return {
+          inventorySourcePolicy: station.inventorySourcePolicy,
+          consumeOrderPolicy: station.consumeOrderPolicy,
+          tierMaxOverride: station.tierMaxOverride,
+          actorRequirementPolicy: station.actorRequirementPolicy
+        };
       },
-      isUserWithinCraftBenchSession: (userId, sessionId, slack) => {
+      isUserWithinStationSession: (userId, sessionId, slack) => {
         const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
         if (!playerState) {
           return false;
         }
-        return this.locationRootSystem.isPointWithinCraftBenchSession(
+        return this.locationRootSystem.isPointWithinStationSession(
           { x: playerState.x, y: playerState.y, z: playerState.z },
           sessionId,
           slack
         );
       },
-      resolveCraftBenchDistanceLimit: () => this.locationRootSystem.getMaxCraftBenchInteractRadius(0.75),
+      resolveActorRequirementValue: (userId, key) => {
+        const runtime = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+        if (!runtime) {
+          return null;
+        }
+        const capabilities = this.ensureActorCapabilitiesLoaded(runtime.accountId);
+        const normalizedKey = typeof key === "string" ? key.trim() : "";
+        if (normalizedKey.length > 0) {
+          const direct = capabilities[normalizedKey];
+          if (Number.isFinite(direct)) {
+            return direct ?? null;
+          }
+          if (normalizedKey.startsWith("cap:")) {
+            const capabilityKey = normalizedKey.slice(4);
+            const capabilityValue = capabilities[capabilityKey];
+            if (Number.isFinite(capabilityValue)) {
+              return capabilityValue ?? null;
+            }
+          }
+        }
+        switch (normalizedKey) {
+          case "health":
+            return runtime.health;
+          case "max_health":
+          case "maxHealth":
+            return runtime.maxHealth;
+          case "movement_speed":
+            return Math.hypot(runtime.vx, runtime.vz);
+          default:
+            return null;
+        }
+      },
+      canInstantiateRestrictedBlueprint: (userId, blueprintId) => {
+        const accountId = this.simulationEcs.getPlayerAccountIdByUserId(userId);
+        if (accountId === null || blueprintId <= 0) {
+          return false;
+        }
+        return this.hasActorCapabilityAtLeast(accountId, "blueprint.instantiate.restricted", 1);
+      },
       actionEffects: this.actionEffectPipeline,
       onItemEquipped: (userId, itemInstanceId, slot) => {
         this.refreshEquippedVisualAppearanceForUser(userId);
@@ -856,25 +917,103 @@ export class GameSimulation {
     stepField?: boolean; fieldId?: string; fieldDelta?: number;
     setField?: boolean; fieldValueJson?: string;
     submitCreate?: boolean;
+    instantiateCreatedBlueprint?: boolean;
+    forkItemInstanceBlueprint?: boolean;
+    itemInstanceId?: number;
+    inspectActorCapabilities?: boolean;
+    setActorCapability?: boolean;
+    capabilityKey?: string;
+    capabilityValue?: number;
   }): void {
     const accountId = this.simulationEcs.getPlayerAccountIdByUserId(user.id);
     if (accountId === null) return;
+    if (command.instantiateCreatedBlueprint && !command.submitCreate) {
+      const message = "Creation blocked: instantiate requires submit_create in the same command.";
+      this.queueCreatorActionResultForUser(user, false, message);
+      return;
+    }
+    if ((command.submitCreate || command.instantiateCreatedBlueprint) && !this.hasActorCapabilityAtLeast(accountId, "creator.author", 1)) {
+      const message = "Creation blocked: missing creator.author permission.";
+      this.queueCreatorActionResultForUser(user, false, message);
+      return;
+    }
+    if (command.inspectActorCapabilities) {
+      this.applyInspectActorCapabilities(user.id, accountId);
+      return;
+    }
+    if (command.setActorCapability) {
+      this.applySetActorCapability(user.id, accountId, command.capabilityKey, command.capabilityValue);
+      return;
+    }
+    if (command.forkItemInstanceBlueprint) {
+      if (!this.hasActorCapabilityAtLeast(accountId, "creator.clone", 1)) {
+        const message = "Blueprint fork blocked: missing creator.clone permission.";
+        this.queueCreatorActionResultForUser(user, false, message);
+        return;
+      }
+      this.applyForkBlueprintFromItemInstance(user, accountId, command.itemInstanceId, command.name);
+      return;
+    }
     const abilityState = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
     const availableTemplateBlueprintIds = this.ensureBlueprintAccessLoaded(
       accountId,
       "blueprint.template",
       abilityState?.unlockedAbilityIds ?? DEFAULT_UNLOCKED_ABILITY_IDS
     );
+    const currentSession = this.creatorSystem.synchronizeSessionAvailability(user.id);
+    const activeStationSessionId = this.creatorSystem.getSessionStationSessionId(user.id);
+    const stationPolicy = activeStationSessionId
+      ? this.locationRootSystem.getStationBySessionId(activeStationSessionId)
+      : null;
+    const creatorPolicy =
+      currentSession?.profileId === "item_creator" && stationPolicy
+        ? {
+            tierMaxOverride: stationPolicy.tierMaxOverride,
+            actorRequirementPolicy: stationPolicy.actorRequirementPolicy
+          }
+        : null;
     const result = this.creatorSystem.applyCommand({
       userId: user.id,
       accountId,
       availableTemplateBlueprintIds,
+      creatorPolicy,
+      deferCreatedBlueprintRegistration: Boolean(command.instantiateCreatedBlueprint),
       command
     });
-    this.replication.queueCreatorStateMessage(user, result.snapshot);
+    let creatorSnapshotToReplicate = result.snapshot;
 
     if (result.createdBlueprint) {
       const createdAbility = buildAbilityDefinitionFromBlueprint(result.createdBlueprint);
+      const createdItem = buildItemDefinitionFromBlueprint(result.createdBlueprint);
+      if (command.instantiateCreatedBlueprint && !createdItem) {
+        const failureMessage = this.formatCreatorInstantiationFailureReason("blueprint_not_item");
+        this.creatorSystem.overrideSessionStatus(user.id, failureMessage);
+        this.queueCreatorActionResultForUser(user, false, failureMessage, result.createdBlueprint.id, 0);
+        const failedCreatorState = this.creatorSystem.synchronizeSessionAvailability(user.id);
+        if (failedCreatorState) {
+          creatorSnapshotToReplicate = failedCreatorState;
+        }
+        this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+        return;
+      }
+      if (command.instantiateCreatedBlueprint && createdItem) {
+        const preflightResult = this.itemInventorySystem.canInstantiateBlueprintItemForUser(
+          user.id,
+          result.createdBlueprint,
+          activeStationSessionId
+        );
+        if (!preflightResult.ok) {
+          const failureMessage = this.formatCreatorInstantiationFailureReason(preflightResult.reason);
+          this.creatorSystem.overrideSessionStatus(user.id, failureMessage);
+          this.queueCreatorActionResultForUser(user, false, failureMessage, result.createdBlueprint.id, 0);
+          const failedCreatorState = this.creatorSystem.synchronizeSessionAvailability(user.id);
+          if (failedCreatorState) {
+            creatorSnapshotToReplicate = failedCreatorState;
+          }
+          this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+          return;
+        }
+      }
       const createdActivations: RuntimeActivationSpec[] = [];
       if (createdAbility?.projectile) {
         createdActivations.push({
@@ -898,20 +1037,72 @@ export class GameSimulation {
       const runtimeCapabilityEntry = {
         blueprintId: result.createdBlueprint.id,
         ability: createdAbility,
-        item: null,
+        item: createdItem,
         platform: null,
         activations: createdActivations
       };
+      const persistedBlueprint = this.withBlueprintProvenance(result.createdBlueprint, accountId, user.id);
+      runtimeCapabilityEntry.blueprintId = persistedBlueprint.id;
       upsertBlueprintRuntimeCapabilityEntry(runtimeCapabilityEntry);
-      const grantedAccessTags = creatorProfileIdToGrantedAccessTags(result.snapshot.profileId);
+      if (command.instantiateCreatedBlueprint && createdItem) {
+        const instantiateResult = this.itemInventorySystem.instantiateBlueprintItemForUser(
+          user.id,
+          persistedBlueprint,
+          activeStationSessionId
+        );
+        if (!instantiateResult.ok) {
+          const failureMessage = this.formatCreatorInstantiationFailureReason(instantiateResult.reason);
+          this.creatorSystem.overrideSessionStatus(user.id, failureMessage);
+          this.queueCreatorActionResultForUser(user, false, failureMessage, persistedBlueprint.id, 0);
+          const failedCreatorState = this.creatorSystem.synchronizeSessionAvailability(user.id);
+          if (failedCreatorState) {
+            creatorSnapshotToReplicate = failedCreatorState;
+          }
+          this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+          return;
+        }
+        this.creatorSystem.overrideSessionStatus(
+          user.id,
+          `Created and instantiated "${persistedBlueprint.name}".`
+        );
+        this.queueCreatorActionResultForUser(
+          user,
+          true,
+          `Created and instantiated "${persistedBlueprint.name}".`,
+          persistedBlueprint.id,
+          instantiateResult.createdItemInstanceId ?? 0
+        );
+      }
+      const grantedAccessTags = this.resolveGrantedAccessTagsForAuthoring(
+        accountId,
+        creatorProfileIdToGrantedAccessTags(result.snapshot.profileId)
+      );
+      const globalGrantedAccessTags = this.resolveGlobalGrantedAccessTagsForAuthoring(accountId, grantedAccessTags);
       this.persistence.saveBlueprintAndGrantAccess({
-        blueprint: result.createdBlueprint,
+        blueprint: persistedBlueprint,
         runtimeCapability: runtimeCapabilityEntry,
         createdByAccountId: accountId,
-        grantAccessTags: grantedAccessTags
+        grantAccessTags: grantedAccessTags,
+        globalGrantAccessTags: globalGrantedAccessTags
       });
       for (const accessTag of grantedAccessTags) {
         this.creatorSystem.grantBlueprintAccess(accountId, accessTag, result.createdBlueprint.id);
+      }
+      if (!grantedAccessTags.includes("blueprint.template")) {
+        this.queueServerAlertForUser(
+          user.id,
+          "Blueprint created but not published to template catalog (missing creator.publish.template permission).",
+          "warning"
+        );
+      }
+      if (!command.instantiateCreatedBlueprint) {
+        this.queueCreatorActionResultForUser(
+          user,
+          true,
+          `Created blueprint "${persistedBlueprint.name}".`,
+          persistedBlueprint.id,
+          0
+        );
       }
       if (createdAbility) {
         const unlockedAbilityIds = this.creatorSystem.getAccessibleBlueprintIds(accountId, "ability.use") ?? [];
@@ -925,17 +1116,86 @@ export class GameSimulation {
       }
       const nextCreatorState = this.creatorSystem.synchronizeSessionAvailability(user.id);
       if (nextCreatorState) {
-        this.replication.queueCreatorStateMessage(user, nextCreatorState);
+        creatorSnapshotToReplicate = nextCreatorState;
       }
     }
+    this.replication.queueCreatorStateMessage(user, creatorSnapshotToReplicate);
+  }
+
+  private applyForkBlueprintFromItemInstance(
+    user: UserLike,
+    accountId: number,
+    rawItemInstanceId: number | undefined,
+    rawName: string | undefined
+  ): void {
+    const itemInstanceId = typeof rawItemInstanceId === "number" ? Math.max(0, Math.floor(rawItemInstanceId)) : 0;
+    if (itemInstanceId <= 0) {
+      this.queueCreatorActionResultForUser(user, false, "Blueprint fork failed: invalid item instance.");
+      return;
+    }
+    const inventoryItem = this.itemInventorySystem.getInventoryItemInstanceForUser(user.id, itemInstanceId);
+    if (!inventoryItem) {
+      this.queueCreatorActionResultForUser(user, false, "Blueprint fork failed: item not found in inventory.");
+      return;
+    }
+    const sourceBlueprint = this.creatorSystem.resolveBlueprintDefinitionById(inventoryItem.definitionId);
+    if (!sourceBlueprint) {
+      this.queueCreatorActionResultForUser(user, false, "Blueprint fork failed: source blueprint missing.");
+      return;
+    }
+    const nextName = typeof rawName === "string" && rawName.trim().length > 0
+      ? rawName.trim()
+      : `${sourceBlueprint.name} Copy`;
+    const createdBlueprint = this.creatorSystem.createDerivedBlueprintFromExisting({
+      sourceBlueprint,
+      name: nextName,
+      authoredViaProfile: "item_creator",
+      derivedFromInstanceId: inventoryItem.itemInstanceId
+    });
+    const createdAbility = buildAbilityDefinitionFromBlueprint(createdBlueprint);
+    const createdItem = buildItemDefinitionFromBlueprint(createdBlueprint);
+    const runtimeCapabilityEntry = {
+      blueprintId: createdBlueprint.id,
+      ability: createdAbility,
+      item: createdItem,
+      platform: null,
+      activations: getBlueprintRuntimeActivationSpecsByBlueprintId(sourceBlueprint.id)
+    };
+    const persistedBlueprint = this.withBlueprintProvenance(createdBlueprint, accountId, user.id);
+    runtimeCapabilityEntry.blueprintId = persistedBlueprint.id;
+    upsertBlueprintRuntimeCapabilityEntry(runtimeCapabilityEntry);
+    const grantedAccessTags = this.resolveGrantedAccessTagsForAuthoring(accountId, ["item.craft", "blueprint.template"]);
+    const globalGrantedAccessTags = this.resolveGlobalGrantedAccessTagsForAuthoring(accountId, grantedAccessTags);
+    this.persistence.saveBlueprintAndGrantAccess({
+      blueprint: persistedBlueprint,
+      runtimeCapability: runtimeCapabilityEntry,
+      createdByAccountId: accountId,
+      grantAccessTags: grantedAccessTags,
+      globalGrantAccessTags: globalGrantedAccessTags
+    });
+    for (const accessTag of grantedAccessTags) {
+      this.creatorSystem.grantBlueprintAccess(accountId, accessTag, createdBlueprint.id);
+    }
+    const snap = this.creatorSystem.synchronizeSessionAvailability(user.id);
+    if (snap) {
+      this.replication.queueCreatorStateMessage(user, snap);
+    }
+    this.queueCreatorActionResultForUser(
+      user,
+      true,
+      `Created blueprint "${createdBlueprint.name}" from item instance.`,
+      persistedBlueprint.id,
+      0
+    );
   }
 
   public applyItemCommand(user: UserLike, command: Partial<ItemWireCommand>): void {
     if (typeof this.simulationEcs.getPlayerEidByUserId(user.id) !== "number") return;
     const action = typeof command.action === "number" ? Math.floor(command.action) : 0;
     const pickupNid = typeof command.pickupNid === "number" ? Math.floor(command.pickupNid) : 0;
+    const interactSlot = typeof command.payloadKind === "number" ? Math.max(0, Math.floor(command.payloadKind)) : 0;
     if (action === INVENTORY_OP_PICKUP && pickupNid <= 0) {
-      this.applyWorldInteractIntent(user.id);
+      this.applyWorldInteractIntent(user.id, interactSlot);
       return;
     }
     this.itemInventorySystem.applyCommand(user.id, command);
@@ -1005,16 +1265,65 @@ export class GameSimulation {
     this.tickAiIntentPhase();
     this.tickAbilityIntentPhase();
     this.tickMovementPhase(delta);
-    this.itemInventorySystem.refreshCraftBenchSessions();
     this.tickPortalTransferPhase();
     this.tickCombatPhase(delta);
     this.tickReplicationPhase();
     this.tickPhysicsFinalizePhase();
   }
 
-  private applyWorldInteractIntent(userId: number): void {
-    if (this.tryBeginNearbyCraftBenchSession(userId)) {
-      this.queueServerAlertForUser(userId, "Craft bench ready.", "info");
+  private applyWorldInteractIntent(userId: number, interactSlot = 0): void {
+    const normalizedInteractSlot = Number.isFinite(interactSlot) ? Math.max(0, Math.floor(interactSlot)) : 0;
+    const stationInteraction = this.tryBeginNearbyStationSession(userId);
+    if (stationInteraction) {
+      const action = resolveWorldInteractionActionBySlot("station", normalizedInteractSlot);
+      if (!action) {
+        this.queueServerAlertForUser(
+          userId,
+          `Station does not support ${worldInteractionSlotToKeyLabel(normalizedInteractSlot)} interaction.`,
+          "warning"
+        );
+        return;
+      }
+      if (!action.enabled) {
+        this.queueServerAlertForUser(
+          userId,
+          action.disabledReason && action.disabledReason.trim().length > 0
+            ? action.disabledReason
+            : "Station interaction is currently unavailable.",
+          "warning"
+        );
+        return;
+      }
+      if (action.id !== "station_open_creator") {
+        this.queueServerAlertForUser(userId, "Unsupported station interaction action.", "warning");
+        return;
+      }
+      const accountId = this.simulationEcs.getPlayerAccountIdByUserId(userId);
+      const user = this.usersById.get(userId);
+      if (typeof accountId === "number" && user) {
+        const itemTemplateIds = getBlueprintDefinitionsForProfile(stationInteraction.creatorProfileId).map((blueprint) => blueprint.id);
+        const filteredTemplateIds = filterCreatorTemplateBlueprintIdsForStation(
+          itemTemplateIds,
+          stationInteraction.allowedTemplateBlueprintIds
+        );
+        const templateIdsForSession = filteredTemplateIds;
+        if (templateIdsForSession.length <= 0) {
+          this.queueServerAlertForUser(
+            userId,
+            `Station unavailable: no templates are configured for profile ${stationInteraction.creatorProfileId}.`,
+            "warning"
+          );
+          return;
+        }
+        const creatorState = this.creatorSystem.initializeSession(
+          userId,
+          accountId,
+          templateIdsForSession,
+          stationInteraction.creatorProfileId,
+          stationInteraction.sessionId
+        );
+        this.replication.queueCreatorStateMessage(user, creatorState);
+      }
       return;
     }
     const runtime = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
@@ -1026,6 +1335,36 @@ export class GameSimulation {
       4
     );
     if (!consoleRef) {
+      if (normalizedInteractSlot > 0) {
+        this.queueServerAlertForUser(
+          userId,
+          `No ${worldInteractionSlotToKeyLabel(normalizedInteractSlot)} interaction is available here.`,
+          "warning"
+        );
+      }
+      return;
+    }
+    const pilotAction = resolveWorldInteractionActionBySlot("pilot_console", normalizedInteractSlot);
+    if (!pilotAction) {
+      this.queueServerAlertForUser(
+        userId,
+        `Pilot console does not support ${worldInteractionSlotToKeyLabel(normalizedInteractSlot)} interaction.`,
+        "warning"
+      );
+      return;
+    }
+    if (!pilotAction.enabled) {
+      this.queueServerAlertForUser(
+        userId,
+        pilotAction.disabledReason && pilotAction.disabledReason.trim().length > 0
+          ? pilotAction.disabledReason
+          : "Pilot console interaction is currently unavailable.",
+        "warning"
+      );
+      return;
+    }
+    if (pilotAction.id !== "pilot_console_toggle") {
+      this.queueServerAlertForUser(userId, "Unsupported pilot console interaction action.", "warning");
       return;
     }
     const memberships = this.referenceFrameMembershipByUserId.get(userId) ?? null;
@@ -1104,19 +1443,35 @@ export class GameSimulation {
     return { forward, strafe, ascend, yawDelta, sprint };
   }
 
-  private tryBeginNearbyCraftBenchSession(userId: number): boolean {
+  private tryBeginNearbyStationSession(userId: number): {
+    sessionId: string;
+    creatorProfileId: CreatorProfileId;
+    allowedTemplateBlueprintIds: readonly number[];
+    inventorySourcePolicy: "player_only" | "player_and_station";
+    consumeOrderPolicy: "player_first" | "station_first";
+    tierMaxOverride: number | null;
+    actorRequirementPolicy: "enforce" | "ignore";
+  } | null {
     const playerState = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
     if (!playerState) {
-      return false;
+      return null;
     }
-    const nearbyBench = this.locationRootSystem.findNearbyCraftBench(
+    const nearbyStation = this.locationRootSystem.findNearbyStation(
       { x: playerState.x, y: playerState.y, z: playerState.z },
-      this.locationRootSystem.getMaxCraftBenchInteractRadius(0.75)
+      this.locationRootSystem.getMaxStationInteractRadius(0.75)
     );
-    if (!nearbyBench) {
-      return false;
+    if (!nearbyStation) {
+      return null;
     }
-    return this.itemInventorySystem.beginCraftBenchSession(userId, nearbyBench.sessionId);
+    return {
+      sessionId: nearbyStation.sessionId,
+      creatorProfileId: nearbyStation.creatorProfileId,
+      allowedTemplateBlueprintIds: nearbyStation.allowedTemplateBlueprintIds,
+      inventorySourcePolicy: nearbyStation.inventorySourcePolicy,
+      consumeOrderPolicy: nearbyStation.consumeOrderPolicy,
+      tierMaxOverride: nearbyStation.tierMaxOverride,
+      actorRequirementPolicy: nearbyStation.actorRequirementPolicy
+    };
   }
 
   private refreshEquippedVisualAppearanceForUser(userId: number): void {
@@ -1137,6 +1492,11 @@ export class GameSimulation {
     let bodyArchetypeId = 0;
     let legsArchetypeId = 0;
     let accessoryArchetypeId = 0;
+    let weaponTintColorRgb = getDefaultEquippedTintPatch().equippedWeaponTintColorRgb;
+    let headTintColorRgb = getDefaultEquippedTintPatch().equippedHeadTintColorRgb;
+    let bodyTintColorRgb = getDefaultEquippedTintPatch().equippedBodyTintColorRgb;
+    let legsTintColorRgb = getDefaultEquippedTintPatch().equippedLegsTintColorRgb;
+    let accessoryTintColorRgb = getDefaultEquippedTintPatch().equippedAccessoryTintColorRgb;
     for (const [slot, itemInstanceId] of equippedItemBySlot) {
       if (itemInstanceId <= 0) {
         continue;
@@ -1145,20 +1505,26 @@ export class GameSimulation {
       if (!item) {
         continue;
       }
-      const definition = getItemDefinitionById(item.definitionId);
+      const definition = getItemDefinitionById(item.definitionId) ?? getBlueprintRuntimeItemByBlueprintId(item.definitionId);
       if (!definition || definition.modelId <= 0) {
         continue;
       }
+      const readyAppearanceBinding = resolveReadyAppearanceRuntimeBinding(definition.readyAppearanceId);
       if (slot === "weapon") {
-        weaponArchetypeId = definition.modelId;
+        weaponArchetypeId = readyAppearanceBinding.equipped.renderArchetypeId ?? definition.modelId;
+        weaponTintColorRgb = readyAppearanceBinding.equipped.tintColorRgb;
       } else if (slot === "head") {
-        headArchetypeId = definition.modelId;
+        headArchetypeId = readyAppearanceBinding.equipped.renderArchetypeId ?? definition.modelId;
+        headTintColorRgb = readyAppearanceBinding.equipped.tintColorRgb;
       } else if (slot === "body") {
-        bodyArchetypeId = definition.modelId;
+        bodyArchetypeId = readyAppearanceBinding.equipped.renderArchetypeId ?? definition.modelId;
+        bodyTintColorRgb = readyAppearanceBinding.equipped.tintColorRgb;
       } else if (slot === "legs") {
-        legsArchetypeId = definition.modelId;
+        legsArchetypeId = readyAppearanceBinding.equipped.renderArchetypeId ?? definition.modelId;
+        legsTintColorRgb = readyAppearanceBinding.equipped.tintColorRgb;
       } else {
-        accessoryArchetypeId = definition.modelId;
+        accessoryArchetypeId = readyAppearanceBinding.equipped.renderArchetypeId ?? definition.modelId;
+        accessoryTintColorRgb = readyAppearanceBinding.equipped.tintColorRgb;
       }
     }
     this.appearanceSystem.clearAppearanceIntentSources(playerState.eid, EQUIPMENT_SLOT_TINT_INTENT_SOURCES);
@@ -1168,7 +1534,11 @@ export class GameSimulation {
       equippedBodyArchetypeId: bodyArchetypeId,
       equippedLegsArchetypeId: legsArchetypeId,
       equippedAccessoryArchetypeId: accessoryArchetypeId,
-      ...getDefaultEquippedTintPatch()
+      equippedWeaponTintColorRgb: weaponTintColorRgb,
+      equippedHeadTintColorRgb: headTintColorRgb,
+      equippedBodyTintColorRgb: bodyTintColorRgb,
+      equippedLegsTintColorRgb: legsTintColorRgb,
+      equippedAccessoryTintColorRgb: accessoryTintColorRgb
     });
   }
 
@@ -1340,6 +1710,30 @@ export class GameSimulation {
   public injectPendingPlayerSettings(accountId: number, settings: PlayerSettings): void {
     this.playerSettingsByAccountId.set(Math.max(1, Math.floor(accountId)), coercePlayerSettings(settings));
   }
+  public injectPendingActorCapabilities(accountId: number, capabilities: Record<string, number>): void {
+    this.actorCapabilitiesByAccountId.set(Math.max(1, Math.floor(accountId)), { ...capabilities });
+  }
+  public setActorCapabilityByAccountId(accountId: number, capabilityKey: string, value: number): boolean {
+    const normalizedAccountId = Math.max(1, Math.floor(accountId));
+    const key = typeof capabilityKey === "string" ? capabilityKey.trim() : "";
+    if (key.length <= 0 || !Number.isFinite(value)) {
+      return false;
+    }
+    const capabilities = this.ensureActorCapabilitiesLoaded(normalizedAccountId);
+    const previous = capabilities[key];
+    const next = Number(value);
+    if (previous === next) {
+      return false;
+    }
+    capabilities[key] = next;
+    this.actorCapabilitiesByAccountId.set(normalizedAccountId, capabilities);
+    this.persistence.saveActorCapabilities(normalizedAccountId, capabilities);
+    return true;
+  }
+
+  public getActorCapabilitiesByAccountId(accountId: number): Readonly<Record<string, number>> {
+    return Object.freeze({ ...this.ensureActorCapabilitiesLoaded(accountId) });
+  }
   public getPlayerSnapshotByUserId(userId: number): PlayerSnapshot | null {
     const aid = this.simulationEcs.getPlayerAccountIdByUserId(userId);
     if (aid === null) return null;
@@ -1371,11 +1765,15 @@ export class GameSimulation {
     activeNpcs: number;
     inactiveNpcs: number;
     hibernatingNpcs: number;
+    replicationNearEntities: number;
+    replicationFarEntities: number;
+    replicationTotalEntities: number;
     pilotedReferenceFrames: number;
     effectAuditSuccesses: Readonly<Record<string, number>>;
   } {
     const es = this.simulationEcs.getStats();
     const ai = this.npcAiSystem.getStats();
+    const replicationCounts = this.replication.getLiveReplicationCounts();
     return {
       onlinePlayers: this.simulationEcs.getOnlinePlayerCount(),
       activeProjectiles: this.projectileSystem.getActiveCount(),
@@ -1384,6 +1782,9 @@ export class GameSimulation {
       activeNpcs: ai.active,
       inactiveNpcs: ai.inactive,
       hibernatingNpcs: ai.hibernating,
+      replicationNearEntities: replicationCounts.nearEntities,
+      replicationFarEntities: replicationCounts.farEntities,
+      replicationTotalEntities: replicationCounts.totalEntities,
       pilotedReferenceFrames: this.pilotedReferenceFrameByUserId.size,
       effectAuditSuccesses: Object.freeze(Object.fromEntries(this.effectAuditSuccessCountByType.entries()))
     };
@@ -1723,6 +2124,23 @@ export class GameSimulation {
     this.alertDispatcher.queueForUserId(userId, text, severity);
   }
 
+  private queueCreatorActionResultForUser(
+    user: UserLike,
+    ok: boolean,
+    message: string,
+    createdBlueprintId = 0,
+    createdItemInstanceId = 0
+  ): void {
+    user.queueMessage({
+      ntype: NType.CreatorActionResultMessage,
+      version: 1,
+      ok,
+      message,
+      createdBlueprintId: Math.max(0, Math.min(0xffff, Math.floor(createdBlueprintId))),
+      createdItemInstanceId: Math.max(0, Math.min(0x7fffffff, Math.floor(createdItemInstanceId)))
+    });
+  }
+
   public queueServerAlertForAccount(accountId: number, text: string, severity: AlertSeverity = "info"): void {
     this.alertDispatcher.queueForAccountId(accountId, text, severity);
   }
@@ -1744,6 +2162,162 @@ export class GameSimulation {
     const loaded = this.persistence.loadPlayerSettings(normalizedAccountId);
     this.playerSettingsByAccountId.set(normalizedAccountId, loaded);
     return loaded;
+  }
+
+  private ensureActorCapabilitiesLoaded(accountId: number): Record<string, number> {
+    const normalizedAccountId = Math.max(1, Math.floor(accountId));
+    const existing = this.actorCapabilitiesByAccountId.get(normalizedAccountId);
+    if (existing) {
+      return existing;
+    }
+    const loaded = this.persistence.loadActorCapabilities(normalizedAccountId);
+    const merged: Record<string, number> = {
+      ...DEFAULT_ACTOR_CAPABILITIES,
+      ...loaded
+    };
+    const changed = Object.keys(DEFAULT_ACTOR_CAPABILITIES).some(
+      (key) => !Number.isFinite(loaded[key])
+    );
+    if (changed) {
+      this.persistence.saveActorCapabilities(normalizedAccountId, merged);
+    }
+    this.actorCapabilitiesByAccountId.set(normalizedAccountId, merged);
+    return merged;
+  }
+
+  private hasActorCapabilityAtLeast(accountId: number, key: string, minValue: number): boolean {
+    const capabilities = this.ensureActorCapabilitiesLoaded(accountId);
+    const value = capabilities[key];
+    if (!Number.isFinite(value)) {
+      return false;
+    }
+    return Number(value) >= minValue;
+  }
+
+  private resolveGrantedAccessTagsForAuthoring(
+    accountId: number,
+    requestedTags: readonly BlueprintAccessTag[]
+  ): BlueprintAccessTag[] {
+    const uniqueRequested = Array.from(new Set(requestedTags));
+    const canPublishTemplate = this.hasActorCapabilityAtLeast(accountId, "creator.publish.template", 1);
+    const filtered = uniqueRequested.filter((tag) => tag !== "blueprint.template" || canPublishTemplate);
+    return filtered;
+  }
+
+  private formatCreatorInstantiationFailureReason(reason: string): string {
+    if (reason.startsWith("actor_requirement_unmet:")) {
+      const key = reason.slice("actor_requirement_unmet:".length).trim();
+      return key.length > 0
+        ? `Creation blocked: actor requirement not met (${key}).`
+        : "Creation blocked: actor requirement not met.";
+    }
+    if (reason.startsWith("required_item_missing:")) {
+      const requiredId = Number.parseInt(reason.slice("required_item_missing:".length), 10);
+      return Number.isFinite(requiredId) && requiredId > 0
+        ? `Creation blocked: required non-consumed item missing (item #${requiredId}).`
+        : "Creation blocked: required non-consumed item missing.";
+    }
+    if (reason.startsWith("missing_resources:")) {
+      const [, itemIdRaw, qtyRaw, sourcePolicyRaw] = reason.split(":");
+      const itemId = Number.parseInt(itemIdRaw ?? "", 10);
+      const qty = Number.parseInt(qtyRaw ?? "", 10);
+      const sourcePolicy = sourcePolicyRaw === "player_and_station" ? "player + station inventories" : "player inventory";
+      if (Number.isFinite(itemId) && itemId > 0 && Number.isFinite(qty) && qty > 0) {
+        return `Creation blocked: missing consumable material item #${itemId} x${qty} from ${sourcePolicy}.`;
+      }
+      return `Creation blocked: missing consumable materials from ${sourcePolicy}.`;
+    }
+    if (reason === "station_session_missing") {
+      return "Creation blocked: station session is required before instantiation.";
+    }
+    if (reason === "station_session_invalid") {
+      return "Creation blocked: station session is no longer valid at this location.";
+    }
+    if (reason === "station_policy_missing") {
+      return "Creation blocked: station policy data is unavailable.";
+    }
+    if (reason === "restricted_blueprint_permission_missing") {
+      return "Creation blocked: restricted blueprint permission missing.";
+    }
+    if (reason === "inventory_full") {
+      return "Creation blocked: inventory is full.";
+    }
+    if (reason === "blueprint_not_item") {
+      return "Creation blocked: selected blueprint is not an item.";
+    }
+    if (reason === "player_missing") {
+      return "Creation blocked: player runtime state is unavailable.";
+    }
+    return `Creation blocked: ${reason}.`;
+  }
+
+  private resolveGlobalGrantedAccessTagsForAuthoring(
+    accountId: number,
+    grantedAccessTags: readonly BlueprintAccessTag[]
+  ): BlueprintAccessTag[] {
+    if (!this.hasActorCapabilityAtLeast(accountId, "creator.publish.global", 1)) {
+      return [];
+    }
+    return grantedAccessTags.includes("blueprint.template") ? ["blueprint.template"] : [];
+  }
+
+  private withBlueprintProvenance(
+    blueprint: BlueprintDefinition,
+    accountId: number,
+    userId: number
+  ): BlueprintDefinition {
+    const stationSessionId = this.creatorSystem.getSessionStationSessionId(userId) ?? undefined;
+    const productionContract = blueprint.components?.ProductionContract as Record<string, unknown> | undefined;
+    const productionTierRaw = productionContract?.tier;
+    const productionTier = typeof productionTierRaw === "number" && Number.isFinite(productionTierRaw)
+      ? Math.max(1, Math.floor(productionTierRaw))
+      : undefined;
+    const selectedAugments = Array.isArray(productionContract?.selectedAugmentDefinitionIds)
+      ? productionContract.selectedAugmentDefinitionIds
+          .filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry))
+          .map((entry) => Math.max(0, Math.floor(entry)))
+      : undefined;
+    return cloneBlueprintDefinition(blueprint, {
+      metadata: {
+        ...blueprint.metadata,
+        createdByAccountId: Math.max(1, Math.floor(accountId)),
+        authoredAtMs: Date.now(),
+        stationSessionId,
+        productionTier,
+        selectedAugmentDefinitionIds: selectedAugments
+      }
+    });
+  }
+
+  private applyInspectActorCapabilities(userId: number, accountId: number): void {
+    const capabilities = this.ensureActorCapabilitiesLoaded(accountId);
+    const sortedEntries = Object.entries(capabilities).sort((a, b) => a[0].localeCompare(b[0]));
+    const summary = sortedEntries.map(([key, value]) => `${key}=${value}`).join(", ");
+    this.queueServerAlertForUser(
+      userId,
+      summary.length > 0 ? `Capabilities: ${summary}` : "Capabilities: <none>",
+      "info"
+    );
+  }
+
+  private applySetActorCapability(
+    userId: number,
+    accountId: number,
+    rawCapabilityKey: string | undefined,
+    rawCapabilityValue: number | undefined
+  ): void {
+    const capabilityKey = typeof rawCapabilityKey === "string" ? rawCapabilityKey.trim() : "";
+    const capabilityValue = typeof rawCapabilityValue === "number" ? rawCapabilityValue : Number.NaN;
+    if (capabilityKey.length <= 0 || !Number.isFinite(capabilityValue)) {
+      this.queueServerAlertForUser(userId, "Capability update failed: invalid key/value.", "warning");
+      return;
+    }
+    const changed = this.setActorCapabilityByAccountId(accountId, capabilityKey, capabilityValue);
+    if (!changed) {
+      this.queueServerAlertForUser(userId, `Capability unchanged: ${capabilityKey}=${capabilityValue}.`, "info");
+      return;
+    }
+    this.queueServerAlertForUser(userId, `Capability updated: ${capabilityKey}=${capabilityValue}.`, "success");
   }
 
   private getPlayerSettingsByAccountId(accountId: number): PlayerSettings {
@@ -1812,6 +2386,7 @@ export class GameSimulation {
       },
       sendInitialReplicationState: (user, accountId) => {
         const settings = this.ensurePlayerSettingsLoaded(accountId);
+        this.ensureActorCapabilitiesLoaded(accountId);
         user.queueMessage({
           ntype: NType.PlayerSettingsMessage,
           settingsJson: JSON.stringify(settings)

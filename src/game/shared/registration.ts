@@ -9,6 +9,7 @@ import {
   injectTraitDefinitions,
   injectBlueprintCatalog,
   injectBlueprintRuntimeCapabilities,
+  injectCreatorAppearanceBindingCatalog,
   getAllBlueprintDefinitions,
   type StatAllocationDefinition,
   type DerivedEffectDefinition,
@@ -19,6 +20,7 @@ import { injectAbilityCatalog } from "../../engine/shared/abilities";
 import { injectItemCatalog } from "../../engine/shared/items";
 import { injectPlatformCatalog } from "../../engine/shared/platforms";
 import { projectBlueprintsToRuntimeCatalogs } from "./blueprintContentProjection";
+import { GAME_CREATOR_APPEARANCE_BINDINGS } from "./creatorAppearanceBindings";
 
 import blueprintsRaw from "./blueprints.json";
 
@@ -79,77 +81,77 @@ const GAME_TRAIT_DEFINITIONS: readonly TraitDefinition[] = [
   {
     id: "homing-lite", label: "Homing Lite",
     description: "Mild target guidance with a small speed tradeoff.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "projectileSpeed", multiplier: 0.92 }, { stat: "abilityDamage", multiplier: 0.95 }],
     effects: [], constraints: [], appliesTo: ["ability"]
   },
   {
     id: "wide-impact", label: "Wide Impact",
     description: "Larger projectile radius, lower precision damage.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "projectileRadius", additive: 0.09 }, { stat: "abilityDamage", multiplier: 0.9 }],
     effects: [], constraints: [], appliesTo: ["ability"]
   },
   {
     id: "quick-cast", label: "Quick Cast",
     description: "Shorter cooldown at reduced per-hit damage.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "cooldownSeconds", multiplier: 0.78 }, { stat: "abilityDamage", multiplier: 0.9 }],
     effects: [], constraints: [], appliesTo: ["ability"]
   },
   {
     id: "long-reach", label: "Long Reach",
     description: "Longer lifetime/range with lighter impact.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "abilityDamage", multiplier: 0.93 }],
     effects: [], constraints: [], appliesTo: ["ability"]
   },
   {
     id: "berserker", label: "Berserker",
     description: "Deal more damage but take more damage.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "attackPower", multiplier: 1.15 }, { stat: "defense", multiplier: 0.85 }],
     effects: [], constraints: [], appliesTo: ["character"]
   },
   {
     id: "tank", label: "Tank",
     description: "More defense at the cost of speed.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "defense", multiplier: 1.2 }, { stat: "moveSpeed", multiplier: 0.9 }],
     effects: [], constraints: [], appliesTo: ["character"]
   },
   {
     id: "glass-cannon", label: "Glass Cannon",
     description: "High damage, low health.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "attackPower", multiplier: 1.3 }, { stat: "maxHealth", multiplier: 0.7 }],
     effects: [], constraints: ["conflicts:tank"], appliesTo: ["character"]
   },
   {
     id: "clumsy", label: "Clumsy",
     description: "Reduced speed, grants extra trait budget.",
-    polarity: "downside", budgetDelta: 1,
+    polarity: "downside", budgetDelta: 50,
     statModifiers: [{ stat: "moveSpeed", multiplier: 0.85 }],
     effects: [], constraints: [], appliesTo: ["character", "ability"]
   },
   {
     id: "sharpened", label: "Sharpened",
     description: "Increased weapon damage.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "itemDamage", multiplier: 1.2 }],
     effects: [], constraints: [], appliesTo: ["item"]
   },
   {
     id: "fortified", label: "Fortified",
     description: "Increased armor defense.",
-    polarity: "upside", budgetDelta: 1,
+    polarity: "upside", budgetDelta: 50,
     statModifiers: [{ stat: "itemDefense", multiplier: 1.25 }],
     effects: [], constraints: [], appliesTo: ["item"]
   },
   {
     id: "brittle", label: "Brittle",
     description: "Reduced durability, grants extra budget.",
-    polarity: "downside", budgetDelta: 1,
+    polarity: "downside", budgetDelta: 50,
     statModifiers: [{ stat: "itemDefense", multiplier: 0.8 }],
     effects: [], constraints: [], appliesTo: ["item"]
   },
@@ -164,6 +166,7 @@ export function registerGameContent(): void {
   injectStatDefinitions(GAME_STAT_DEFINITIONS);
   injectDerivedEffectDefinitions(GAME_DERIVED_EFFECTS);
   injectTraitDefinitions(GAME_TRAIT_DEFINITIONS);
+  injectCreatorAppearanceBindingCatalog(GAME_CREATOR_APPEARANCE_BINDINGS);
   injectBlueprintCatalog(blueprintsRaw as { version: unknown; blueprints: unknown });
 
   const runtimeCatalogs = projectBlueprintsToRuntimeCatalogs(getAllBlueprintDefinitions());

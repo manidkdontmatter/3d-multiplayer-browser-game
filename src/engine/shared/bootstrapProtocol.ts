@@ -9,7 +9,7 @@ export interface BootstrapRequest {
   /**
    * Canonical bearer key name. Keep authKey as backward-compatible alias in request handlers.
    */
-  accessKey?: string | null;
+  accountKey?: string | null;
   authKey?: string | null;
 }
 

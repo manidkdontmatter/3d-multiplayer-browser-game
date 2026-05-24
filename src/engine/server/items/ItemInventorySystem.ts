@@ -9,7 +9,7 @@ import {
   INVENTORY_MAX_SLOTS,
   INVENTORY_OP_DROP,
   INVENTORY_OP_DROP_HOTBAR_SLOT,
-  INVENTORY_OP_CRAFT,
+  INVENTORY_OP_INSTANTIATE_BLUEPRINT_ITEM,
   INVENTORY_OP_EQUIP,
   INVENTORY_OP_EXECUTE_HOTBAR_SLOT,
   INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
@@ -32,7 +32,11 @@ import {
   encodeInventorySnapshot,
   equipmentSlotFromWireValue,
   getItemDefinitionById,
-  getCraftRecipeById,
+  getBlueprintRuntimeItemByBlueprintId,
+  getBlueprintProductionContract,
+  buildItemDefinitionFromBlueprint,
+  resolveReadyAppearanceRuntimeBinding,
+  type BlueprintDefinition,
   type EquipmentSlot,
   type ItemInstance,
   type InventorySnapshot,
@@ -52,8 +56,7 @@ const INTERACTION_MAX_DISTANCE_SQ = INTERACTION_MAX_DISTANCE * INTERACTION_MAX_D
 const DROP_FORWARD_DISTANCE = 1.35;
 const DROP_VERTICAL_OFFSET = -1.0;
 const WORLD_ITEM_INTERACTION_TARGET_Y_OFFSET = 0.85;
-const CRAFT_BENCH_PROXIMITY_SLACK = 0.75;
-const CRAFT_BENCH_SESSION_TIMEOUT_MS = 8_000;
+const STATION_PROXIMITY_SLACK = 0.75;
 const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 
 export interface ItemInventoryPlayerState {
@@ -99,12 +102,12 @@ export interface ItemInventorySystemOptions<TUser> {
     eid: number,
     patch: Partial<{ renderArchetypeId: number; materialVariantId: number; tintColorRgb: number; uniformScalePct: number }>
   ) => boolean;
-  readonly findNearbyCraftBenchForPlayer: (
-    userId: number,
-    maxDistance: number
-  ) => { sessionId: string } | null;
-  readonly isUserWithinCraftBenchSession: (userId: number, sessionId: string, slack: number) => boolean;
-  readonly resolveCraftBenchDistanceLimit: () => number;
+  readonly resolveStationSessionPolicyContext: (
+    sessionId: string
+  ) => StationSessionPolicyContext | null;
+  readonly isUserWithinStationSession: (userId: number, sessionId: string, slack: number) => boolean;
+  readonly resolveActorRequirementValue?: (userId: number, key: string) => number | null;
+  readonly canInstantiateRestrictedBlueprint?: (userId: number, blueprintId: number) => boolean;
   readonly actionEffects: ActionEffectPipeline;
   readonly onItemEquipped?: (userId: number, itemInstanceId: number, slot: EquipmentSlot) => void;
   readonly onItemUnequipped?: (userId: number, itemInstanceId: number, slot: EquipmentSlot) => void;
@@ -115,6 +118,16 @@ interface MutableInventoryState {
   itemInstances: ItemInstance[];
   equipment: Partial<Record<EquipmentSlot, number>>;
   hotbarSlots: Array<HotbarSlotPayload | null>;
+}
+
+interface StationSessionPolicyContext {
+  // `player_only` means all requirements/costs are resolved strictly from player inventory.
+  // `player_and_station` means player inventory and session-scoped station inventory are both valid sources.
+  inventorySourcePolicy: "player_only" | "player_and_station";
+  // Consumption order is deterministic and policy-controlled whenever both inventories are valid sources.
+  consumeOrderPolicy: "player_first" | "station_first";
+  tierMaxOverride: number | null;
+  actorRequirementPolicy: "enforce" | "ignore";
 }
 
 interface PickupRuntimeState {
@@ -130,7 +143,8 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
   private nextInventoryItemInstanceId: number;
   private nextPickupId = 1;
   private criticalEventSequence = 1;
-  private readonly activeCraftBenchSessionByUserId = new Map<number, { sessionId: string; expiresAtMs: number }>();
+  private readonly stationInventoryBySessionId = new Map<string, MutableInventoryState>();
+  private readonly emittedDefinitionIdsByUserId = new Map<number, Set<number>>();
 
   public constructor(private readonly options: ItemInventorySystemOptions<TUser>) {
     this.mapInstanceId = this.resolveMapInstanceId(options.mapInstanceId);
@@ -166,6 +180,24 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       return;
     }
     const snapshot = this.ensureInventoryLoaded(player.accountId);
+    const emittedDefinitionIds = this.emittedDefinitionIdsByUserId.get(userId) ?? new Set<number>();
+    this.emittedDefinitionIdsByUserId.set(userId, emittedDefinitionIds);
+    for (const item of snapshot.itemInstances) {
+      const definitionId = Math.max(0, Math.floor(item.definitionId));
+      if (definitionId <= 0 || emittedDefinitionIds.has(definitionId)) {
+        continue;
+      }
+      emittedDefinitionIds.add(definitionId);
+      const definition = getItemDefinitionById(definitionId) ?? getBlueprintRuntimeItemByBlueprintId(definitionId);
+      if (!definition) {
+        continue;
+      }
+      user.queueMessage({
+        ntype: NType.ItemDefinitionMessage,
+        version: 1,
+        itemJson: JSON.stringify(definition)
+      });
+    }
     user.queueMessage({
       ntype: NType.InventoryStateMessage,
       inventoryJson: encodeInventorySnapshot(snapshot)
@@ -255,10 +287,6 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
         sourceSlot: this.normalizeUInt(command.sourceSlot, 0xff)
       });
       if (!changed) failureReason = "drop_hotbar_failed";
-    } else if (action === INVENTORY_OP_CRAFT) {
-      const craftResult = this.tryCraftRecipe(userId, player, this.normalizeUInt(command.itemInstanceId, 0x7fffffff));
-      changed = craftResult.ok;
-      if (!changed) failureReason = craftResult.reason;
     }
 
     this.queueInventoryActionResult(userId, action, changed, changed ? "ok" : failureReason);
@@ -273,38 +301,266 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     this.queueInventoryStateForUser(userId);
   }
 
-  public beginCraftBenchSession(userId: number, sessionId: string): boolean {
-    if (!this.getPlayerStateByUserId(userId) || typeof sessionId !== "string" || sessionId.length <= 0) {
-      return false;
+  public instantiateBlueprintItemForUser(
+    userId: number,
+    blueprint: BlueprintDefinition,
+    stationSessionId: string | null
+  ): { ok: boolean; reason: string; createdItemInstanceId?: number } {
+    const preflight = this.canInstantiateBlueprintItemForUser(userId, blueprint, stationSessionId);
+    if (!preflight.ok) {
+      return preflight;
     }
-    if (!this.options.isUserWithinCraftBenchSession(userId, sessionId, CRAFT_BENCH_PROXIMITY_SLACK)) {
-      return false;
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return { ok: false, reason: "player_missing" };
+    const definition = buildItemDefinitionFromBlueprint(blueprint);
+    if (!definition) return { ok: false, reason: "blueprint_not_item" };
+    const contract = getBlueprintProductionContract(blueprint, "item_creator");
+    let sessionPolicyContext: StationSessionPolicyContext = {
+      inventorySourcePolicy: "player_only",
+      consumeOrderPolicy: "player_first",
+      tierMaxOverride: null,
+      actorRequirementPolicy: "enforce"
+    };
+    let activeStationSessionId: string | null = null;
+    if (contract?.requiresStationSession) {
+      if (!stationSessionId || stationSessionId.length <= 0) {
+        return { ok: false, reason: "station_session_missing" };
+      }
+      if (!this.isUserWithinStationSession(userId, stationSessionId, STATION_PROXIMITY_SLACK)) {
+        return { ok: false, reason: "station_session_invalid" };
+      }
+      const resolvedSessionPolicy = this.resolveStationSessionPolicyContext(stationSessionId);
+      if (!resolvedSessionPolicy) {
+        return { ok: false, reason: "station_policy_missing" };
+      }
+      activeStationSessionId = stationSessionId;
+      sessionPolicyContext = resolvedSessionPolicy;
     }
-    this.activeCraftBenchSessionByUserId.set(userId, {
-      sessionId,
-      expiresAtMs: Date.now() + CRAFT_BENCH_SESSION_TIMEOUT_MS
-    });
-    return true;
+    if (sessionPolicyContext.actorRequirementPolicy !== "ignore" && (contract?.actorRequirements?.length ?? 0) > 0) {
+      for (const requirement of contract?.actorRequirements ?? []) {
+        const resolvedValue = this.options.resolveActorRequirementValue?.(userId, requirement.key) ?? null;
+        if (resolvedValue === null || !Number.isFinite(resolvedValue) || resolvedValue < requirement.minValue) {
+          return { ok: false, reason: `actor_requirement_unmet:${requirement.key}` };
+        }
+      }
+    }
+    const inventory = this.ensureMutableInventory(player.accountId);
+    const stationInventory =
+      sessionPolicyContext.inventorySourcePolicy === "player_and_station" && activeStationSessionId
+        ? this.getOrCreateStationInventory(activeStationSessionId)
+        : null;
+    for (const requiredDefinitionId of contract?.requiredItemDefinitionIds ?? []) {
+      const playerCount = this.getTotalItemQuantityByDefinitionId(inventory, requiredDefinitionId);
+      const stationCount = stationInventory
+        ? this.getTotalItemQuantityByDefinitionId(stationInventory, requiredDefinitionId)
+        : 0;
+      if (playerCount + stationCount <= 0) {
+        return { ok: false, reason: `required_item_missing:${requiredDefinitionId}` };
+      }
+    }
+    for (const cost of contract?.consumableCosts ?? []) {
+      const playerCount = this.getTotalItemQuantityByDefinitionId(inventory, cost.itemDefinitionId);
+      const stationCount = stationInventory
+        ? this.getTotalItemQuantityByDefinitionId(stationInventory, cost.itemDefinitionId)
+        : 0;
+      const totalOwned = playerCount + stationCount;
+      if (totalOwned < cost.quantity) {
+        return {
+          ok: false,
+          reason: `missing_resources:${cost.itemDefinitionId}:${cost.quantity}:${sessionPolicyContext.inventorySourcePolicy}`
+        };
+      }
+    }
+    if (!this.canAddCraftOutputAfterConsumption(inventory, definition, 1)) {
+      return { ok: false, reason: "inventory_full" };
+    }
+    for (const cost of contract?.consumableCosts ?? []) {
+      if (
+        !this.consumeCostFromCraftingSources(
+          inventory,
+          stationInventory,
+          cost.itemDefinitionId,
+          cost.quantity,
+          sessionPolicyContext.consumeOrderPolicy
+        )
+      ) {
+        return { ok: false, reason: `missing_resources:${cost.itemDefinitionId}:${cost.quantity}:${sessionPolicyContext.inventorySourcePolicy}` };
+      }
+    }
+    const beforeIds = new Set(inventory.itemInstances.map((item) => item.itemInstanceId));
+    const accepted = this.addItemToInventory(inventory, definition, 1);
+    if (accepted <= 0) {
+      return { ok: false, reason: "inventory_full" };
+    }
+    this.compactInventorySlots(inventory);
+    const createdItemInstanceId = inventory.itemInstances.find((item) => !beforeIds.has(item.itemInstanceId))?.itemInstanceId;
+    this.persistInventory(player.accountId, inventory, INVENTORY_OP_INSTANTIATE_BLUEPRINT_ITEM);
+    this.options.markPlayerCharacterDirty(player.accountId);
+    this.queueInventoryStateForUser(userId);
+    return { ok: true, reason: "ok", createdItemInstanceId };
   }
 
-  public refreshCraftBenchSessions(): void {
-    if (this.activeCraftBenchSessionByUserId.size <= 0) {
-      return;
+  public canInstantiateBlueprintItemForUser(
+    userId: number,
+    blueprint: BlueprintDefinition,
+    stationSessionId: string | null
+  ): { ok: boolean; reason: string } {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) {
+      return { ok: false, reason: "player_missing" };
     }
-    const now = Date.now();
-    for (const [userId, session] of this.activeCraftBenchSessionByUserId.entries()) {
-      if (session.expiresAtMs < now) {
-        this.activeCraftBenchSessionByUserId.delete(userId);
-        continue;
-      }
-      if (!this.getPlayerStateByUserId(userId)) {
-        this.activeCraftBenchSessionByUserId.delete(userId);
-        continue;
-      }
-      if (!this.options.isUserWithinCraftBenchSession(userId, session.sessionId, CRAFT_BENCH_PROXIMITY_SLACK)) {
-        this.activeCraftBenchSessionByUserId.delete(userId);
+    const definition = buildItemDefinitionFromBlueprint(blueprint);
+    if (!definition) {
+      return { ok: false, reason: "blueprint_not_item" };
+    }
+    if (blueprint.metadata?.instantiatePermission === "restricted") {
+      const allowed = this.options.canInstantiateRestrictedBlueprint?.(userId, blueprint.id) ?? false;
+      if (!allowed) {
+        return { ok: false, reason: "restricted_blueprint_permission_missing" };
       }
     }
+    const contract = getBlueprintProductionContract(blueprint, "item_creator");
+    let sessionPolicyContext: StationSessionPolicyContext = {
+      inventorySourcePolicy: "player_only",
+      consumeOrderPolicy: "player_first",
+      tierMaxOverride: null,
+      actorRequirementPolicy: "enforce"
+    };
+    let activeStationSessionId: string | null = null;
+    if (contract?.requiresStationSession) {
+      if (!stationSessionId || stationSessionId.length <= 0) {
+        return { ok: false, reason: "station_session_missing" };
+      }
+      if (!this.isUserWithinStationSession(userId, stationSessionId, STATION_PROXIMITY_SLACK)) {
+        return { ok: false, reason: "station_session_invalid" };
+      }
+      const resolvedSessionPolicy = this.resolveStationSessionPolicyContext(stationSessionId);
+      if (!resolvedSessionPolicy) {
+        return { ok: false, reason: "station_policy_missing" };
+      }
+      activeStationSessionId = stationSessionId;
+      sessionPolicyContext = resolvedSessionPolicy;
+    }
+    if (sessionPolicyContext.actorRequirementPolicy !== "ignore" && (contract?.actorRequirements?.length ?? 0) > 0) {
+      for (const requirement of contract?.actorRequirements ?? []) {
+        const resolvedValue = this.options.resolveActorRequirementValue?.(userId, requirement.key) ?? null;
+        if (resolvedValue === null || !Number.isFinite(resolvedValue) || resolvedValue < requirement.minValue) {
+          return { ok: false, reason: `actor_requirement_unmet:${requirement.key}` };
+        }
+      }
+    }
+    const inventory = this.ensureMutableInventory(player.accountId);
+    const stationInventory =
+      sessionPolicyContext.inventorySourcePolicy === "player_and_station" && activeStationSessionId
+        ? this.getOrCreateStationInventory(activeStationSessionId)
+        : null;
+    for (const requiredDefinitionId of contract?.requiredItemDefinitionIds ?? []) {
+      const playerCount = this.getTotalItemQuantityByDefinitionId(inventory, requiredDefinitionId);
+      const stationCount = stationInventory
+        ? this.getTotalItemQuantityByDefinitionId(stationInventory, requiredDefinitionId)
+        : 0;
+      if (playerCount + stationCount <= 0) {
+        return { ok: false, reason: `required_item_missing:${requiredDefinitionId}` };
+      }
+    }
+    for (const cost of contract?.consumableCosts ?? []) {
+      const playerCount = this.getTotalItemQuantityByDefinitionId(inventory, cost.itemDefinitionId);
+      const stationCount = stationInventory
+        ? this.getTotalItemQuantityByDefinitionId(stationInventory, cost.itemDefinitionId)
+        : 0;
+      const totalOwned = playerCount + stationCount;
+      if (totalOwned < cost.quantity) {
+        return {
+          ok: false,
+          reason: `missing_resources:${cost.itemDefinitionId}:${cost.quantity}:${sessionPolicyContext.inventorySourcePolicy}`
+        };
+      }
+    }
+    if (!this.canAddCraftOutputAfterConsumption(inventory, definition, 1)) {
+      return { ok: false, reason: "inventory_full" };
+    }
+    return { ok: true, reason: "ok" };
+  }
+
+  private consumeCostFromCraftingSources(
+    playerInventory: MutableInventoryState,
+    stationInventory: MutableInventoryState | null,
+    itemDefinitionId: number,
+    quantity: number,
+    consumeOrderPolicy: "player_first" | "station_first"
+  ): boolean {
+    // Deterministic consumption contract:
+    // - Always consume a single item-definition cost to completion before moving on.
+    // - When both sources are allowed, consume strictly by declared order policy.
+    // - Never partially succeed; caller treats any remainder as failure.
+    let remaining = Math.max(0, Math.floor(quantity));
+    if (remaining <= 0) {
+      return true;
+    }
+
+    const consumeFromInventory = (inventory: MutableInventoryState | null): void => {
+      if (!inventory || remaining <= 0) {
+        return;
+      }
+      const available = this.getTotalItemQuantityByDefinitionId(inventory, itemDefinitionId);
+      if (available <= 0) {
+        return;
+      }
+      const consumeAmount = Math.min(remaining, available);
+      if (!this.consumeItemDefinitionQuantity(inventory, itemDefinitionId, consumeAmount)) {
+        return;
+      }
+      remaining -= consumeAmount;
+    };
+
+    if (consumeOrderPolicy === "station_first") {
+      consumeFromInventory(stationInventory);
+      consumeFromInventory(playerInventory);
+    } else {
+      consumeFromInventory(playerInventory);
+      consumeFromInventory(stationInventory);
+    }
+
+    return remaining <= 0;
+  }
+
+  private getOrCreateStationInventory(sessionId: string): MutableInventoryState {
+    const existing = this.stationInventoryBySessionId.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const created: MutableInventoryState = {
+      maxSlots: INVENTORY_MAX_SLOTS,
+      itemInstances: [],
+      equipment: {},
+      hotbarSlots: Array.from({ length: HOTBAR_SLOT_COUNT }, () => null)
+    };
+    this.stationInventoryBySessionId.set(sessionId, created);
+    return created;
+  }
+
+  public getInventoryItemInstanceForUser(
+    userId: number,
+    rawItemInstanceId: number
+  ): { itemInstanceId: number; definitionId: number; quantity: number } | null {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) {
+      return null;
+    }
+    const itemInstanceId = this.normalizeUInt(rawItemInstanceId, 0x7fffffff);
+    if (itemInstanceId <= 0) {
+      return null;
+    }
+    const inventory = this.ensureMutableInventory(player.accountId);
+    const item = inventory.itemInstances.find((entry) => entry.itemInstanceId === itemInstanceId);
+    if (!item) {
+      return null;
+    }
+    return {
+      itemInstanceId: item.itemInstanceId,
+      definitionId: item.definitionId,
+      quantity: item.quantity
+    };
   }
 
   private getPlayerStateByUserId(userId: number): ItemInventoryPlayerState | null {
@@ -340,7 +596,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     }
 
     const definitionId = Math.max(0, Math.floor(c.ItemArchetypeId.value[eid] ?? 0));
-    const definition = getItemDefinitionById(definitionId);
+    const definition = this.resolveItemDefinitionById(definitionId);
     if (!definition) {
       return false;
     }
@@ -379,7 +635,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     if (!item) {
       return false;
     }
-    const definition = getItemDefinitionById(item.definitionId);
+    const definition = this.resolveItemDefinitionById(item.definitionId);
     if (!definition) {
       return false;
     }
@@ -407,7 +663,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     if (!item) {
       return false;
     }
-    const definition = getItemDefinitionById(item.definitionId);
+    const definition = this.resolveItemDefinitionById(item.definitionId);
     if (!definition?.use) {
       return false;
     }
@@ -485,7 +741,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     const inventory = this.ensureMutableInventory(player.accountId);
     const itemInstanceId = this.normalizeUInt(rawItemInstanceId, 0x7fffffff);
     const item = inventory.itemInstances.find((entry) => entry.itemInstanceId === itemInstanceId);
-    const definition = item ? getItemDefinitionById(item.definitionId) : null;
+    const definition = item ? this.resolveItemDefinitionById(item.definitionId) : null;
     if (definition?.equipSlot) {
       this.options.onItemEquipped?.(userId, itemInstanceId, definition.equipSlot);
     }
@@ -571,7 +827,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     if (!item) {
       return false;
     }
-    const definition = getItemDefinitionById(item.definitionId);
+    const definition = this.resolveItemDefinitionById(item.definitionId);
     if (!definition?.equipSlot) {
       return false;
     }
@@ -634,15 +890,17 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     const clampedQuantity = Math.max(1, Math.min(definition.stackMax, Math.floor(quantity)));
     const ratio = definition.stackMax > 1 ? clampedQuantity / definition.stackMax : 1;
     const uniformScalePct = Math.max(70, Math.min(125, Math.floor(70 + ratio * 55)));
+    const readyAppearanceBinding = resolveReadyAppearanceRuntimeBinding(definition.readyAppearanceId);
     this.options.applyEntityRenderAppearanceByEid(eid, {
-      renderArchetypeId: definition.modelId,
+      renderArchetypeId: readyAppearanceBinding.pickup.renderArchetypeId ?? definition.modelId,
+      tintColorRgb: readyAppearanceBinding.pickup.tintColorRgb,
       uniformScalePct
     });
   }
 
   private spawnStarterPickups(spawns: ReadonlyArray<PickupSpawnDefinition>): void {
     for (const spawn of spawns) {
-      const definition = getItemDefinitionById(spawn.definitionId);
+      const definition = this.resolveItemDefinitionById(spawn.definitionId);
       if (!definition) {
         continue;
       }
@@ -663,7 +921,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       if (pickup.persistencePolicy !== "persistent") {
         continue;
       }
-      const definition = getItemDefinitionById(pickup.definitionId);
+      const definition = this.resolveItemDefinitionById(pickup.definitionId);
       if (!definition) {
         continue;
       }
@@ -705,7 +963,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
         continue;
       }
       const definitionId = Math.max(0, Math.floor(c.ItemArchetypeId.value[eid] ?? 0));
-      const definition = getItemDefinitionById(definitionId);
+      const definition = this.resolveItemDefinitionById(definitionId);
       if (!definition) {
         continue;
       }
@@ -903,7 +1161,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     const inventory: MutableInventoryState = {
       maxSlots: Math.max(1, Math.min(INVENTORY_MAX_SLOTS, decoded.maxSlots || INVENTORY_MAX_SLOTS)),
       itemInstances: decoded.itemInstances
-        .filter((item) => Boolean(getItemDefinitionById(item.definitionId)))
+        .filter((item) => Boolean(this.resolveItemDefinitionById(item.definitionId)))
         .slice(0, INVENTORY_MAX_SLOTS),
       equipment: {},
       hotbarSlots: this.normalizeHotbarSlots(decoded.hotbarSlots)
@@ -976,8 +1234,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       action === INVENTORY_OP_CLEAR_HOTBAR_SLOT ||
       action === INVENTORY_OP_MOVE_HOTBAR_SLOT ||
       action === INVENTORY_OP_EXECUTE_HOTBAR_SLOT ||
-      action === INVENTORY_OP_DROP_HOTBAR_SLOT ||
-      action === INVENTORY_OP_CRAFT
+      action === INVENTORY_OP_DROP_HOTBAR_SLOT
     ) {
       return action;
     }
@@ -1005,6 +1262,10 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       return null;
     }
     return slot;
+  }
+
+  private resolveItemDefinitionById(definitionId: number): ItemDefinition | null {
+    return getItemDefinitionById(definitionId) ?? getBlueprintRuntimeItemByBlueprintId(definitionId);
   }
 
   private resolveItemUseAction(definition: ItemDefinition, rawActivationChannel: unknown): {
@@ -1219,55 +1480,6 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     return true;
   }
 
-  private tryCraftRecipe(
-    userId: number,
-    player: ItemInventoryPlayerState,
-    rawRecipeId: number
-  ): { ok: boolean; reason: string } {
-    const recipe = getCraftRecipeById(rawRecipeId);
-    if (!recipe) {
-      return { ok: false, reason: "craft_recipe_not_found" };
-    }
-    if (recipe.station === "bench") {
-      const session = this.activeCraftBenchSessionByUserId.get(userId) ?? null;
-      if (!session || session.expiresAtMs < Date.now()) {
-        return { ok: false, reason: "bench_session_missing" };
-      }
-      const bench = this.options.findNearbyCraftBenchForPlayer(userId, this.resolveCraftBenchDistanceLimit());
-      if (!bench) {
-        return { ok: false, reason: "bench_out_of_range" };
-      }
-      if (bench.sessionId !== session.sessionId) {
-        return { ok: false, reason: "bench_session_invalid" };
-      }
-    }
-    const inventory = this.ensureMutableInventory(player.accountId);
-    for (const ingredient of recipe.ingredients) {
-      const totalOwned = this.getTotalItemQuantityByDefinitionId(inventory, ingredient.definitionId);
-      if (totalOwned < ingredient.quantity) {
-        return { ok: false, reason: "missing_resources" };
-      }
-    }
-    for (const ingredient of recipe.ingredients) {
-      const removed = this.consumeItemDefinitionQuantity(inventory, ingredient.definitionId, ingredient.quantity);
-      if (!removed) {
-        return { ok: false, reason: "missing_resources" };
-      }
-    }
-    const outputDefinition = getItemDefinitionById(recipe.outputDefinitionId);
-    if (!outputDefinition) {
-      return { ok: false, reason: "craft_output_missing" };
-    }
-    if (!this.canAddCraftOutputAfterConsumption(inventory, recipe.outputDefinitionId, recipe.outputQuantity)) {
-      return { ok: false, reason: "inventory_full" };
-    }
-    const addedQuantity = this.addItemToInventory(inventory, outputDefinition, recipe.outputQuantity);
-    if (addedQuantity <= 0) {
-      return { ok: false, reason: "inventory_full" };
-    }
-    return { ok: true, reason: "ok" };
-  }
-
   private getTotalItemQuantityByDefinitionId(inventory: MutableInventoryState, definitionId: number): number {
     let total = 0;
     for (const item of inventory.itemInstances) {
@@ -1299,13 +1511,17 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     return remaining <= 0;
   }
 
-  private resolveCraftBenchDistanceLimit(): number {
-    return Math.max(0, this.options.resolveCraftBenchDistanceLimit());
+  private resolveStationSessionPolicyContext(sessionId: string): StationSessionPolicyContext | null {
+    return this.options.resolveStationSessionPolicyContext(sessionId);
+  }
+
+  private isUserWithinStationSession(userId: number, sessionId: string, slack: number): boolean {
+    return this.options.isUserWithinStationSession(userId, sessionId, slack);
   }
 
   private canAddCraftOutputAfterConsumption(
     inventory: MutableInventoryState,
-    outputDefinitionId: number,
+    outputDefinition: ItemDefinition,
     outputQuantity: number
   ): boolean {
     const preview = this.toSnapshot(inventory);
@@ -1315,10 +1531,6 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       equipment: { ...preview.equipment },
       hotbarSlots: preview.hotbarSlots.map((entry) => (entry ? { ...entry } : null))
     };
-    const outputDefinition = getItemDefinitionById(outputDefinitionId);
-    if (!outputDefinition) {
-      return false;
-    }
     const accepted = this.addItemToInventory(mutablePreview, outputDefinition, outputQuantity);
     return accepted >= outputQuantity;
   }

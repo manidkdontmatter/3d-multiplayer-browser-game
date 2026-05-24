@@ -6,7 +6,11 @@
 import { GameSimulation } from "../GameSimulation";
 import type { InventorySnapshot } from "../../shared/items";
 import { coercePlayerSettings, type PlayerSettings } from "../../shared/playerSettings";
-import { NType } from "../../shared/netcode";
+import {
+  decodeCreatorCommandPayloadJson,
+  NType,
+  normalizeCreatorCommandFromPayload
+} from "../../shared/netcode";
 import { MapProcessIpcChannel } from "../ipc/MapProcessIpcChannel";
 import { GUEST_ACCOUNT_ID_BASE, PersistenceService, type PlayerSnapshot } from "../persistence/PersistenceService";
 import { ServerNetworkHost } from "./ServerNetworkHost";
@@ -117,54 +121,21 @@ export class ServerNetworkEventRouter {
         this.simulation.applyPlayerSettingsCommand(commandUser, command);
       },
       onCreatorCommand: (commandUser, command) => {
-        if (typeof command.commandJson !== "string" || command.commandJson.length > MAX_CREATOR_COMMAND_JSON_BYTES) {
-          console.warn("[server] creator command too large, dropped");
+        const payload = decodeCreatorCommandPayloadJson(command.commandJson, MAX_CREATOR_COMMAND_JSON_BYTES);
+        if (!payload) {
+          console.warn("[server] malformed creator command payload dropped");
           return;
         }
-        try {
-          const payload = JSON.parse(command.commandJson) as {
-            sessionId: number;
-            sequence: number;
-            actions: Array<Record<string, unknown>>;
-          };
-          const cmd: Record<string, unknown> = {
-            sessionId: payload.sessionId,
-            sequence: payload.sequence
-          };
-          for (const action of payload.actions) {
-            if (action.kind === "set_name") { cmd.setName = true; cmd.name = action.name; }
-            if (action.kind === "select_base_blueprint") { cmd.selectBaseBlueprint = true; cmd.baseBlueprintId = action.blueprintId; }
-            if (action.kind === "step_field") { cmd.stepField = true; cmd.fieldId = action.fieldId; cmd.fieldDelta = action.delta; }
-            if (action.kind === "set_field") { cmd.setField = true; cmd.fieldId = action.fieldId; cmd.fieldValueJson = action.valueJson; }
-            if (action.kind === "submit_create") { cmd.submitCreate = true; }
-            if (action.kind === "forget_blueprint") { cmd.forgetBlueprintId = action.blueprintId; }
-          }
-          this.simulation.applyCreatorCommand(commandUser, cmd as {
-            sessionId: number;
-            sequence: number;
-            setName?: boolean;
-            name?: string;
-            selectBaseBlueprint?: boolean;
-            baseBlueprintId?: number;
-            stepField?: boolean;
-            fieldId?: string;
-            fieldDelta?: number;
-            setField?: boolean;
-            fieldValueJson?: string;
-            submitCreate?: boolean;
-            forgetBlueprintId?: number;
-          });
-        } catch (error) {
-          console.warn("[server] malformed creator command:", error);
-        }
+        const normalized = normalizeCreatorCommandFromPayload(payload);
+        this.simulation.applyCreatorCommand(commandUser, normalized);
       }
     });
   }
 
   private handleUserConnected(user: ServerNetworkUser, payload: unknown): void {
     const authKey =
-      (payload as { accessKey?: unknown; authKey?: unknown } | undefined)?.accessKey
-      ?? (payload as { accessKey?: unknown; authKey?: unknown } | undefined)?.authKey;
+      (payload as { accountKey?: unknown; authKey?: unknown } | undefined)?.accountKey
+      ?? (payload as { accountKey?: unknown; authKey?: unknown } | undefined)?.authKey;
     const payloadAccountId = (payload as { accountId?: unknown } | undefined)?.accountId;
     const payloadSnapshot = (payload as { playerSnapshot?: unknown } | undefined)?.playerSnapshot;
     const payloadInventory = (payload as { inventoryState?: unknown } | undefined)?.inventoryState;

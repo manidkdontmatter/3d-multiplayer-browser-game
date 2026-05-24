@@ -9,7 +9,6 @@ import {
   coerceRuntimeMapConfig,
   INVENTORY_OP_DROP,
   INVENTORY_OP_DROP_HOTBAR_SLOT,
-  INVENTORY_OP_CRAFT,
   INVENTORY_OP_EQUIP,
   INVENTORY_OP_EXECUTE_HOTBAR_SLOT,
   INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
@@ -20,6 +19,7 @@ import {
   INVENTORY_OP_USE,
   hotbarPayloadKindToWireValue,
   equipmentSlotToWireValue,
+  upsertItemDefinition,
   type RuntimeMapConfig,
   type AbilityDefinition,
   type EquipmentSlot
@@ -30,6 +30,7 @@ import {
   type ReferenceFrameVolumeEnteredMessage,
   type ReferenceFrameVolumeExitedMessage,
   type CreatorCommandWire,
+  type CreatorActionResultMessage,
   type ItemCommand,
   type MapTransferCommand,
   type PlayerSettingsCommand,
@@ -59,6 +60,7 @@ import { SnapshotStore } from "./network/SnapshotStore";
 import type {
   AbilityEventBatch,
   AbilityState,
+  CreatorActionResultState,
   InventoryActionFeedback,
   InventoryState,
   SettingsState,
@@ -88,6 +90,7 @@ export class NetworkClient {
   private serverNetDiagnostics: ServerNetDiagnosticsMessage | null = null;
   private pendingMapTransferInstruction: MapTransferInstruction | null = null;
   private readonly pendingInventoryActionFeedback: InventoryActionFeedback[] = [];
+  private readonly pendingCreatorActionResults: CreatorActionResultState[] = [];
   private readonly pendingSettingsState: SettingsState[] = [];
   private readonly pendingServerAlerts: ServerAlertState[] = [];
   private readonly activeReferenceFrameVolumeMembershipKeys = new Set<string>();
@@ -110,6 +113,7 @@ export class NetworkClient {
         this.serverNetDiagnostics = null;
         this.pendingMapTransferInstruction = null;
         this.pendingInventoryActionFeedback.length = 0;
+        this.pendingCreatorActionResults.length = 0;
         this.pendingSettingsState.length = 0;
         this.pendingServerAlerts.length = 0;
         this.activeReferenceFrameVolumeMembershipKeys.clear();
@@ -267,7 +271,7 @@ export class NetworkClient {
     this.transport.flush();
   }
 
-  public queuePickupWorldItem(pickupNid: number): void {
+  public queuePickupWorldItem(pickupNid: number, interactSlot = 0): void {
     this.queueItemCommand({
       action: INVENTORY_OP_PICKUP,
       pickupNid,
@@ -277,7 +281,7 @@ export class NetworkClient {
       sourceSlot: 0,
       targetSlot: 0,
       activationChannel: 0,
-      payloadKind: 0
+      payloadKind: Math.max(0, Math.floor(interactSlot))
     });
   }
 
@@ -419,20 +423,6 @@ export class NetworkClient {
     });
   }
 
-  public queueCraftRecipe(recipeId: number): void {
-    this.queueItemCommand({
-      action: INVENTORY_OP_CRAFT,
-      pickupNid: 0,
-      itemInstanceId: recipeId,
-      quantity: 0,
-      equipmentSlot: 0,
-      sourceSlot: 0,
-      targetSlot: 0,
-      activationChannel: 0,
-      payloadKind: 0
-    });
-  }
-
   public consumeAbilityEvents(): AbilityEventBatch | null {
     return this.abilities.consumeAbilityEvents();
   }
@@ -466,6 +456,10 @@ export class NetworkClient {
     return this.creatorBridge;
   }
 
+  public getLatestCreatorState(): CreatorClientState | null {
+    return this.creatorBridge.getStateStore().getLatestState();
+  }
+
   public consumeInventoryState(): InventoryState | null {
     return this.inventory.consumeState();
   }
@@ -476,6 +470,15 @@ export class NetworkClient {
     }
     const next = this.pendingInventoryActionFeedback.slice();
     this.pendingInventoryActionFeedback.length = 0;
+    return next;
+  }
+
+  public consumeCreatorActionResults(): CreatorActionResultState[] {
+    if (this.pendingCreatorActionResults.length <= 0) {
+      return [];
+    }
+    const next = this.pendingCreatorActionResults.slice();
+    this.pendingCreatorActionResults.length = 0;
     return next;
   }
 
@@ -525,6 +528,10 @@ export class NetworkClient {
 
   public getConnectionState(): "connected" | "local-only" {
     return this.transport.isConnected() ? "connected" : "local-only";
+  }
+
+  public disconnect(reason = "client-stop"): void {
+    this.transport.disconnect(reason);
   }
 
   public getLocalPlayerNid(): number | null {
@@ -686,6 +693,17 @@ export class NetworkClient {
       onInventoryStateMessage: (message) => {
         this.inventory.processInventoryJson(message.inventoryJson);
       },
+      onItemDefinitionMessage: (message) => {
+        if (this.clampUnsignedInt((message as { version?: number }).version ?? 0, 0xff) !== 1) {
+          return;
+        }
+        try {
+          const parsed = JSON.parse(message.itemJson) as unknown;
+          upsertItemDefinition(parsed);
+        } catch {
+          // Ignore malformed item definition messages.
+        }
+      },
       onReferenceFrameVolumeEnteredMessage: (message) => {
         this.applyReferenceFrameVolumeEntered(message);
       },
@@ -697,6 +715,17 @@ export class NetworkClient {
           action: this.clampUnsignedInt(message.action, 0xff),
           ok: Boolean(message.ok),
           reason: typeof message.reason === "string" ? message.reason : "unknown"
+        });
+      },
+      onCreatorActionResultMessage: (message: CreatorActionResultMessage) => {
+        if (this.clampUnsignedInt((message as { version?: number }).version ?? 0, 0xff) !== 1) {
+          return;
+        }
+        this.pendingCreatorActionResults.push({
+          ok: Boolean(message.ok),
+          message: typeof message.message === "string" ? message.message : "",
+          createdBlueprintId: this.clampUnsignedInt(message.createdBlueprintId, 0xffff),
+          createdItemInstanceId: this.clampUnsignedInt(message.createdItemInstanceId, 0x7fffffff)
         });
       },
       onPlayerSettingsMessage: (message) => {

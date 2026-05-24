@@ -13,6 +13,12 @@ import type {
 } from "./abilities";
 import type { ItemCategory, EquipmentSlot, ItemDefinition, ItemUseProfile } from "./items";
 import type { PlatformArchetypeCatalog, PlatformDefinition } from "./platforms";
+import {
+  resolveActivationAppearanceRuntimeBinding,
+  resolveActivationAppearanceProjectileKind,
+  resolveReadyAppearanceRuntimeBinding,
+  type CreatorAppearanceProfile
+} from "./creatorAppearance";
 
 export type BlueprintComponentPayload = Record<string, unknown>;
 export type BlueprintJsonValue =
@@ -58,6 +64,31 @@ export interface BlueprintTemplateProfile {
   readonly draftAttributes: Record<string, number>;
   readonly draftFieldValues?: Record<string, BlueprintJsonValue>;
   readonly fieldDefinitions?: readonly BlueprintTemplateFieldDefinition[];
+  readonly productionContract?: BlueprintProductionContract;
+  readonly augmentMappings?: Record<number, readonly BlueprintAugmentStatModifier[]>;
+}
+
+export interface BlueprintAugmentStatModifier {
+  readonly statId: string;
+  readonly mode: "add" | "multiply";
+  readonly value: number;
+}
+
+export interface BlueprintProductionCostEntry {
+  readonly itemDefinitionId: number;
+  readonly quantity: number;
+}
+
+export interface BlueprintProductionActorRequirement {
+  readonly key: string;
+  readonly minValue: number;
+}
+
+export interface BlueprintProductionContract {
+  readonly consumableCosts: readonly BlueprintProductionCostEntry[];
+  readonly requiredItemDefinitionIds?: readonly number[];
+  readonly actorRequirements?: readonly BlueprintProductionActorRequirement[];
+  readonly requiresStationSession?: boolean;
 }
 
 export interface BlueprintEditorProjection {
@@ -75,6 +106,14 @@ export interface BlueprintDefinition {
   readonly components: Record<string, BlueprintComponentPayload>;
   readonly metadata?: {
     readonly authoredViaProfile?: string;
+    readonly derivedFromBlueprintId?: number;
+    readonly derivedFromInstanceId?: number;
+    readonly instantiatePermission?: "open" | "restricted";
+    readonly createdByAccountId?: number;
+    readonly authoredAtMs?: number;
+    readonly stationSessionId?: string;
+    readonly productionTier?: number;
+    readonly selectedAugmentDefinitionIds?: readonly number[];
   };
   readonly templateProfiles?: Record<string, BlueprintTemplateProfile>;
   readonly editorProjectionByProfile?: Record<string, BlueprintEditorProjection>;
@@ -118,6 +157,20 @@ export function getBlueprintTemplateProfile(
   profileId: string
 ): BlueprintTemplateProfile | null {
   return blueprint.templateProfiles?.[profileId] ?? null;
+}
+
+export function getBlueprintProductionContract(
+  blueprint: BlueprintDefinition,
+  profileId?: string
+): BlueprintProductionContract | null {
+  const fromComponent = readProductionContract(blueprint.components.ProductionContract);
+  if (fromComponent) {
+    return fromComponent;
+  }
+  if (!profileId) {
+    return null;
+  }
+  return blueprint.templateProfiles?.[profileId]?.productionContract ?? null;
 }
 
 export function getBlueprintDefinitionsForProfile(profileId: string): readonly BlueprintDefinition[] {
@@ -164,6 +217,13 @@ export function buildAbilityDefinitionFromBlueprint(blueprint: BlueprintDefiniti
   const attributes = Object.keys(attributeMap)
     .filter((attributeId) => attributeMap[attributeId]! > 0) as AbilityAttributeKey[];
   const projectile = readProjectileEmitter(blueprint.components.ProjectileEmitter);
+  const creatorAppearanceProfile = readCreatorAppearanceProfile(blueprint.components.CreatorAppearanceProfile);
+  const activationAppearanceBinding = resolveActivationAppearanceRuntimeBinding(
+    creatorAppearanceProfile?.activationAppearanceId
+  );
+  if (projectile && creatorAppearanceProfile?.activationAppearanceId) {
+    projectile.kind = resolveActivationAppearanceProjectileKind(creatorAppearanceProfile.activationAppearanceId);
+  }
   const melee = readMeleeAttack(blueprint.components.MeleeAttack);
 
   const category: AbilityCategory = projectile ? "projectile" : melee ? "melee" : "passive";
@@ -173,6 +233,8 @@ export function buildAbilityDefinitionFromBlueprint(blueprint: BlueprintDefiniti
     name: blueprint.name,
     description: blueprint.description,
     category,
+    activationAppearanceId: creatorAppearanceProfile?.activationAppearanceId ?? null,
+    activationAppearanceAssetId: activationAppearanceBinding.assetId,
     points: stats,
     attributes
   };
@@ -188,6 +250,11 @@ export function buildItemDefinitionFromBlueprint(blueprint: BlueprintDefinition)
   }
   const equippable = readEquippable(blueprint.components.Equippable);
   const consumable = readConsumableEffect(blueprint.components.ConsumableEffect);
+  const creatorAppearanceProfile = readCreatorAppearanceProfile(blueprint.components.CreatorAppearanceProfile);
+  const readyAppearanceBinding = resolveReadyAppearanceRuntimeBinding(creatorAppearanceProfile?.readyAppearanceId);
+  const activationAppearanceBinding = resolveActivationAppearanceRuntimeBinding(
+    creatorAppearanceProfile?.activationAppearanceId
+  );
   return {
     id: blueprint.id,
     key: blueprint.key,
@@ -195,6 +262,12 @@ export function buildItemDefinitionFromBlueprint(blueprint: BlueprintDefinition)
     description: blueprint.description,
     category: inventoryItem.category,
     modelId: inventoryItem.modelId,
+    readyAppearanceId: creatorAppearanceProfile?.readyAppearanceId ?? null,
+    readyAppearanceEquippedAssetId: readyAppearanceBinding.equipped.assetId,
+    readyAppearancePickupAssetId: readyAppearanceBinding.pickup.assetId,
+    readyAppearanceAssetId: readyAppearanceBinding.equipped.assetId,
+    activationAppearanceId: creatorAppearanceProfile?.activationAppearanceId ?? null,
+    activationAppearanceAssetId: activationAppearanceBinding.assetId,
     stackMax: inventoryItem.stackMax,
     equipSlot: equippable?.slot ?? null,
     use: consumable
@@ -309,6 +382,21 @@ function readInventoryItem(payload: BlueprintComponentPayload | undefined): {
   };
 }
 
+function readCreatorAppearanceProfile(
+  payload: BlueprintComponentPayload | undefined
+): CreatorAppearanceProfile | null {
+  if (!isRecord(payload)) return null;
+  const readyAppearanceId = typeof payload.readyAppearanceId === "string" ? payload.readyAppearanceId : undefined;
+  const activationAppearanceId = typeof payload.activationAppearanceId === "string" ? payload.activationAppearanceId : undefined;
+  if (!readyAppearanceId && !activationAppearanceId) {
+    return null;
+  }
+  return {
+    readyAppearanceId,
+    activationAppearanceId
+  };
+}
+
 function readEquippable(payload: BlueprintComponentPayload | undefined): { slot: EquipmentSlot | null } | null {
   if (!isRecord(payload)) return null;
   const rawSlot = typeof payload.slot === "string" ? payload.slot : "";
@@ -360,6 +448,55 @@ function readConsumableEffect(payload: BlueprintComponentPayload | undefined): I
         effects: readConsumableActionEffects(payload.effects)
       }
     ]
+  };
+}
+
+function readProductionContract(payload: BlueprintComponentPayload | undefined): BlueprintProductionContract | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const costs = Array.isArray(payload.consumableCosts)
+    ? payload.consumableCosts
+        .map((entry) => {
+          if (!isRecord(entry)) {
+            return null;
+          }
+          const itemDefinitionId = Math.max(0, Math.floor(readFiniteNumber(entry.itemDefinitionId, 0)));
+          const quantity = Math.max(0, Math.floor(readFiniteNumber(entry.quantity, 0)));
+          if (itemDefinitionId <= 0 || quantity <= 0) {
+            return null;
+          }
+          return { itemDefinitionId, quantity };
+        })
+        .filter((entry): entry is BlueprintProductionCostEntry => Boolean(entry))
+    : [];
+  const requiredItemDefinitionIds = Array.isArray(payload.requiredItemDefinitionIds)
+    ? payload.requiredItemDefinitionIds
+        .map((value) => Math.max(0, Math.floor(readFiniteNumber(value, 0))))
+        .filter((value) => value > 0)
+    : [];
+  const actorRequirements = Array.isArray(payload.actorRequirements)
+    ? payload.actorRequirements
+        .map((entry) => {
+          if (!isRecord(entry)) {
+            return null;
+          }
+          const key = typeof entry.key === "string" ? entry.key.trim() : "";
+          if (key.length <= 0) {
+            return null;
+          }
+          return {
+            key,
+            minValue: readFiniteNumber(entry.minValue, 0)
+          };
+        })
+        .filter((entry): entry is BlueprintProductionActorRequirement => Boolean(entry))
+    : [];
+  return {
+    consumableCosts: costs,
+    requiredItemDefinitionIds: requiredItemDefinitionIds.length > 0 ? requiredItemDefinitionIds : undefined,
+    actorRequirements: actorRequirements.length > 0 ? actorRequirements : undefined,
+    requiresStationSession: Boolean(payload.requiresStationSession)
   };
 }
 
@@ -451,15 +588,17 @@ function parseBlueprintCatalog(raw: BlueprintCatalogRaw): BlueprintDefinition[] 
   if (!raw || typeof raw !== "object") {
     throw new Error("blueprint catalog must be an object.");
   }
-  const version =
-    typeof raw.version === "number" && Number.isFinite(raw.version) ? Math.floor(raw.version) : -1;
+  const version = resolveBlueprintCatalogVersion(raw);
+  const normalizedRaw = version === 0
+    ? migrateBlueprintCatalogV0ToV1(raw)
+    : raw;
   if (version !== 1) {
     throw new Error(`Unsupported blueprint catalog version: ${String(raw.version)}`);
   }
-  if (!Array.isArray(raw.blueprints) || raw.blueprints.length === 0) {
+  if (!Array.isArray(normalizedRaw.blueprints) || normalizedRaw.blueprints.length === 0) {
     throw new Error("blueprint catalog must contain a non-empty blueprints array.");
   }
-  const blueprints = raw.blueprints.map((entry, index) =>
+  const blueprints = normalizedRaw.blueprints.map((entry, index) =>
     parseBlueprintDefinition(entry, `blueprints[${index}]`)
   );
   const ids = new Set<number>();
@@ -470,6 +609,27 @@ function parseBlueprintCatalog(raw: BlueprintCatalogRaw): BlueprintDefinition[] 
     ids.add(blueprint.id);
   }
   return blueprints;
+}
+
+function resolveBlueprintCatalogVersion(raw: BlueprintCatalogRaw): number {
+  if (typeof raw.version === "number" && Number.isFinite(raw.version)) {
+    return Math.floor(raw.version);
+  }
+  // Legacy catalogs omitted explicit versioning; treat as v0 and migrate.
+  if (Array.isArray(raw.blueprints)) {
+    return 0;
+  }
+  return -1;
+}
+
+function migrateBlueprintCatalogV0ToV1(raw: BlueprintCatalogRaw): BlueprintCatalogRaw {
+  if (!Array.isArray(raw.blueprints)) {
+    throw new Error("Cannot migrate blueprint catalog: missing blueprints array.");
+  }
+  return {
+    version: 1,
+    blueprints: raw.blueprints
+  };
 }
 
 function parseBlueprintDefinition(value: unknown, label: string): BlueprintDefinition {
@@ -523,7 +683,42 @@ function parseMetadata(
     throw new Error(`${label} must be an object.`);
   }
   return {
-    authoredViaProfile: typeof value.authoredViaProfile === "string" ? value.authoredViaProfile : undefined
+    authoredViaProfile: typeof value.authoredViaProfile === "string" ? value.authoredViaProfile : undefined,
+    derivedFromBlueprintId:
+      typeof value.derivedFromBlueprintId === "number" && Number.isFinite(value.derivedFromBlueprintId)
+        ? Math.max(0, Math.floor(value.derivedFromBlueprintId))
+        : undefined,
+    derivedFromInstanceId:
+      typeof value.derivedFromInstanceId === "number" && Number.isFinite(value.derivedFromInstanceId)
+        ? Math.max(0, Math.floor(value.derivedFromInstanceId))
+        : undefined,
+    instantiatePermission:
+      value.instantiatePermission === "restricted" || value.instantiatePermission === "open"
+        ? value.instantiatePermission
+        : undefined,
+    createdByAccountId:
+      typeof value.createdByAccountId === "number" && Number.isFinite(value.createdByAccountId)
+        ? Math.max(1, Math.floor(value.createdByAccountId))
+        : undefined,
+    authoredAtMs:
+      typeof value.authoredAtMs === "number" && Number.isFinite(value.authoredAtMs)
+        ? Math.max(0, Math.floor(value.authoredAtMs))
+        : undefined,
+    stationSessionId:
+      typeof value.stationSessionId === "string" && value.stationSessionId.trim().length > 0
+        ? value.stationSessionId.trim()
+        : undefined,
+    productionTier:
+      typeof value.productionTier === "number" && Number.isFinite(value.productionTier)
+        ? Math.max(1, Math.floor(value.productionTier))
+        : undefined,
+    selectedAugmentDefinitionIds: Array.isArray(value.selectedAugmentDefinitionIds)
+      ? Object.freeze(
+          value.selectedAugmentDefinitionIds
+            .filter((entry) => typeof entry === "number" && Number.isFinite(entry))
+            .map((entry) => Math.max(0, Math.floor(entry)))
+        )
+      : undefined
   };
 }
 
@@ -556,10 +751,123 @@ function parseTemplateProfiles(
       fieldDefinitions: parseOptionalTemplateFieldDefinitions(
         rawProfile.fieldDefinitions,
         `${label}.${profileId}.fieldDefinitions`
+      ),
+      productionContract: parseOptionalProductionContract(
+        rawProfile.productionContract,
+        `${label}.${profileId}.productionContract`
+      ),
+      augmentMappings: parseOptionalAugmentMappings(
+        rawProfile.augmentMappings,
+        `${label}.${profileId}.augmentMappings`
       )
     };
   }
   return Object.freeze(profiles);
+}
+
+function parseOptionalAugmentMappings(
+  value: unknown,
+  label: string
+): Record<number, readonly BlueprintAugmentStatModifier[]> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const parsed: Record<number, readonly BlueprintAugmentStatModifier[]> = {};
+  for (const [rawItemDefinitionId, rawModifiers] of Object.entries(value)) {
+    const itemDefinitionId = parseNonNegativeInt(
+      Number(rawItemDefinitionId),
+      `${label}.${rawItemDefinitionId}.itemDefinitionId`
+    );
+    if (!Array.isArray(rawModifiers)) {
+      throw new Error(`${label}.${rawItemDefinitionId} must be an array.`);
+    }
+    const modifiers: BlueprintAugmentStatModifier[] = rawModifiers.map((rawModifier, index) => {
+      if (!isRecord(rawModifier)) {
+        throw new Error(`${label}.${rawItemDefinitionId}[${index}] must be an object.`);
+      }
+      const statId = typeof rawModifier.statId === "string" ? rawModifier.statId.trim() : "";
+      if (statId.length <= 0) {
+        throw new Error(`${label}.${rawItemDefinitionId}[${index}].statId must be non-empty.`);
+      }
+      const mode = rawModifier.mode === "multiply" ? "multiply" : rawModifier.mode === "add" ? "add" : null;
+      if (!mode) {
+        throw new Error(`${label}.${rawItemDefinitionId}[${index}].mode must be add or multiply.`);
+      }
+      if (typeof rawModifier.value !== "number" || !Number.isFinite(rawModifier.value)) {
+        throw new Error(`${label}.${rawItemDefinitionId}[${index}].value must be finite number.`);
+      }
+      return {
+        statId,
+        mode,
+        value: rawModifier.value
+      };
+    });
+    parsed[itemDefinitionId] = Object.freeze(modifiers);
+  }
+  return Object.freeze(parsed);
+}
+
+function parseOptionalProductionContract(
+  value: unknown,
+  label: string
+): BlueprintProductionContract | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const consumableCosts = Array.isArray(value.consumableCosts)
+    ? value.consumableCosts
+        .map((entry, index) => {
+          if (!isRecord(entry)) {
+            throw new Error(`${label}.consumableCosts[${index}] must be an object.`);
+          }
+          return {
+            itemDefinitionId: parseNonNegativeInt(
+              entry.itemDefinitionId,
+              `${label}.consumableCosts[${index}].itemDefinitionId`
+            ),
+            quantity: parseNonNegativeInt(
+              entry.quantity,
+              `${label}.consumableCosts[${index}].quantity`
+            )
+          };
+        })
+        .filter((entry) => entry.itemDefinitionId > 0 && entry.quantity > 0)
+    : [];
+  const requiredItemDefinitionIds = Array.isArray(value.requiredItemDefinitionIds)
+    ? value.requiredItemDefinitionIds
+        .map((entry, index) =>
+          parseNonNegativeInt(entry, `${label}.requiredItemDefinitionIds[${index}]`)
+        )
+        .filter((entry) => entry > 0)
+    : [];
+  const actorRequirements = Array.isArray(value.actorRequirements)
+    ? value.actorRequirements
+        .map((entry, index) => {
+          if (!isRecord(entry)) {
+            throw new Error(`${label}.actorRequirements[${index}] must be an object.`);
+          }
+          const key = typeof entry.key === "string" ? entry.key.trim() : "";
+          if (key.length <= 0) {
+            throw new Error(`${label}.actorRequirements[${index}].key must be non-empty.`);
+          }
+          return {
+            key,
+            minValue: readFiniteNumber(entry.minValue, 0)
+          };
+        })
+    : [];
+  return {
+    consumableCosts: Object.freeze(consumableCosts),
+    requiredItemDefinitionIds: requiredItemDefinitionIds.length > 0 ? Object.freeze(requiredItemDefinitionIds) : undefined,
+    actorRequirements: actorRequirements.length > 0 ? Object.freeze(actorRequirements) : undefined,
+    requiresStationSession: Boolean(value.requiresStationSession)
+  };
 }
 
 function parseEditorProjectionByProfile(

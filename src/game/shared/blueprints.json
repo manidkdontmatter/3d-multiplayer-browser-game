@@ -307,7 +307,24 @@
           "attributeBudget": 2,
           "availableAttributeIds": ["sharpened", "brittle"],
           "draftStats": { "sharpness": 0 },
-          "draftAttributes": {}
+          "draftAttributes": {},
+          "productionContract": {
+            "consumableCosts": [
+              { "itemDefinitionId": 200, "quantity": 4 },
+              { "itemDefinitionId": 201, "quantity": 2 },
+              { "itemDefinitionId": 202, "quantity": 3 }
+            ],
+            "actorRequirements": [
+              { "key": "skill", "minValue": 8 },
+              { "key": "intelligence", "minValue": 6 }
+            ],
+            "requiresStationSession": true
+          },
+          "augmentMappings": {
+            "200": [{ "statId": "itemDamage", "mode": "add", "value": 2 }],
+            "201": [{ "statId": "itemDamage", "mode": "multiply", "value": 1.05 }],
+            "202": [{ "statId": "itemDefense", "mode": "add", "value": 1 }]
+          }
         }
       }
     },
@@ -332,7 +349,24 @@
           "attributeBudget": 2,
           "availableAttributeIds": ["sharpened", "brittle"],
           "draftStats": { "sharpness": 0 },
-          "draftAttributes": {}
+          "draftAttributes": {},
+          "productionContract": {
+            "consumableCosts": [
+              { "itemDefinitionId": 200, "quantity": 3 },
+              { "itemDefinitionId": 201, "quantity": 3 },
+              { "itemDefinitionId": 202, "quantity": 2 }
+            ],
+            "actorRequirements": [
+              { "key": "skill", "minValue": 8 },
+              { "key": "strength", "minValue": 7 }
+            ],
+            "requiresStationSession": true
+          },
+          "augmentMappings": {
+            "200": [{ "statId": "itemDamage", "mode": "add", "value": 1 }],
+            "201": [{ "statId": "itemDefense", "mode": "add", "value": 2 }],
+            "202": [{ "statId": "itemDamage", "mode": "multiply", "value": 1.04 }]
+          }
         }
       }
     },

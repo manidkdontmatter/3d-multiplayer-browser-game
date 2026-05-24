@@ -102,6 +102,8 @@ export interface AbilityDefinition {
   name: string;
   description: string;
   category: AbilityCategory;
+  activationAppearanceId?: string | null;
+  activationAppearanceAssetId?: string | null;
   points: AbilityStatPoints;
   attributes: AbilityAttributeKey[];
   projectile?: ProjectileAbilityProfile;
@@ -310,6 +312,8 @@ export function createAbilityDefinitionFromDraft(
     name: normalized.name,
     description: buildAbilityDescription(normalized),
     category: normalized.category,
+    activationAppearanceId: null,
+    activationAppearanceAssetId: null,
     points: normalized.points,
     attributes: normalized.attributes,
     projectile: projectileProfile,
@@ -653,6 +657,9 @@ function parseAbilityDefinition(value: unknown, label: string): AbilityDefinitio
     name,
     description,
     category,
+    activationAppearanceId: typeof entry.activationAppearanceId === "string" ? entry.activationAppearanceId : null,
+    activationAppearanceAssetId:
+      typeof entry.activationAppearanceAssetId === "string" ? entry.activationAppearanceAssetId : null,
     points,
     attributes,
     projectile,

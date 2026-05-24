@@ -14,6 +14,7 @@ export class AlertFeed {
   private readonly card: HTMLDivElement;
   private readonly textNode: HTMLSpanElement;
   private readonly queue: Array<{ text: string; severity: AlertSeverity }> = [];
+  private readonly recentHistory: Array<{ text: string; severity: AlertSeverity }> = [];
   private displayTimeout: ReturnType<typeof setTimeout> | null = null;
   private fadeTimeout: ReturnType<typeof setTimeout> | null = null;
   private showing = false;
@@ -43,6 +44,10 @@ export class AlertFeed {
       return;
     }
     const normalizedSeverity = coerceAlertSeverity(severity);
+    this.recentHistory.push({ text: normalized, severity: normalizedSeverity });
+    if (this.recentHistory.length > 32) {
+      this.recentHistory.shift();
+    }
     if (!this.showing) {
       this.showNext({ text: normalized, severity: normalizedSeverity });
       return;
@@ -97,5 +102,9 @@ export class AlertFeed {
       clearTimeout(this.fadeTimeout);
       this.fadeTimeout = null;
     }
+  }
+
+  public getRecentHistory(): ReadonlyArray<{ text: string; severity: AlertSeverity }> {
+    return this.recentHistory;
   }
 }

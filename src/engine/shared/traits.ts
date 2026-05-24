@@ -109,10 +109,11 @@ export function computeTraitBudget(
     }
   }
   const total = baseBudget;
+  const remaining = total - spent;
   return {
     total,
-    spent: Math.max(0, spent),
-    remaining: Math.max(0, total - Math.max(0, spent))
+    spent,
+    remaining
   };
 }
 

@@ -1,0 +1,67 @@
+{
+  "readyBindings": {
+    "red": {
+      "equipped": {
+        "tintColorRgb": 16727871,
+        "renderArchetypeId": 40,
+        "assetId": "creator.appearance.ready.red.equipped",
+        "previewTextureUrl": "/assets/textures/creator/ready-equipped-red-v1.svg"
+      },
+      "pickup": {
+        "tintColorRgb": 16746367,
+        "renderArchetypeId": 40,
+        "assetId": "creator.appearance.ready.red.pickup",
+        "previewTextureUrl": "/assets/textures/creator/ready-pickup-red-v1.svg"
+      }
+    },
+    "green": {
+      "equipped": {
+        "tintColorRgb": 4587366,
+        "renderArchetypeId": 41,
+        "assetId": "creator.appearance.ready.green.equipped",
+        "previewTextureUrl": "/assets/textures/creator/ready-equipped-green-v1.svg"
+      },
+      "pickup": {
+        "tintColorRgb": 9699243,
+        "renderArchetypeId": 41,
+        "assetId": "creator.appearance.ready.green.pickup",
+        "previewTextureUrl": "/assets/textures/creator/ready-pickup-green-v1.svg"
+      }
+    },
+    "blue": {
+      "equipped": {
+        "tintColorRgb": 5088255,
+        "renderArchetypeId": 42,
+        "assetId": "creator.appearance.ready.blue.equipped",
+        "previewTextureUrl": "/assets/textures/creator/ready-equipped-blue-v1.svg"
+      },
+      "pickup": {
+        "tintColorRgb": 9426943,
+        "renderArchetypeId": 42,
+        "assetId": "creator.appearance.ready.blue.pickup",
+        "previewTextureUrl": "/assets/textures/creator/ready-pickup-blue-v1.svg"
+      }
+    }
+  },
+  "activationBindings": {
+    "red": {
+      "projectileKind": 1,
+      "previewTintColorRgb": 16743291,
+      "assetId": "creator.appearance.activation.red",
+      "previewTextureUrl": "/assets/textures/creator/activation-projectile-red-v1.svg"
+    },
+    "green": {
+      "projectileKind": 2,
+      "previewTintColorRgb": 6881182,
+      "assetId": "creator.appearance.activation.green",
+      "previewTextureUrl": "/assets/textures/creator/activation-projectile-green-v1.svg"
+    },
+    "blue": {
+      "projectileKind": 3,
+      "previewTintColorRgb": 7929855,
+      "assetId": "creator.appearance.activation.blue",
+      "previewTextureUrl": "/assets/textures/creator/activation-projectile-blue-v1.svg"
+    }
+  }
+}
+

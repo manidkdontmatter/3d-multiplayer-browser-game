@@ -19,6 +19,7 @@ import {
   type BlueprintTemplateFieldBinding,
   type BlueprintTemplateFieldDefinition
 } from "./blueprint";
+import type { ItemDefinition } from "./items";
 import { deriveStats, getStatDefinitionsForKind } from "./stats";
 import {
   checkTraitConstraints,
@@ -29,6 +30,14 @@ import {
   getTraitDefinitionById,
   type EffectModifier
 } from "./traits";
+import {
+  CREATOR_ACTIVATION_APPEARANCE_FIELD_ID,
+  CREATOR_APPEARANCE_COMPONENT_ID,
+  CREATOR_READY_APPEARANCE_FIELD_ID,
+  getCreatorAppearanceOptions,
+  supportsCreatorActivationAppearance,
+  supportsCreatorReadyAppearance
+} from "./creatorAppearance";
 
 export type CreatorProfileId =
   | "ability_creator"
@@ -107,13 +116,38 @@ export interface CreatorValidation {
   errors: string[];
 }
 
+export interface CreatorProductionPreview {
+  readonly consumableCosts: readonly { itemDefinitionId: number; quantity: number }[];
+  readonly requiredItemDefinitionIds: readonly number[];
+  readonly actorRequirements: readonly { key: string; minValue: number }[];
+  readonly requiresStationSession: boolean;
+  readonly tier: number;
+  readonly selectedAugmentDefinitionIds: readonly number[];
+}
+
+export interface CreatorRenderBundle {
+  readonly fieldGroupOrder: readonly string[];
+  readonly fieldGroupLabels: Readonly<Record<string, string>>;
+  readonly nonAttributeFieldIds: readonly string[];
+  readonly attributeFieldIds: readonly string[];
+  readonly augmentFieldIds: readonly string[];
+  readonly tierFieldId: string | null;
+  readonly readyAppearanceFieldId: string | null;
+  readonly activationAppearanceFieldId: string | null;
+}
+
 export interface CreatorSessionSnapshot {
   sessionId: number;
   ackSequence: number;
   profileId: CreatorProfileId;
+  stationSessionId?: string | null;
   draft: CreatorDraft;
+  fieldDefinitions: readonly CreatorFieldDefinition[];
+  renderBundle: CreatorRenderBundle;
   capacity: CreatorCapacity;
   validation: CreatorValidation;
+  productionPreview?: CreatorProductionPreview | null;
+  itemDescriptors: readonly ItemDefinition[];
   availableBlueprintCount: number;
   availableBlueprints: readonly BlueprintDefinition[];
 }
@@ -146,6 +180,13 @@ interface CompileProfileParams {
 
 const STAT_FIELD_PREFIX = "stat:";
 const ATTRIBUTE_FIELD_PREFIX = "attribute:";
+const ITEM_TIER_FIELD_ID = "tier";
+const ITEM_AUGMENT_FIELD_PREFIX = "augment_slot_";
+const DEFAULT_ITEM_TIER_MIN = 1;
+const DEFAULT_ITEM_TIER_MAX = 5;
+const DEFAULT_ITEM_STAT_BUDGET_PER_TIER = 5;
+const DEFAULT_ITEM_ATTRIBUTE_BUDGET_PER_TIER = 100;
+const DEFAULT_ITEM_AUGMENT_SLOTS_PER_TIER = 1;
 const GENERIC_FIELD_GROUP_LABELS: Record<string, string> = {
   stats: "Stats",
   attributes: "Attributes",
@@ -164,7 +205,7 @@ const CREATOR_PROFILE_DEFINITIONS: ReadonlyMap<CreatorProfileId, CreatorProfileD
     "ability_creator",
     {
       id: "ability_creator",
-      label: "Ability Creator",
+      label: "Creator (Ability)",
       runtimeKind: "ability",
       grantedAccessTags: ["ability.use", "blueprint.template"],
       buildFieldDefinitions: (baseBlueprint) => buildDefaultFieldDefinitions(baseBlueprint, "ability_creator"),
@@ -177,7 +218,7 @@ const CREATOR_PROFILE_DEFINITIONS: ReadonlyMap<CreatorProfileId, CreatorProfileD
     "item_creator",
     {
       id: "item_creator",
-      label: "Item Creator",
+      label: "Creator (Item)",
       runtimeKind: "item",
       grantedAccessTags: ["item.craft", "blueprint.template"],
       buildFieldDefinitions: (baseBlueprint) => buildDefaultFieldDefinitions(baseBlueprint, "item_creator"),
@@ -190,7 +231,7 @@ const CREATOR_PROFILE_DEFINITIONS: ReadonlyMap<CreatorProfileId, CreatorProfileD
     "character_creator",
     {
       id: "character_creator",
-      label: "Character Creator",
+      label: "Creator (Character)",
       runtimeKind: "character",
       grantedAccessTags: ["character.spawn", "blueprint.template"],
       buildFieldDefinitions: (baseBlueprint) => buildDefaultFieldDefinitions(baseBlueprint, "character_creator"),
@@ -203,7 +244,7 @@ const CREATOR_PROFILE_DEFINITIONS: ReadonlyMap<CreatorProfileId, CreatorProfileD
     "mind_creator",
     {
       id: "mind_creator",
-      label: "Mind Creator",
+      label: "Creator (Mind)",
       runtimeKind: "mind",
       grantedAccessTags: ["mind.assign", "blueprint.template"],
       buildFieldDefinitions: (baseBlueprint) => buildDefaultFieldDefinitions(baseBlueprint, "mind_creator"),
@@ -216,7 +257,7 @@ const CREATOR_PROFILE_DEFINITIONS: ReadonlyMap<CreatorProfileId, CreatorProfileD
     "tile_creator",
     {
       id: "tile_creator",
-      label: "Tile Creator",
+      label: "Creator (Tile)",
       runtimeKind: "tile",
       grantedAccessTags: ["tile.paint", "blueprint.template"],
       buildFieldDefinitions: (baseBlueprint) => buildDefaultFieldDefinitions(baseBlueprint, "tile_creator"),
@@ -393,9 +434,10 @@ function validateBudgetedCreatorDraft(
     }
   }
 
+  const effectiveStatBudget = resolveEffectiveStatBudget(draft, baseBlueprint, templateProfile.statBudget);
   const totalStats = Object.values(statValues).reduce((sum, value) => sum + value, 0);
-  if (totalStats > templateProfile.statBudget) {
-    errors.push(`Stat budget exceeded (${totalStats}/${templateProfile.statBudget}).`);
+  if (totalStats > effectiveStatBudget) {
+    errors.push(`Stat budget exceeded (${totalStats}/${effectiveStatBudget}).`);
   }
 
   const validAttributeIds = new Set(templateProfile.availableAttributeIds);
@@ -416,9 +458,19 @@ function validateBudgetedCreatorDraft(
     errors.push(violation.message);
   }
 
-  const attributeBudget = computeTraitBudget(templateProfile.attributeBudget, selectedAttributes);
+  const effectiveAttributeBudget = resolveEffectiveAttributeBudget(draft, baseBlueprint, templateProfile.attributeBudget);
+  const attributeBudget = computeTraitBudget(effectiveAttributeBudget, selectedAttributes);
   if (attributeBudget.spent > attributeBudget.total) {
     errors.push(`Attribute budget exceeded (${attributeBudget.spent}/${attributeBudget.total}).`);
+  }
+
+  if (draft.profileId === "item_creator") {
+    const tier = resolveItemCreatorTier(draft, baseBlueprint);
+    const allowedSlots = resolveItemCreatorAugmentSlotCount(baseBlueprint, tier);
+    const selectedAugments = readSelectedItemAugmentDefinitionIds(draft, baseBlueprint, tier);
+    if (selectedAugments.length > allowedSlots) {
+      errors.push(`Too many augments selected (${selectedAugments.length}/${allowedSlots}).`);
+    }
   }
 
   if (errors.length > 0) {
@@ -433,11 +485,14 @@ function getBudgetedCreatorCapacity(
 ): CreatorCapacity {
   const templateProfile = getRequiredTemplateProfile(baseBlueprint, draft.profileId);
   const statValues = getCreatorDraftStatValues(draft);
-  const statBudgetTotal = templateProfile.statBudget;
+  const statBudgetTotal = resolveEffectiveStatBudget(draft, baseBlueprint, templateProfile.statBudget);
   const statBudgetSpent = Object.values(statValues).reduce((sum, value) => sum + value, 0);
   const statBudgetRemaining = Math.max(0, statBudgetTotal - statBudgetSpent);
   const selectedAttributes = getCreatorDraftAttributeValues(draft);
-  const attributeBudget = computeTraitBudget(templateProfile.attributeBudget, selectedAttributes);
+  const attributeBudget = computeTraitBudget(
+    resolveEffectiveAttributeBudget(draft, baseBlueprint, templateProfile.attributeBudget),
+    selectedAttributes
+  );
   const downsideStacks = countAttributeStacksByPolarity(selectedAttributes, "downside");
   const attributeSlots = computeTraitSlots(selectedAttributes, 2 + downsideStacks, 3);
   return {
@@ -485,8 +540,75 @@ export function compileBlueprintFromCreatorDraft(params: {
   });
 }
 
+export function buildCreatorProductionPreview(
+  draft: CreatorDraft,
+  baseBlueprint: BlueprintDefinition
+): CreatorProductionPreview | null {
+  const profile = getBlueprintTemplateProfile(baseBlueprint, draft.profileId);
+  const tier = draft.profileId === "item_creator" ? resolveItemCreatorTier(draft, baseBlueprint) : 1;
+  const selectedAugmentDefinitionIds = draft.profileId === "item_creator"
+    ? readSelectedItemAugmentDefinitionIds(
+        draft,
+        baseBlueprint,
+        resolveItemCreatorAugmentSlotCount(baseBlueprint, tier)
+      )
+    : [];
+  const augmentCosts = selectedAugmentDefinitionIds.map((itemDefinitionId) => ({
+    itemDefinitionId,
+    quantity: 1
+  }));
+
+  if (!profile?.productionContract) {
+    if (draft.profileId !== "item_creator") {
+      return null;
+    }
+    return {
+      consumableCosts: Object.freeze(augmentCosts),
+      requiredItemDefinitionIds: Object.freeze([]),
+      actorRequirements: Object.freeze([]),
+      requiresStationSession: true,
+      tier,
+      selectedAugmentDefinitionIds: Object.freeze(selectedAugmentDefinitionIds)
+    };
+  }
+
+  return {
+    consumableCosts: Object.freeze([
+      ...profile.productionContract.consumableCosts.map((entry) => ({
+        itemDefinitionId: entry.itemDefinitionId,
+        quantity: entry.quantity * Math.max(1, tier)
+      })),
+      ...augmentCosts
+    ]),
+    requiredItemDefinitionIds: Object.freeze(profile.productionContract.requiredItemDefinitionIds ? [...profile.productionContract.requiredItemDefinitionIds] : []),
+    actorRequirements: Object.freeze(
+      profile.productionContract.actorRequirements
+        ? profile.productionContract.actorRequirements.map((entry) => ({ key: entry.key, minValue: entry.minValue }))
+        : []
+    ),
+    requiresStationSession: Boolean(profile.productionContract.requiresStationSession),
+    tier,
+    selectedAugmentDefinitionIds: Object.freeze(selectedAugmentDefinitionIds)
+  };
+}
+
+export function resolveCreatorAugmentSlotCount(
+  draft: CreatorDraft,
+  baseBlueprint: BlueprintDefinition
+): number {
+  if (draft.profileId !== "item_creator") {
+    return 0;
+  }
+  const tier = resolveItemCreatorTier(draft, baseBlueprint);
+  return resolveItemCreatorAugmentSlotCount(baseBlueprint, tier);
+}
+
 export function creatorProfileIdToKind(profileId: CreatorProfileId): string {
   return getRequiredCreatorProfileDefinition(profileId).runtimeKind;
+}
+
+export function creatorProfileIdToLabel(profileId: CreatorProfileId): string {
+  return getRequiredCreatorProfileDefinition(profileId).label;
 }
 
 export function creatorProfileIdToGrantedAccessTags(
@@ -538,6 +660,76 @@ function buildDefaultFieldDefinitions(
     fieldDefinitions.push(convertTemplateFieldDefinition(field));
   }
 
+  if (profileId === "item_creator" && !fieldDefinitions.some((field) => field.id === ITEM_TIER_FIELD_ID)) {
+    fieldDefinitions.push({
+      id: ITEM_TIER_FIELD_ID,
+      label: "Tier",
+      description: "Scales material costs, stat points, attribute budget, and augment slots.",
+      groupId: "details",
+      groupLabel: GENERIC_FIELD_GROUP_LABELS.details ?? "Details",
+      valueKind: "number",
+      defaultValue: DEFAULT_ITEM_TIER_MIN,
+      min: DEFAULT_ITEM_TIER_MIN,
+      max: DEFAULT_ITEM_TIER_MAX,
+      step: 1
+    });
+  }
+
+  if (profileId === "item_creator") {
+    for (let slotIndex = 1; slotIndex <= DEFAULT_ITEM_TIER_MAX; slotIndex += 1) {
+      const fieldId = `${ITEM_AUGMENT_FIELD_PREFIX}${slotIndex}`;
+      if (fieldDefinitions.some((field) => field.id === fieldId)) {
+        continue;
+      }
+      fieldDefinitions.push({
+        id: fieldId,
+        label: `Augment Slot ${slotIndex}`,
+        description: "Optional augment item definition id. Set 0 to clear.",
+        groupId: "properties",
+        groupLabel: GENERIC_FIELD_GROUP_LABELS.properties ?? "Properties",
+        valueKind: "number",
+        defaultValue: 0,
+        min: 0,
+        step: 1
+      });
+    }
+  }
+
+  if (supportsCreatorReadyAppearance(profileId) && !fieldDefinitions.some((field) => field.id === CREATOR_READY_APPEARANCE_FIELD_ID)) {
+    const options = getCreatorAppearanceOptions();
+    fieldDefinitions.push({
+      id: CREATOR_READY_APPEARANCE_FIELD_ID,
+      label: "Ready Appearance",
+      description: "Visual preset used when equipped/ready and for dropped pickup representation.",
+      groupId: "visual",
+      groupLabel: GENERIC_FIELD_GROUP_LABELS.visual ?? "Visual",
+      valueKind: "enum",
+      defaultValue: "blue",
+      options: options.map((option) => ({ ...option })),
+      binding: {
+        component: CREATOR_APPEARANCE_COMPONENT_ID,
+        propertyPath: "readyAppearanceId"
+      }
+    });
+  }
+  if (supportsCreatorActivationAppearance(profileId) && !fieldDefinitions.some((field) => field.id === CREATOR_ACTIVATION_APPEARANCE_FIELD_ID)) {
+    const options = getCreatorAppearanceOptions();
+    fieldDefinitions.push({
+      id: CREATOR_ACTIVATION_APPEARANCE_FIELD_ID,
+      label: "Activation Appearance",
+      description: "Visual preset used when this content is activated (projectile/use context).",
+      groupId: "visual",
+      groupLabel: GENERIC_FIELD_GROUP_LABELS.visual ?? "Visual",
+      valueKind: "enum",
+      defaultValue: "blue",
+      options: options.map((option) => ({ ...option })),
+      binding: {
+        component: CREATOR_APPEARANCE_COMPONENT_ID,
+        propertyPath: "activationAppearanceId"
+      }
+    });
+  }
+
   return fieldDefinitions;
 }
 
@@ -580,6 +772,7 @@ function compileAbilityBlueprint(params: CompileProfileParams): CompiledBlueprin
     params.draft,
     components
   );
+  applyTemplateProductionContractComponent(canonicalComponents, params.baseBlueprint, params.draft.profileId, params.draft);
 
   return {
     blueprint: {
@@ -587,7 +780,10 @@ function compileAbilityBlueprint(params: CompileProfileParams): CompiledBlueprin
       key: `custom-${params.nextId}`,
       name: ability.name,
       description: ability.description,
-      metadata: { authoredViaProfile: params.draft.profileId },
+      metadata: {
+        authoredViaProfile: params.draft.profileId,
+        derivedFromBlueprintId: params.baseBlueprint.id
+      },
       components: canonicalComponents,
       editorProjectionByProfile: {
         [params.draft.profileId]: createEditorProjection(params.draft, params.baseBlueprint.id)
@@ -610,13 +806,17 @@ function compileItemBlueprint(params: CompileProfileParams): CompiledBlueprintRe
     params.draft,
     baseComponents
   );
+  applyTemplateProductionContractComponent(components, params.baseBlueprint, params.draft.profileId, params.draft);
   return {
     blueprint: cloneBlueprintDefinition(params.baseBlueprint, {
       id: params.nextId,
       key: `custom-${params.nextId}`,
       name: params.name,
       description: `${params.name} | profile: ${params.draft.profileId}`,
-      metadata: { authoredViaProfile: params.draft.profileId },
+      metadata: {
+        authoredViaProfile: params.draft.profileId,
+        derivedFromBlueprintId: params.baseBlueprint.id
+      },
       components,
       editorProjectionByProfile: {
         ...(params.baseBlueprint.editorProjectionByProfile ?? {}),
@@ -651,13 +851,17 @@ function compileCharacterBlueprint(params: CompileProfileParams): CompiledBluepr
   if (params.resolvedEffects.length > 0) {
     components.CreatorEffects = { modifiers: params.resolvedEffects };
   }
+  applyTemplateProductionContractComponent(components, params.baseBlueprint, params.draft.profileId, params.draft);
   return {
     blueprint: {
       id: params.nextId,
       key: `custom-${params.nextId}`,
       name: params.name,
       description: `${params.name} | profile: ${params.draft.profileId}`,
-      metadata: { authoredViaProfile: params.draft.profileId },
+      metadata: {
+        authoredViaProfile: params.draft.profileId,
+        derivedFromBlueprintId: params.baseBlueprint.id
+      },
       components,
       editorProjectionByProfile: {
         ...(params.baseBlueprint.editorProjectionByProfile ?? {}),
@@ -674,13 +878,17 @@ function compileGenericProfileBlueprint(params: CompileProfileParams): CompiledB
     params.draft,
     params.baseBlueprint.components
   );
+  applyTemplateProductionContractComponent(components, params.baseBlueprint, params.draft.profileId, params.draft);
   return {
     blueprint: cloneBlueprintDefinition(params.baseBlueprint, {
       id: params.nextId,
       key: `custom-${params.nextId}`,
       name: params.name,
       description: `${params.name} | profile: ${params.draft.profileId}`,
-      metadata: { authoredViaProfile: params.draft.profileId },
+      metadata: {
+        authoredViaProfile: params.draft.profileId,
+        derivedFromBlueprintId: params.baseBlueprint.id
+      },
       components,
       editorProjectionByProfile: {
         ...(params.baseBlueprint.editorProjectionByProfile ?? {}),
@@ -689,6 +897,125 @@ function compileGenericProfileBlueprint(params: CompileProfileParams): CompiledB
     }),
     resolvedEffects: params.resolvedEffects
   };
+}
+
+function applyTemplateProductionContractComponent(
+  components: Record<string, Record<string, unknown>>,
+  baseBlueprint: BlueprintDefinition,
+  profileId: CreatorProfileId,
+  draft?: CreatorDraft
+): void {
+  const contract = getBlueprintTemplateProfile(baseBlueprint, profileId)?.productionContract;
+  const tier = draft && profileId === "item_creator" ? resolveItemCreatorTier(draft, baseBlueprint) : 1;
+  const selectedAugmentDefinitionIds = draft && profileId === "item_creator"
+    ? readSelectedItemAugmentDefinitionIds(
+        draft,
+        baseBlueprint,
+        resolveItemCreatorAugmentSlotCount(baseBlueprint, tier)
+      )
+    : [];
+  const augmentCosts = selectedAugmentDefinitionIds.map((itemDefinitionId) => ({
+    itemDefinitionId,
+    quantity: 1
+  }));
+  if (!contract) {
+    if (profileId === "item_creator") {
+      components.ProductionContract = {
+        consumableCosts: augmentCosts,
+        tier,
+        selectedAugmentDefinitionIds,
+        requiresStationSession: true
+      };
+    }
+    return;
+  }
+  components.ProductionContract = {
+    consumableCosts: [
+      ...contract.consumableCosts.map((entry) => ({
+        itemDefinitionId: entry.itemDefinitionId,
+        quantity: entry.quantity * Math.max(1, tier)
+      })),
+      ...augmentCosts
+    ],
+    tier,
+    selectedAugmentDefinitionIds,
+    requiredItemDefinitionIds: contract.requiredItemDefinitionIds ? [...contract.requiredItemDefinitionIds] : undefined,
+    actorRequirements: contract.actorRequirements
+      ? contract.actorRequirements.map((entry) => ({ key: entry.key, minValue: entry.minValue }))
+      : undefined,
+    requiresStationSession: Boolean(contract.requiresStationSession)
+  };
+}
+
+function resolveEffectiveStatBudget(
+  draft: CreatorDraft,
+  baseBlueprint: BlueprintDefinition,
+  fallback: number
+): number {
+  if (draft.profileId !== "item_creator") {
+    return fallback;
+  }
+  return resolveItemCreatorTier(draft, baseBlueprint) * DEFAULT_ITEM_STAT_BUDGET_PER_TIER;
+}
+
+function resolveEffectiveAttributeBudget(
+  draft: CreatorDraft,
+  baseBlueprint: BlueprintDefinition,
+  fallback: number
+): number {
+  if (draft.profileId !== "item_creator") {
+    return fallback;
+  }
+  return resolveItemCreatorTier(draft, baseBlueprint) * DEFAULT_ITEM_ATTRIBUTE_BUDGET_PER_TIER;
+}
+
+function resolveItemCreatorTier(draft: CreatorDraft, baseBlueprint: BlueprintDefinition): number {
+  const fieldDefinitions = getCreatorFieldDefinitions(draft, baseBlueprint);
+  const tierField = fieldDefinitions.find((field) => field.id === ITEM_TIER_FIELD_ID);
+  const min = Math.max(1, Math.floor(
+    typeof tierField?.min === "number" && Number.isFinite(tierField.min) ? tierField.min : DEFAULT_ITEM_TIER_MIN
+  ));
+  const max = Math.max(min, Math.floor(
+    typeof tierField?.max === "number" && Number.isFinite(tierField.max) ? tierField.max : DEFAULT_ITEM_TIER_MAX
+  ));
+  const rawValue = draft.fieldValues[ITEM_TIER_FIELD_ID];
+  const numeric = typeof rawValue === "number" && Number.isFinite(rawValue) ? rawValue : min;
+  return Math.max(min, Math.min(max, Math.floor(numeric)));
+}
+
+function resolveItemCreatorAugmentSlotCount(baseBlueprint: BlueprintDefinition, tier: number): number {
+  const templateProfile = getBlueprintTemplateProfile(baseBlueprint, "item_creator");
+  const explicit = templateProfile?.fieldDefinitions?.find((field) => field.id === "augment_slot_count");
+  if (explicit?.defaultValue && typeof explicit.defaultValue === "number" && Number.isFinite(explicit.defaultValue)) {
+    return Math.max(0, Math.floor(explicit.defaultValue));
+  }
+  return Math.max(0, Math.min(DEFAULT_ITEM_TIER_MAX, tier * DEFAULT_ITEM_AUGMENT_SLOTS_PER_TIER));
+}
+
+function readSelectedItemAugmentDefinitionIds(
+  draft: CreatorDraft,
+  baseBlueprint: BlueprintDefinition,
+  allowedSlots: number
+): number[] {
+  const result: number[] = [];
+  const fieldDefinitions = getCreatorFieldDefinitions(draft, baseBlueprint);
+  const allowedFieldIds = new Set(fieldDefinitions.map((field) => field.id));
+  for (let slotIndex = 1; slotIndex <= allowedSlots; slotIndex += 1) {
+    const fieldId = `${ITEM_AUGMENT_FIELD_PREFIX}${slotIndex}`;
+    if (!allowedFieldIds.has(fieldId)) {
+      continue;
+    }
+    const rawValue = draft.fieldValues[fieldId];
+    const numeric = typeof rawValue === "number" && Number.isFinite(rawValue)
+      ? Math.floor(rawValue)
+      : typeof rawValue === "string" && rawValue.trim().length > 0
+        ? Math.floor(Number(rawValue))
+        : 0;
+    if (numeric > 0) {
+      result.push(numeric);
+    }
+  }
+  return result;
 }
 
 function buildDraftFieldValues(

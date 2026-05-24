@@ -61,13 +61,19 @@ const WORLD_ANCHOR_DEFINITIONS: readonly WorldAnchorDefinition[] = [
       }
     ],
     motion: "static",
-    craftBenchSockets: [
+    stationSockets: [
       {
-        id: "verdant-test-island.craft-bench.alpha",
-        localX: 0.5,
-        localY: 34,
-        localZ: 3.5,
-        interactRadius: 3.25,
+        id: "verdant-test-island.station.alpha",
+        localX: -100.0,
+        localY: 50,
+        localZ: 100.0,
+        interactRadius: 4,
+        archetypeId: "item_station",
+        inventorySourcePolicy: "player_and_station",
+        consumeOrderPolicy: "station_first",
+        tierMaxOverride: 5,
+        actorRequirementPolicy: "enforce",
+        interactionLabel: "Use Weapon Station",
         visualMarker: {
           geometry: "box",
           sizeX: 1.8,
@@ -76,6 +82,48 @@ const WORLD_ANCHOR_DEFINITIONS: readonly WorldAnchorDefinition[] = [
           color: 0x72c48f,
           roughness: 0.55,
           metalness: 0.08
+        }
+      },
+      {
+        id: "verdant-test-island.station.beta",
+        localX: -96.0,
+        localY: 50,
+        localZ: 100.0,
+        interactRadius: 4,
+        archetypeId: "ability_station",
+        inventorySourcePolicy: "player_only",
+        consumeOrderPolicy: "player_first",
+        tierMaxOverride: 5,
+        actorRequirementPolicy: "enforce",
+        visualMarker: {
+          geometry: "box",
+          sizeX: 1.8,
+          sizeY: 1.0,
+          sizeZ: 1.2,
+          color: 0x5fa8ff,
+          roughness: 0.5,
+          metalness: 0.12
+        }
+      },
+      {
+        id: "verdant-test-island.station.gamma",
+        localX: -92.0,
+        localY: 50,
+        localZ: 100.0,
+        interactRadius: 4,
+        archetypeId: "character_station",
+        inventorySourcePolicy: "player_only",
+        consumeOrderPolicy: "player_first",
+        tierMaxOverride: 5,
+        actorRequirementPolicy: "enforce",
+        visualMarker: {
+          geometry: "box",
+          sizeX: 1.8,
+          sizeY: 1.0,
+          sizeZ: 1.2,
+          color: 0xd48cff,
+          roughness: 0.5,
+          metalness: 0.12
         }
       }
     ],
@@ -447,9 +495,9 @@ const WORLD_ANCHOR_DEFINITIONS: readonly WorldAnchorDefinition[] = [
 const DEFAULT_VOID_SPAWN_ANCHOR: SpawnAnchor = {
   id: "spawn.verdant-island.center",
   locationId: "verdant-test-island",
-  x: 0,
+  x: 0.5,
   y: 34,
-  z: 0,
+  z: 2.5,
   yaw: 0
 };
 

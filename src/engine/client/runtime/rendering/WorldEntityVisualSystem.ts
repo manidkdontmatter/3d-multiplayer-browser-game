@@ -20,7 +20,7 @@ import {
 } from "three";
 import {
   buildLocationTerrainConfig,
-  getLocationCraftBenchSockets,
+  getLocationStationSockets,
   buildTerrainMeshData,
   getLocationDefinitionByArchetypeId,
   getLocationPilotConsoleSockets,
@@ -299,29 +299,29 @@ export class WorldEntityVisualSystem {
 
     if (definition.kind === "terrainIsland") {
       this.addTerrainIslandChildren(group, definition.archetypeId);
-      this.addCraftBenchPlaceholders(group, definition);
+      this.addStationPlaceholders(group, definition);
       return group;
     }
     if (definition.kind === "staticCastle") {
       this.addRenderArchetypeChildren(group, definition.modelId);
-      this.addCraftBenchPlaceholders(group, definition);
+      this.addStationPlaceholders(group, definition);
       return group;
     }
     if (definition.kind === "movingCastle") {
       this.addRenderArchetypeChildren(group, definition.modelId);
       this.addReferenceFrameVolumeDebug(group, getLocationReferenceFrameVolumes(definition));
-      this.addCraftBenchPlaceholders(group, definition);
+      this.addStationPlaceholders(group, definition);
       return group;
     }
     if (definition.kind === "movingTestPlatform") {
       this.addRenderArchetypeChildren(group, definition.modelId, definition.renderArchetypeScalePct ?? 100);
       this.addReferenceFrameVolumeDebug(group, getLocationReferenceFrameVolumes(definition));
       this.addPilotConsolePlaceholder(group, definition);
-      this.addCraftBenchPlaceholders(group, definition);
+      this.addStationPlaceholders(group, definition);
       return group;
     }
     this.addRenderArchetypeChildren(group, definition.modelId);
-    this.addCraftBenchPlaceholders(group, definition);
+    this.addStationPlaceholders(group, definition);
     return group;
   }
 
@@ -460,11 +460,11 @@ export class WorldEntityVisualSystem {
     }
   }
 
-  private addCraftBenchPlaceholders(
+  private addStationPlaceholders(
     group: Group,
     definition: NonNullable<ReturnType<typeof getLocationDefinitionByArchetypeId>>
   ): void {
-    const sockets = getLocationCraftBenchSockets(definition);
+    const sockets = getLocationStationSockets(definition);
     if (sockets.length <= 0) {
       return;
     }
@@ -482,7 +482,7 @@ export class WorldEntityVisualSystem {
         })
       );
       base.position.set(socket.localX, socket.localY, socket.localZ);
-      base.name = `craft-bench-placeholder.${socket.id}`;
+      base.name = `station-placeholder.${socket.id}`;
       group.add(base);
     }
   }

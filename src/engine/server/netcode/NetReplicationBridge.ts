@@ -60,6 +60,8 @@ export class NetReplicationBridge {
   private readonly netBySimEid = new Map<number, NetEntity>();
   private readonly channelBySimEid = new Map<number, EntityChannel>();
   private readonly c: WorldWithComponents["components"];
+  private nearEntityCount = 0;
+  private farEntityCount = 0;
 
   public constructor(
     private readonly nearChannel: EntityChannel,
@@ -126,6 +128,11 @@ export class NetReplicationBridge {
     };
     const channel = isLocationRoot ? this.farChannel : this.nearChannel;
     channel.addEntity(netEntity);
+    if (isLocationRoot) {
+      this.farEntityCount += 1;
+    } else {
+      this.nearEntityCount += 1;
+    }
     this.netBySimEid.set(simEid, netEntity);
     this.channelBySimEid.set(simEid, channel);
     return netEntity.nid;
@@ -189,8 +196,25 @@ export class NetReplicationBridge {
     if (!netEntity) return;
     const channel = this.channelBySimEid.get(simEid);
     if (channel) channel.removeEntity(netEntity);
+    if (channel === this.farChannel) {
+      this.farEntityCount = Math.max(0, this.farEntityCount - 1);
+    } else {
+      this.nearEntityCount = Math.max(0, this.nearEntityCount - 1);
+    }
     this.netBySimEid.delete(simEid);
     this.channelBySimEid.delete(simEid);
+  }
+
+  public getLiveReplicationCounts(): {
+    nearEntities: number;
+    farEntities: number;
+    totalEntities: number;
+  } {
+    return {
+      nearEntities: this.nearEntityCount,
+      farEntities: this.farEntityCount,
+      totalEntities: this.nearEntityCount + this.farEntityCount
+    };
   }
 }
 

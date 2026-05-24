@@ -5,6 +5,7 @@
  */
 import {
   ASSET_GROUP_CORE,
+  ASSET_GROUP_CREATOR_APPEARANCE,
   ASSET_GROUP_SFX,
   ASSET_GROUP_WORLD_DEFAULT,
   ASSET_GROUP_WORLD_SKYBOXES,
@@ -32,6 +33,78 @@ function skyboxFaceUrls(folder: string): string[] {
 }
 
 export const ASSET_CATALOG_DEFINITIONS: AssetCatalogDefinition[] = [
+  {
+    id: "creator.appearance.ready.red.equipped",
+    label: "Creator Ready Red Equipped Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/ready-equipped-red-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.ready.red.pickup",
+    label: "Creator Ready Red Pickup Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/ready-pickup-red-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.ready.green.equipped",
+    label: "Creator Ready Green Equipped Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/ready-equipped-green-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.ready.green.pickup",
+    label: "Creator Ready Green Pickup Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/ready-pickup-green-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.ready.blue.equipped",
+    label: "Creator Ready Blue Equipped Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/ready-equipped-blue-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.ready.blue.pickup",
+    label: "Creator Ready Blue Pickup Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/ready-pickup-blue-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.activation.red",
+    label: "Creator Activation Red Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/activation-projectile-red-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.activation.green",
+    label: "Creator Activation Green Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/activation-projectile-green-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
+  {
+    id: "creator.appearance.activation.blue",
+    label: "Creator Activation Blue Production Asset",
+    kind: "texture",
+    sourceUrl: "/assets/textures/creator/activation-projectile-blue-v1.svg",
+    groups: [ASSET_GROUP_CORE, ASSET_GROUP_CREATOR_APPEARANCE],
+    priorityHint: "background"
+  },
   {
     id: CHARACTER_MALE_ASSET_ID,
     label: "CoolAlien VRM Character",
@@ -141,3 +214,5 @@ export const ASSET_CATALOG_DEFINITIONS: AssetCatalogDefinition[] = [
 export function initClientAssetCatalog(): void {
   injectAssetCatalog(ASSET_CATALOG_DEFINITIONS);
 }
+
+

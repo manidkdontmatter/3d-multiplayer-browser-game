@@ -1,5 +1,6 @@
 // Fast headless smoke test that self-manages server/client startup and verifies basic connectivity.
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 import { chromium } from "playwright";
 import {
   delay,
@@ -20,6 +21,7 @@ const CONNECT_TIMEOUT_MS = 9000;
 
 async function main() {
   const managedProcesses = [];
+  ensureAssetManifestReady();
 
   const serverAlreadyRunning = await isPortOpen("127.0.0.1", SERVER_PORT);
   if (!serverAlreadyRunning) {
@@ -74,6 +76,20 @@ async function main() {
     }
     await delay(200);
     process.exit(exitCode);
+  }
+}
+
+function ensureAssetManifestReady() {
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/ensure-asset-manifest.ts"],
+    {
+      stdio: "inherit",
+      shell: false
+    }
+  );
+  if (result.status !== 0) {
+    throw new Error(`assets:ensure:manifest failed with exit code ${result.status ?? 1}`);
   }
 }
 

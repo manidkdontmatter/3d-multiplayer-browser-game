@@ -31,7 +31,7 @@ export class InputController {
   private cspToggleQueued = false;
   private diagnosticsToggleQueued = false;
   private mainMenuToggleQueued = false;
-  private interactQueued = false;
+  private queuedInteractSlot: number | null = null;
   private primaryActionHeld = false;
   private primaryActionQueued = false;
   private secondaryActionHeld = false;
@@ -191,9 +191,9 @@ export class InputController {
     return queued;
   }
 
-  public consumeInteractTrigger(): boolean {
-    const queued = this.interactQueued;
-    this.interactQueued = false;
+  public consumeInteractSlotTrigger(): number | null {
+    const queued = this.queuedInteractSlot;
+    this.queuedInteractSlot = null;
     return queued;
   }
 
@@ -238,9 +238,12 @@ export class InputController {
       this.toggleFlyQueued = true;
       return;
     }
-    if (event.code === "KeyE" && !event.repeat) {
-      this.interactQueued = true;
-      return;
+    if (!event.repeat) {
+      const interactSlot = mapInteractionCodeToSlot(event.code);
+      if (interactSlot !== null) {
+        this.queuedInteractSlot = interactSlot;
+        return;
+      }
     }
     if (event.repeat) {
       return;
@@ -335,7 +338,7 @@ export class InputController {
     this.secondaryActionQueued = false;
     this.queuedCastSlot = null;
     this.diagnosticsToggleQueued = false;
-    this.interactQueued = false;
+    this.queuedInteractSlot = null;
     this.toggleFlyQueued = false;
     this.smoothedMouseDeltaX = 0;
     this.smoothedMouseDeltaY = 0;
@@ -352,6 +355,13 @@ export class InputController {
     }
     return target.isContentEditable;
   }
+}
+
+function mapInteractionCodeToSlot(code: string): number | null {
+  if (code === "KeyE") return 0;
+  if (code === "KeyR") return 1;
+  if (code === "KeyT") return 2;
+  return null;
 }
 
 export function resolveDigitHotbarIntent(params: {

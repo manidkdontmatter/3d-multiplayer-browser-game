@@ -148,7 +148,8 @@ export class SnapshotStore {
         continue;
       }
       const modelId = rawEntity.modelId;
-      if (modelId === MODEL_ID_PLAYER || modelId === MODEL_ID_PROJECTILE_PRIMARY) {
+      const projectileKind = typeof rawEntity.projectileKind === "number" ? rawEntity.projectileKind : 0;
+      if (modelId === MODEL_ID_PLAYER || modelId === MODEL_ID_PROJECTILE_PRIMARY || projectileKind > 0) {
         continue;
       }
       const entity = this.toWorldEntity(rawEntity);
@@ -275,7 +276,8 @@ export class SnapshotStore {
 
   private toProjectileState(raw: Record<string, unknown>): ProjectileState | null {
     const modelId = raw.modelId;
-    if (modelId !== MODEL_ID_PROJECTILE_PRIMARY) {
+    const projectileKind = typeof raw.projectileKind === "number" ? Math.max(0, Math.floor(raw.projectileKind)) : 0;
+    if (modelId !== MODEL_ID_PROJECTILE_PRIMARY && projectileKind <= 0) {
       return null;
     }
     const nid = raw.nid;
@@ -290,7 +292,7 @@ export class SnapshotStore {
 
     return {
       nid,
-      modelId,
+      modelId: projectileKind > 0 ? projectileKind : 1,
       x: position.x,
       y: position.y,
       z: position.z

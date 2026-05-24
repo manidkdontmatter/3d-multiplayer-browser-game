@@ -3,7 +3,12 @@
  * Scope: It belongs to the engine client runtime layer.
  * Human Summary: Runs on the client and focuses on input, rendering, UI, and smoothing server updates.
  */
-import { NType, type CreatorCommandPayload, type CreatorCommandAction } from "../../../shared/netcode";
+import {
+  encodeCreatorCommandPayload,
+  NType,
+  type CreatorCommandPayload,
+  type CreatorCommandAction
+} from "../../../shared/netcode";
 import { CreatorStateStore, type CreatorClientState } from "./CreatorStateStore";
 import type { CreatorPanelCommand } from "../../ui/CreatorPanel";
 
@@ -17,10 +22,15 @@ export class CreatorNetworkBridge {
   }
 
   public queueCommand(command: CreatorPanelCommand, sessionId: number): void {
-    command.sessionId = sessionId;
-    command.sequence = this.nextSequence;
+    const queuedCommand: CreatorPanelCommand = {
+      ...command,
+      sessionId: Number.isFinite(sessionId) && sessionId > 0
+        ? Math.floor(sessionId)
+        : undefined,
+      sequence: this.nextSequence
+    };
     this.nextSequence = (this.nextSequence % 0xffff) + 1;
-    this.queuedCommands.push(command);
+    this.queuedCommands.push(queuedCommand);
   }
 
   public drainCommands(sessionId: number): string[] {
@@ -46,15 +56,48 @@ export class CreatorNetworkBridge {
         });
       }
       if (cmd.submitCreate) {
-        actions.push({ kind: "submit_create" });
+        actions.push(
+          cmd.submitCreateAndInstantiate
+            ? { kind: "submit_create_and_instantiate" }
+            : { kind: "submit_create" }
+        );
+      }
+      if (cmd.forkItemInstanceBlueprint && typeof cmd.itemInstanceId === "number" && Number.isFinite(cmd.itemInstanceId)) {
+        actions.push({
+          kind: "fork_item_instance_blueprint",
+          itemInstanceId: Math.max(0, Math.floor(cmd.itemInstanceId)),
+          name: cmd.name
+        });
+      }
+      if (cmd.inspectActorCapabilities) {
+        actions.push({ kind: "inspect_actor_capabilities" });
+      }
+      if (
+        cmd.setActorCapability &&
+        typeof cmd.capabilityKey === "string" &&
+        cmd.capabilityKey.trim().length > 0 &&
+        typeof cmd.capabilityValue === "number" &&
+        Number.isFinite(cmd.capabilityValue)
+      ) {
+        actions.push({
+          kind: "set_actor_capability",
+          key: cmd.capabilityKey.trim(),
+          value: cmd.capabilityValue
+        });
       }
       if (actions.length > 0) {
+        const resolvedSessionId = Number.isFinite(cmd.sessionId)
+          ? Math.max(0, Math.floor(cmd.sessionId as number))
+          : Math.max(0, Math.floor(sessionId));
+        if (resolvedSessionId <= 0) {
+          continue;
+        }
         const payload: CreatorCommandPayload = {
-          sessionId: cmd.sessionId ?? sessionId,
+          sessionId: resolvedSessionId,
           sequence: cmd.sequence ?? this.nextSequence,
           actions
         };
-        jsonPayloads.push(JSON.stringify(payload));
+        jsonPayloads.push(encodeCreatorCommandPayload(payload));
       }
     }
     return jsonPayloads;

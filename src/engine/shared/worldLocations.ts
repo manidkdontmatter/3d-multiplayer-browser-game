@@ -10,6 +10,7 @@ import {
   MODEL_ID_LOCATION_TERRAIN_ISLAND,
   MODEL_ID_LOCATION_TEST_ARENA
 } from "./config";
+import type { CreatorProfileId } from "./creator";
 import type { ReferenceFrameVolumeDefinition } from "./movingReferenceFrames";
 import type { RuntimeMapConfig } from "./world";
 
@@ -74,7 +75,7 @@ export interface WorldAnchorDefinition {
   staticNavigationSurfaces?: readonly LocationNavigationSurfaceDefinition[];
   movingNavigationSurfaces?: readonly LocationNavigationSurfaceDefinition[];
   pilotConsoleSockets?: readonly PilotConsoleSocketDefinition[];
-  craftBenchSockets?: readonly CraftBenchSocketDefinition[];
+  stationSockets?: readonly StationSocketDefinition[];
   movingCollisionHalfExtents?: {
     halfX: number;
     halfY: number;
@@ -93,14 +94,55 @@ export interface PilotConsoleSocketDefinition {
   readonly visualMarker?: SocketVisualMarkerDefinition;
 }
 
-export interface CraftBenchSocketDefinition {
+export interface StationSocketDefinition {
   readonly id: string;
   readonly localX: number;
   readonly localY: number;
   readonly localZ: number;
   readonly interactRadius: number;
+  readonly archetypeId?: StationArchetypeId;
+  readonly creatorProfileId?: CreatorProfileId;
+  readonly interactionLabel?: string;
+  readonly allowedTemplateBlueprintIds?: readonly number[];
+  readonly inventorySourcePolicy?: StationInventorySourcePolicy;
+  readonly consumeOrderPolicy?: StationConsumeOrderPolicy;
+  readonly tierMaxOverride?: number;
+  readonly actorRequirementPolicy?: StationActorRequirementPolicy;
   readonly visualMarker?: SocketVisualMarkerDefinition;
 }
+
+export type StationInventorySourcePolicy = "player_only" | "player_and_station";
+export type StationConsumeOrderPolicy = "player_first" | "station_first";
+export type StationActorRequirementPolicy = "enforce" | "ignore";
+
+export type StationArchetypeId =
+  | "item_station"
+  | "ability_station"
+  | "character_station";
+
+interface StationArchetypeDefinition {
+  readonly id: StationArchetypeId;
+  readonly creatorProfileId: CreatorProfileId;
+  readonly interactionLabel: string;
+}
+
+const STATION_ARCHETYPE_DEFINITIONS: Readonly<Record<StationArchetypeId, StationArchetypeDefinition>> = Object.freeze({
+  item_station: Object.freeze({
+    id: "item_station",
+    creatorProfileId: "item_creator",
+    interactionLabel: "Use Item Station"
+  }),
+  ability_station: Object.freeze({
+    id: "ability_station",
+    creatorProfileId: "ability_creator",
+    interactionLabel: "Use Ability Station"
+  }),
+  character_station: Object.freeze({
+    id: "character_station",
+    creatorProfileId: "character_creator",
+    interactionLabel: "Use Character Station"
+  })
+});
 
 export interface SocketVisualMarkerDefinition {
   readonly geometry: "box";
@@ -261,10 +303,92 @@ export function getWorldAnchorPilotConsoleSockets(
   return definition.pilotConsoleSockets ?? [];
 }
 
-export function getWorldAnchorCraftBenchSockets(
-  definition: Pick<WorldAnchorDefinition, "craftBenchSockets">
-): readonly CraftBenchSocketDefinition[] {
-  return definition.craftBenchSockets ?? [];
+export function getWorldAnchorStationSockets(
+  definition: Pick<WorldAnchorDefinition, "stationSockets">
+): readonly StationSocketDefinition[] {
+  return definition.stationSockets ?? [];
+}
+
+export function getWorldAnchorStationCreatorProfile(
+  socket: Pick<StationSocketDefinition, "creatorProfileId" | "archetypeId">
+): CreatorProfileId {
+  if (socket.creatorProfileId) {
+    return socket.creatorProfileId;
+  }
+  if (socket.archetypeId) {
+    return STATION_ARCHETYPE_DEFINITIONS[socket.archetypeId]?.creatorProfileId ?? "item_creator";
+  }
+  return "item_creator";
+}
+
+export function getWorldAnchorStationInteractionLabel(
+  socket: Pick<StationSocketDefinition, "interactionLabel" | "archetypeId">
+): string {
+  if (typeof socket.interactionLabel === "string" && socket.interactionLabel.trim().length > 0) {
+    return socket.interactionLabel.trim();
+  }
+  if (socket.archetypeId) {
+    return STATION_ARCHETYPE_DEFINITIONS[socket.archetypeId]?.interactionLabel ?? "Use Station";
+  }
+  return "Use Station";
+}
+
+export function getWorldAnchorStationAllowedTemplateBlueprintIds(
+  socket: Pick<StationSocketDefinition, "allowedTemplateBlueprintIds">
+): readonly number[] {
+  const raw = socket.allowedTemplateBlueprintIds;
+  if (!Array.isArray(raw) || raw.length <= 0) {
+    return [];
+  }
+  const unique = new Set<number>();
+  for (const entry of raw) {
+    if (typeof entry !== "number" || !Number.isFinite(entry)) {
+      continue;
+    }
+    unique.add(Math.max(0, Math.floor(entry)));
+  }
+  return Object.freeze(Array.from(unique.values()));
+}
+
+export function getWorldAnchorStationInventorySourcePolicy(
+  socket: Pick<StationSocketDefinition, "inventorySourcePolicy">
+): StationInventorySourcePolicy {
+  return socket.inventorySourcePolicy === "player_and_station" ? "player_and_station" : "player_only";
+}
+
+export function getWorldAnchorStationConsumeOrderPolicy(
+  socket: Pick<StationSocketDefinition, "consumeOrderPolicy">
+): StationConsumeOrderPolicy {
+  return socket.consumeOrderPolicy === "station_first" ? "station_first" : "player_first";
+}
+
+export function getWorldAnchorStationTierMaxOverride(
+  socket: Pick<StationSocketDefinition, "tierMaxOverride">
+): number | null {
+  if (!Number.isFinite(socket.tierMaxOverride)) {
+    return null;
+  }
+  return Math.max(1, Math.floor(socket.tierMaxOverride as number));
+}
+
+export function getWorldAnchorStationActorRequirementPolicy(
+  socket: Pick<StationSocketDefinition, "actorRequirementPolicy">
+): StationActorRequirementPolicy {
+  return socket.actorRequirementPolicy === "ignore" ? "ignore" : "enforce";
+}
+
+export function filterCreatorTemplateBlueprintIdsForStation(
+  templateBlueprintIds: readonly number[],
+  allowedTemplateBlueprintIds: readonly number[]
+): readonly number[] {
+  if (!Array.isArray(templateBlueprintIds) || templateBlueprintIds.length <= 0) {
+    return [];
+  }
+  if (!Array.isArray(allowedTemplateBlueprintIds) || allowedTemplateBlueprintIds.length <= 0) {
+    return templateBlueprintIds.slice();
+  }
+  const allow = new Set<number>(allowedTemplateBlueprintIds);
+  return templateBlueprintIds.filter((id) => allow.has(id));
 }
 
 // Backward compatibility aliases during terminology migration.
@@ -280,4 +404,11 @@ export const getLocationDefinitionByArchetypeId = getWorldAnchorDefinitionByArch
 export const getLocationDefinitionByPid = getWorldAnchorDefinitionByPid;
 export const getLocationReferenceFrameVolumes = getWorldAnchorReferenceFrameVolumes;
 export const getLocationPilotConsoleSockets = getWorldAnchorPilotConsoleSockets;
-export const getLocationCraftBenchSockets = getWorldAnchorCraftBenchSockets;
+export const getLocationStationSockets = getWorldAnchorStationSockets;
+export const getLocationStationCreatorProfile = getWorldAnchorStationCreatorProfile;
+export const getLocationStationInteractionLabel = getWorldAnchorStationInteractionLabel;
+export const getLocationStationAllowedTemplateBlueprintIds = getWorldAnchorStationAllowedTemplateBlueprintIds;
+export const getLocationStationInventorySourcePolicy = getWorldAnchorStationInventorySourcePolicy;
+export const getLocationStationConsumeOrderPolicy = getWorldAnchorStationConsumeOrderPolicy;
+export const getLocationStationTierMaxOverride = getWorldAnchorStationTierMaxOverride;
+export const getLocationStationActorRequirementPolicy = getWorldAnchorStationActorRequirementPolicy;

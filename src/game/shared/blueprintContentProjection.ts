@@ -154,6 +154,8 @@ function buildAbilityCatalogFromRuntime(entries: readonly BlueprintRuntimeEntry[
       name: ability.name,
       description: ability.description,
       category: ability.category,
+      activationAppearanceId: ability.activationAppearanceId ?? null,
+      activationAppearanceAssetId: ability.activationAppearanceAssetId ?? null,
       points: ability.points,
       attributes: ability.attributes,
       projectile: ability.projectile ?? undefined,
@@ -174,7 +176,7 @@ function buildItemCatalogFromRuntime(entries: readonly BlueprintRuntimeEntry[]):
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
   return {
     version: 1,
-    inventory: { maxSlots: 32 },
+    inventory: { maxSlots: 160 },
     items: items.map((item) => ({
       id: item.id,
       key: item.key,
@@ -182,6 +184,12 @@ function buildItemCatalogFromRuntime(entries: readonly BlueprintRuntimeEntry[]):
       description: item.description,
       category: item.category,
       modelId: item.modelId,
+      readyAppearanceId: item.readyAppearanceId ?? null,
+      readyAppearanceEquippedAssetId: item.readyAppearanceEquippedAssetId ?? null,
+      readyAppearancePickupAssetId: item.readyAppearancePickupAssetId ?? null,
+      readyAppearanceAssetId: item.readyAppearanceAssetId ?? null,
+      activationAppearanceId: item.activationAppearanceId ?? null,
+      activationAppearanceAssetId: item.activationAppearanceAssetId ?? null,
       stackMax: item.stackMax,
       equipSlot: item.equipSlot ?? null,
       use: item.use ?? null
@@ -194,107 +202,11 @@ function buildItemCatalogFromRuntime(entries: readonly BlueprintRuntimeEntry[]):
       { definitionId: 201, quantity: 5, x: -3.45, y: 34.05, z: 2.55 },
       { definitionId: 202, quantity: 5, x: -2.75, y: 34.05, z: 2.85 }
     ],
-    craftRecipes: [
+    stations: [
       {
         id: 1,
-        key: "hand-field-bandage",
-        name: "Field Bandage",
-        description: "Hand-crafted emergency healing.",
-        station: "hand",
-        outputDefinitionId: 212,
-        outputQuantity: 1,
-        ingredients: [
-          { definitionId: 200, quantity: 2 },
-          { definitionId: 201, quantity: 1 }
-        ]
-      },
-      {
-        id: 2,
-        key: "hand-signal-flare",
-        name: "Signal Flare",
-        description: "Hand-crafted utility flare.",
-        station: "hand",
-        outputDefinitionId: 213,
-        outputQuantity: 1,
-        ingredients: [
-          { definitionId: 201, quantity: 1 },
-          { definitionId: 202, quantity: 2 }
-        ]
-      },
-      {
-        id: 3,
-        key: "bench-pulse-carbine",
-        name: "Pulse Carbine",
-        description: "Bench-crafted ranged weapon chassis.",
-        station: "bench",
-        outputDefinitionId: 210,
-        outputQuantity: 1,
-        ingredients: [
-          { definitionId: 200, quantity: 4 },
-          { definitionId: 201, quantity: 2 },
-          { definitionId: 202, quantity: 3 }
-        ]
-      },
-      {
-        id: 4,
-        key: "bench-ion-blade",
-        name: "Ion Blade",
-        description: "Bench-crafted melee focus blade.",
-        station: "bench",
-        outputDefinitionId: 211,
-        outputQuantity: 1,
-        ingredients: [
-          { definitionId: 200, quantity: 3 },
-          { definitionId: 201, quantity: 3 },
-          { definitionId: 202, quantity: 2 }
-        ]
-      },
-      {
-        id: 5,
-        key: "hand-red-weapon-dye",
-        name: "Red Weapon Dye",
-        description: "Hand-crafted dye that tints equipped weapon red.",
-        station: "hand",
-        outputDefinitionId: 214,
-        outputQuantity: 1,
-        ingredients: [
-          { definitionId: 200, quantity: 2 },
-          { definitionId: 202, quantity: 1 }
-        ]
-      },
-      {
-        id: 6,
-        key: "hand-green-weapon-dye",
-        name: "Green Weapon Dye",
-        description: "Hand-crafted dye that tints equipped weapon green.",
-        station: "hand",
-        outputDefinitionId: 215,
-        outputQuantity: 1,
-        ingredients: [
-          { definitionId: 201, quantity: 2 },
-          { definitionId: 202, quantity: 1 }
-        ]
-      },
-      {
-        id: 7,
-        key: "bench-yellow-weapon-dye",
-        name: "Yellow Weapon Dye",
-        description: "Bench-crafted dye that tints equipped weapon yellow.",
-        station: "bench",
-        outputDefinitionId: 216,
-        outputQuantity: 1,
-        ingredients: [
-          { definitionId: 200, quantity: 1 },
-          { definitionId: 201, quantity: 1 },
-          { definitionId: 202, quantity: 3 }
-        ]
-      }
-    ],
-    craftingBenches: [
-      {
-        id: 1,
-        key: "starter-bench",
-        name: "Starter Bench",
+        key: "starter-station",
+        name: "Starter Station",
         x: 0.5,
         y: 34,
         z: 3.5,

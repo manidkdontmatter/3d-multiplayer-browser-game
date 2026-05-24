@@ -40,9 +40,9 @@ export class NetTransportClient {
     this.currentServerUrl = serverUrl;
     try {
       this.disconnectActiveSocket("map-transfer-reconnect");
-      const handshake: { authVersion: number; accessKey?: string; authKey?: string; joinTicket?: string } = { authVersion: 1 };
+      const handshake: { authVersion: number; accountKey?: string; authKey?: string; joinTicket?: string } = { authVersion: 1 };
       if (typeof authKey === "string" && authKey.length > 0) {
-        handshake.accessKey = authKey;
+        handshake.accountKey = authKey;
         handshake.authKey = authKey;
       }
       if (typeof options?.joinTicket === "string" && options.joinTicket.length > 0) {
@@ -102,6 +102,11 @@ export class NetTransportClient {
 
   public getCurrentServerUrl(): string | null {
     return this.currentServerUrl;
+  }
+
+  public disconnect(reason = "client-stop"): void {
+    this.disconnectActiveSocket(reason);
+    this.connected = false;
   }
 
   private disconnectActiveSocket(reason: string): void {

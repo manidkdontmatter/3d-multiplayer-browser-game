@@ -10,6 +10,7 @@ import {
   type LoadPersistentPickupsRequest,
   type LoadPersistentPickupsResponse,
   type MapHeartbeatRequest,
+  type MapRuntimeMetricsSnapshot,
   type MapRegistrationRequest,
   type PersistentPickupRecord,
   type PersistPersistentPickupsRequest,
@@ -45,7 +46,7 @@ import {
 
 interface JoinTicketRecord {
   token: string;
-  accessKey: string | null;
+  accountKey: string | null;
   accountId: number;
   playerSnapshot: PlayerSnapshot | null;
   inventoryState: InventorySnapshot | null;
@@ -96,6 +97,14 @@ const DEFAULT_MAP_ID = process.env.ORCH_DEFAULT_MAP_ID ?? "sandbox-alpha";
 const MAP_A_PORT = Number(process.env.MAP_A_PORT ?? 9001);
 const MAP_B_PORT = Number(process.env.MAP_B_PORT ?? 9002);
 const ORCH_PERSIST_FLUSH_MS = Math.max(100, Math.floor(Number(process.env.ORCH_PERSIST_FLUSH_MS ?? 5000)));
+const OPS_TPS_GOOD_RATIO = readPositiveEnvNumber("OPS_TPS_GOOD_RATIO", 0.98);
+const OPS_TPS_WARN_RATIO = readPositiveEnvNumber("OPS_TPS_WARN_RATIO", 0.9);
+const OPS_TICK_P95_GOOD_MULTIPLIER = readPositiveEnvNumber("OPS_TICK_P95_GOOD_MULTIPLIER", 1.05);
+const OPS_TICK_P95_WARN_MULTIPLIER = readPositiveEnvNumber("OPS_TICK_P95_WARN_MULTIPLIER", 1.25);
+const OPS_OVER_BUDGET_GOOD_PERCENT = readPositiveEnvNumber("OPS_OVER_BUDGET_GOOD_PERCENT", 2);
+const OPS_OVER_BUDGET_WARN_PERCENT = readPositiveEnvNumber("OPS_OVER_BUDGET_WARN_PERCENT", 10);
+const OPS_FANOUT_GOOD_P95 = readPositiveEnvNumber("OPS_FANOUT_GOOD_P95", 150);
+const OPS_FANOUT_WARN_P95 = readPositiveEnvNumber("OPS_FANOUT_WARN_P95", 350);
 const persistence = new PersistenceService(process.env.ORCH_DATA_PATH ?? "./data/game.sqlite");
 let nextGuestAccountId = GUEST_ACCOUNT_ID_BASE;
 
@@ -137,8 +146,12 @@ for (const spec of mapSpecs) {
 
 const joinTickets = new Map<string, JoinTicketRecord>();
 const mapReady = new Map<string, { wsUrl: string; mapConfig: RuntimeMapConfig; pid: number; atMs: number }>();
-const mapHeartbeats = new Map<string, { atMs: number; pid: number; onlinePlayers: number; uptimeSeconds: number }>();
+const mapHeartbeats = new Map<
+  string,
+  { atMs: number; pid: number; onlinePlayers: number; uptimeSeconds: number; mapMetrics: MapRuntimeMetricsSnapshot | null }
+>();
 const transferRecords = new Map<string, TransferRecord>();
+const transferAbortReasonCounts = new Map<string, number>();
 const pendingMapRequests = new Map<string, PendingIpcRequest>();
 const supervisor = new MapProcessSupervisor({
   restartWindowMs: ORCH_MAP_RESTART_WINDOW_MS,
@@ -165,6 +178,9 @@ const persistenceMetrics = {
   lastFlushEntryCount: 0,
   maxFlushEntryCount: 0
 };
+let queueGrowthLastSampleAtMs = 0;
+let queueGrowthLastSampleSize = 0;
+let queueGrowthRatePerMinute = 0;
 let nextDynamicWsPort = MAP_DYNAMIC_PORT_BASE;
 
 function bootstrap(): void {
@@ -258,7 +274,8 @@ function handleMapProcessEvent(instanceId: string, envelope: OrchestratorIpcEnve
       atMs: Date.now(),
       pid: payload.pid,
       onlinePlayers: 0,
-      uptimeSeconds: 0
+      uptimeSeconds: 0,
+      mapMetrics: null
     });
     return;
   }
@@ -268,7 +285,8 @@ function handleMapProcessEvent(instanceId: string, envelope: OrchestratorIpcEnve
       atMs: Date.now(),
       pid: Math.max(0, Math.floor(payload.pid)),
       onlinePlayers: Math.max(0, Math.floor(payload.onlinePlayers)),
-      uptimeSeconds: Math.max(0, Math.floor(payload.uptimeSeconds))
+      uptimeSeconds: Math.max(0, Math.floor(payload.uptimeSeconds)),
+      mapMetrics: payload.mapMetrics ?? null
     });
     return;
   }
@@ -413,26 +431,16 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     return;
   }
 
-  if (method === "GET" && url.pathname === "/health") {
-    sendJson(res, 200, {
-      ok: true,
-      maps: [...mapSpecsByInstance.values()].map((spec) => ({
-        instanceId: spec.instanceId,
-        wsUrl: `ws://localhost:${spec.wsPort}`,
-        ready: mapReady.has(spec.instanceId),
-        healthy: isMapHealthy(spec.instanceId),
-        pid: mapReady.get(spec.instanceId)?.pid ?? null,
-        lastHeartbeatAtMs: mapHeartbeats.get(spec.instanceId)?.atMs ?? null,
-        quarantineUntilMs: supervisor.getQuarantineUntil(spec.instanceId)
-      })),
-      transfers: {
-        active: transferRecords.size
-      },
-      persistence: {
-        queueSize: persistenceQueue.size,
-        ...persistenceMetrics
-      }
-    });
+  if (method === "GET" && url.pathname === "/metrics") {
+    sendJson(res, 200, buildObservabilitySnapshot());
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/ops") {
+    const html = renderOpsDashboard(buildObservabilitySnapshot());
+    res.statusCode = 200;
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(html);
     return;
   }
 
@@ -444,7 +452,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       return;
     }
     const identity = resolveIdentity(
-      (typeof payload.accessKey === "string" ? payload.accessKey : payload.authKey) ?? null,
+      (typeof payload.accountKey === "string" ? payload.accountKey : payload.authKey) ?? null,
       req.socket.remoteAddress ?? "unknown"
     );
     if (!identity.ok) {
@@ -454,7 +462,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     const playerSnapshot = loadSnapshot(identity.accountId);
     const inventoryState = loadInventorySnapshot(identity.accountId);
     const playerSettings = loadPlayerSettings(identity.accountId);
-    const ticket = issueJoinTicket(identity.accessKey, identity.accountId, playerSnapshot, inventoryState, playerSettings, selected.instanceId, {
+    const ticket = issueJoinTicket(identity.accountKey, identity.accountId, playerSnapshot, inventoryState, playerSettings, selected.instanceId, {
       kind: "bootstrap",
       transferId: null
     });
@@ -483,7 +491,8 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       atMs: Date.now(),
       pid: payload.pid,
       onlinePlayers: 0,
-      uptimeSeconds: 0
+      uptimeSeconds: 0,
+      mapMetrics: null
     });
     sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
     return;
@@ -504,7 +513,8 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
       atMs: Date.now(),
       pid: Math.max(0, Math.floor(payload.pid)),
       onlinePlayers: Math.max(0, Math.floor(payload.onlinePlayers)),
-      uptimeSeconds: Math.max(0, Math.floor(payload.uptimeSeconds))
+      uptimeSeconds: Math.max(0, Math.floor(payload.uptimeSeconds)),
+      mapMetrics: payload.mapMetrics ?? null
     });
     sendJson(res, 200, { ok: true } satisfies GenericOrchestratorResponse);
     return;
@@ -624,6 +634,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
     if (record.abortedAtMs === null) {
       record.abortedAtMs = now;
       record.lastReason = payload.reason ?? "aborted";
+      incrementTransferAbortReason(record.lastReason);
       persistCriticalEvent({
         eventId: `transfer_aborted:${transferId}`,
         instanceId: record.fromMapInstanceId,
@@ -834,8 +845,8 @@ async function handleTransferRequest(payload: TransferRequest): Promise<Transfer
     eventAtMs: issuedAtMs
   });
   const ticket = issueJoinTicket(
-    typeof payload.accessKey === "string" && payload.accessKey.length > 0
-      ? payload.accessKey
+    typeof payload.accountKey === "string" && payload.accountKey.length > 0
+      ? payload.accountKey
       : typeof payload.authKey === "string" && payload.authKey.length > 0
         ? payload.authKey
         : null,
@@ -894,13 +905,13 @@ function deriveSeedFromInstanceId(instanceId: string): number {
 }
 
 function resolveIdentity(
-  accessKey: string | null,
+  accountKey: string | null,
   remoteIp: string
 ):
-  | { ok: true; accessKey: string | null; accountId: number }
+  | { ok: true; accountKey: string | null; accountId: number }
   | { ok: false; error: string } {
-  if (typeof accessKey === "string" && accessKey.length > 0) {
-    const auth = persistence.authenticateOrCreate(accessKey, remoteIp);
+  if (typeof accountKey === "string" && accountKey.length > 0) {
+    const auth = persistence.authenticateOrCreate(accountKey, remoteIp);
     if (!auth.ok || typeof auth.accountId !== "number") {
       return {
         ok: false,
@@ -909,13 +920,13 @@ function resolveIdentity(
     }
     return {
       ok: true,
-      accessKey,
+      accountKey,
       accountId: auth.accountId
     };
   }
   return {
     ok: true,
-    accessKey: null,
+    accountKey: null,
     accountId: nextGuestAccountId++
   };
 }
@@ -939,7 +950,7 @@ function loadPlayerSettings(accountId: number): PlayerSettings | null {
 }
 
 function issueJoinTicket(
-  accessKey: string | null,
+  accountKey: string | null,
   accountId: number,
   playerSnapshot: PlayerSnapshot | null,
   inventoryState: InventorySnapshot | null,
@@ -955,7 +966,7 @@ function issueJoinTicket(
   const token = `${payload}.${signature}`;
   joinTickets.set(tokenId, {
     token,
-    accessKey,
+    accountKey,
     accountId,
     playerSnapshot,
     inventoryState,
@@ -989,6 +1000,7 @@ async function validateJoinTicket(joinTicket: string, mapInstanceId: string): Pr
       if (record && record.abortedAtMs === null && record.completedAtMs === null) {
         record.abortedAtMs = now;
         record.lastReason = "ticket_expired";
+        incrementTransferAbortReason(record.lastReason);
         persistCriticalEvent({
           eventId: `transfer_aborted:${record.transferId}`,
           instanceId: record.fromMapInstanceId,
@@ -1031,6 +1043,7 @@ async function validateJoinTicket(joinTicket: string, mapInstanceId: string): Pr
     } catch (error) {
       record.abortedAtMs = Date.now();
       record.lastReason = "source_release_failed";
+      incrementTransferAbortReason(record.lastReason);
       persistCriticalEvent({
         eventId: `transfer_aborted:${record.transferId}`,
         instanceId: record.fromMapInstanceId,
@@ -1067,7 +1080,7 @@ async function validateJoinTicket(joinTicket: string, mapInstanceId: string): Pr
   ticket.consumedAtMs = now;
   return {
     ok: true,
-    authKey: ticket.accessKey,
+    authKey: ticket.accountKey,
     accountId: ticket.accountId,
     playerSnapshot: ticket.playerSnapshot,
     inventoryState: ticket.inventoryState,
@@ -1200,6 +1213,7 @@ function sweepExpiredTransfers(): void {
     }
     record.abortedAtMs = now;
     record.lastReason = "transfer_expired";
+    incrementTransferAbortReason("transfer_expired");
     persistCriticalEvent({
       eventId: `transfer_aborted:${record.transferId}`,
       instanceId: record.fromMapInstanceId,
@@ -1222,6 +1236,11 @@ function sweepExpiredTransfers(): void {
     }
     transferRecords.delete(transferId);
   }
+}
+
+function incrementTransferAbortReason(reasonRaw: string | null | undefined): void {
+  const reason = typeof reasonRaw === "string" && reasonRaw.trim().length > 0 ? reasonRaw.trim() : "unknown";
+  transferAbortReasonCounts.set(reason, (transferAbortReasonCounts.get(reason) ?? 0) + 1);
 }
 
 function persistCriticalEvent(payload: PersistCriticalEventRequest): void {
@@ -1356,6 +1375,436 @@ function safeJsonStringify(value: unknown): string {
   } catch {
     return JSON.stringify({ error: "payload_stringify_failed" });
   }
+}
+
+function buildObservabilitySnapshot(): {
+  ok: true;
+  generatedAtMs: number;
+  orchestrator: {
+    uptimeSeconds: number;
+    totalConfiguredMaps: number;
+    readyMapCount: number;
+    healthyMapCount: number;
+    totalOnlinePlayers: number;
+    activeTransfers: number;
+    transferSla: {
+      activeCount: number;
+      completedRecentCount: number;
+      abortedRecentCount: number;
+      completionLatencyAvgMs: number;
+      completionLatencyP95Ms: number;
+      sourceReleaseLatencyAvgMs: number;
+      destinationAcceptLatencyAvgMs: number;
+      abortReasons: Readonly<Record<string, number>>;
+    };
+    mapChurn: {
+      totalRestarts: number;
+      quarantinedMapCount: number;
+    };
+    persistence: {
+      queueSize: number;
+      enqueued: number;
+      flushed: number;
+      flushErrors: number;
+      flushBatches: number;
+      maxQueueSize: number;
+      lastFlushAtMs: number;
+      lastFlushDurationMs: number;
+      lastFlushEntryCount: number;
+      maxFlushEntryCount: number;
+      flushesPerMinute: number;
+      snapshotsFlushedPerMinute: number;
+      queueGrowthRatePerMinute: number;
+    };
+  };
+  maps: Array<{
+    instanceId: string;
+    mapId: string;
+    wsUrl: string;
+    ready: boolean;
+    healthy: boolean;
+    pid: number | null;
+    lastHeartbeatAtMs: number | null;
+    quarantineUntilMs: number | null;
+    restartCount: number;
+    lastExitAtMs: number | null;
+    mapMetrics: MapRuntimeMetricsSnapshot | null;
+  }>;
+} {
+  const now = Date.now();
+  const maps = [...mapSpecsByInstance.values()].map((spec) => {
+    const heartbeat = mapHeartbeats.get(spec.instanceId);
+    return {
+      instanceId: spec.instanceId,
+      mapId: spec.mapId,
+      wsUrl: `ws://localhost:${spec.wsPort}`,
+      ready: mapReady.has(spec.instanceId),
+      healthy: isMapHealthy(spec.instanceId),
+      pid: mapReady.get(spec.instanceId)?.pid ?? null,
+      lastHeartbeatAtMs: heartbeat?.atMs ?? null,
+      quarantineUntilMs: supervisor.getQuarantineUntil(spec.instanceId),
+      restartCount: supervisor.getRestartCount(spec.instanceId),
+      lastExitAtMs: supervisor.getLastExitAtMs(spec.instanceId),
+      mapMetrics: heartbeat?.mapMetrics ?? null
+    };
+  });
+  const totalOnlinePlayers = maps.reduce((sum, map) => sum + (map.mapMetrics?.onlinePlayers ?? 0), 0);
+  const uptimeSeconds = Math.max(0, Math.floor(process.uptime()));
+  if (queueGrowthLastSampleAtMs > 0) {
+    const elapsedMs = now - queueGrowthLastSampleAtMs;
+    if (elapsedMs > 0) {
+      queueGrowthRatePerMinute = ((persistenceQueue.size - queueGrowthLastSampleSize) * 60_000) / elapsedMs;
+    }
+  }
+  queueGrowthLastSampleAtMs = now;
+  queueGrowthLastSampleSize = persistenceQueue.size;
+  const completedRecent = [...transferRecords.values()].filter((record) => record.completedAtMs !== null);
+  const abortedRecent = [...transferRecords.values()].filter((record) => record.abortedAtMs !== null);
+  const completionLatencies = completedRecent
+    .map((record) => (record.completedAtMs ?? 0) - record.issuedAtMs)
+    .filter((value) => value > 0);
+  const sourceReleaseLatencies = completedRecent
+    .map((record) => (record.sourceReleasedAtMs ?? 0) - record.issuedAtMs)
+    .filter((value) => value > 0);
+  const destinationAcceptLatencies = completedRecent
+    .map((record) => (record.destinationAcceptedAtMs ?? 0) - record.issuedAtMs)
+    .filter((value) => value > 0);
+  const totalRestarts = maps.reduce((sum, map) => sum + map.restartCount, 0);
+  const quarantinedMapCount = maps.filter((map) => (map.quarantineUntilMs ?? 0) > now).length;
+  const flushesPerMinute = uptimeSeconds > 0 ? (persistenceMetrics.flushBatches / uptimeSeconds) * 60 : 0;
+  const snapshotsFlushedPerMinute = uptimeSeconds > 0 ? (persistenceMetrics.flushed / uptimeSeconds) * 60 : 0;
+  return {
+    ok: true,
+    generatedAtMs: now,
+    orchestrator: {
+      uptimeSeconds,
+      totalConfiguredMaps: maps.length,
+      readyMapCount: maps.filter((map) => map.ready).length,
+      healthyMapCount: maps.filter((map) => map.healthy).length,
+      totalOnlinePlayers,
+      activeTransfers: transferRecords.size,
+      transferSla: {
+        activeCount: transferRecords.size,
+        completedRecentCount: completedRecent.length,
+        abortedRecentCount: abortedRecent.length,
+        completionLatencyAvgMs: computeAverage(completionLatencies),
+        completionLatencyP95Ms: computeP95(completionLatencies),
+        sourceReleaseLatencyAvgMs: computeAverage(sourceReleaseLatencies),
+        destinationAcceptLatencyAvgMs: computeAverage(destinationAcceptLatencies),
+        abortReasons: Object.freeze(Object.fromEntries([...transferAbortReasonCounts.entries()].sort((a, b) => b[1] - a[1])))
+      },
+      mapChurn: {
+        totalRestarts,
+        quarantinedMapCount
+      },
+      persistence: {
+        queueSize: persistenceQueue.size,
+        ...persistenceMetrics,
+        flushesPerMinute,
+        snapshotsFlushedPerMinute,
+        queueGrowthRatePerMinute
+      }
+    },
+    maps
+  };
+}
+
+function renderOpsDashboard(snapshot: ReturnType<typeof buildObservabilitySnapshot>): string {
+  const cards = snapshot.maps
+    .map((map) => {
+      const metrics = map.mapMetrics;
+      const healthClass = map.healthy ? "ok" : "warn";
+      const heartbeatIso = formatTimestampToSecond(map.lastHeartbeatAtMs);
+      const tps = metrics ? metrics.tick.effectiveTps.toFixed(2) : "n/a";
+      const targetTickMs = metrics ? metrics.tick.targetMs.toFixed(2) : "n/a";
+      const tickMean = metrics ? metrics.tick.meanDurationMs.toFixed(2) : "n/a";
+      const tickP95 = metrics ? metrics.tick.p95DurationMs.toFixed(2) : "n/a";
+      const tickStddev = metrics ? metrics.tick.stddevDurationMs.toFixed(2) : "n/a";
+      const tickSpike = metrics ? metrics.tick.worstSpikeOverTargetMs.toFixed(2) : "n/a";
+      const netOut = metrics ? (metrics.net.avgOutboundBytesPerSecond / 1024).toFixed(2) : "n/a";
+      const netIn = metrics ? (metrics.net.avgInboundBytesPerSecond / 1024).toFixed(2) : "n/a";
+      const targetTps = metrics && metrics.tick.targetMs > 0 ? (1000 / metrics.tick.targetMs).toFixed(2) : "n/a";
+      const quarantine = formatTimestampToSecond(map.quarantineUntilMs);
+      const commandSetsPerSecond = metrics ? metrics.commandIngress.commandSetsPerSecond.toFixed(2) : "n/a";
+      const inputCommandsPerSecond = metrics ? metrics.commandIngress.inputCommandsPerSecond.toFixed(2) : "n/a";
+      const peakInputPerPlayerPerSecond = metrics ? metrics.commandIngress.peakInputCommandsPerPlayerPerSecond.toFixed(2) : "n/a";
+      const replicationNear = metrics ? metrics.replication.nearEntities : "n/a";
+      const replicationFar = metrics ? metrics.replication.farEntities : "n/a";
+      const replicationWindowMean = metrics ? metrics.replication.entitiesPerPlayerWindow.mean.toFixed(2) : "n/a";
+      const replicationWindowP95 = metrics ? metrics.replication.entitiesPerPlayerWindow.p95.toFixed(2) : "n/a";
+      const replicationWindowMax = metrics ? metrics.replication.entitiesPerPlayerWindow.max.toFixed(2) : "n/a";
+      const tpsClass = metrics ? classifyTpsHealth(metrics.tick.effectiveTps, metrics.tick.targetMs) : "metric-neutral";
+      const tickP95Class = metrics ? classifyTickP95Health(metrics.tick.p95DurationMs, metrics.tick.targetMs) : "metric-neutral";
+      const overBudgetClass = metrics ? classifyOverBudgetHealth(metrics.tick.overBudgetPercent) : "metric-neutral";
+      const fanoutClass = metrics ? classifyFanoutHealth(metrics.replication.entitiesPerPlayerWindow.p95) : "metric-neutral";
+      return `<article class="map-card">
+<div class="map-card-header">
+  <div class="map-id">${escapeHtml(map.instanceId)}</div>
+  <div class="map-health ${healthClass}">${map.healthy ? "healthy" : "degraded"}</div>
+</div>
+<div class="map-subtitle">${escapeHtml(map.mapId)}</div>
+<div class="map-metrics">
+  <div data-tooltip="Number of currently connected players on this map process."><span>Connected Players</span><strong>${metrics?.onlinePlayers ?? 0}</strong></div>
+  <div class="${tpsClass}" data-tooltip="Actual ticks per second versus target ticks per second for this map process."><span>Ticks Per Second (Actual / Target)</span><strong>${metrics ? `${tps} / ${targetTps}` : "n/a"}</strong></div>
+  <div class="${tickP95Class}" data-tooltip="Tick duration average and p95 in milliseconds. Lower is better; p95 shows tail latency spikes."><span>Tick Duration Average / P95</span><strong>${metrics ? `${tickMean} / ${tickP95} ms` : "n/a"}</strong></div>
+  <div data-tooltip="Tick duration standard deviation and worst spike above target tick budget, both in milliseconds."><span>Tick StdDev / Worst Spike Over Target</span><strong>${metrics ? `${tickStddev} / ${tickSpike} ms` : "n/a"}</strong></div>
+  <div class="${overBudgetClass}" data-tooltip="Percent of ticks that exceeded the target tick duration budget. Lower is better."><span>Tick Over-Budget Rate</span><strong>${metrics ? `${metrics.tick.overBudgetPercent.toFixed(2)} %` : "n/a"}</strong></div>
+  <div data-tooltip="NPC lifecycle counts: active (simulating), inactive (not currently active), hibernating (deep sleep state)."><span>NPC Active / Inactive / Hibernating</span><strong>${metrics ? `${metrics.activeNpcs} / ${metrics.inactiveNpcs} / ${metrics.hibernatingNpcs}` : "n/a"}</strong></div>
+  <div data-tooltip="Count of active projectile entities currently simulated on this map."><span>Active Projectiles</span><strong>${metrics?.activeProjectiles ?? "n/a"}</strong></div>
+  <div data-tooltip="Average outbound and inbound network throughput per player in kibibytes per second."><span>Network Throughput Outbound / Inbound (KiB/s)</span><strong>${metrics ? `${netOut} / ${netIn}` : "n/a"}</strong></div>
+  <div data-tooltip="Command set rate and input command rate received by the server per second."><span>Command Sets / Input Commands Per Second</span><strong>${metrics ? `${commandSetsPerSecond} / ${inputCommandsPerSecond}` : "n/a"}</strong></div>
+  <div data-tooltip="Peak observed per-player input command rate per second in this server process uptime window."><span>Peak Input Commands Per Player Per Second</span><strong>${peakInputPerPlayerPerSecond}</strong></div>
+  <div data-tooltip="Registered replicated entities by spatial channel: near channel and far channel. This is registration inventory, not active per-client send count."><span>Registered Replicated Entities Near / Far</span><strong>${metrics ? `${replicationNear} / ${replicationFar}` : "n/a"}</strong></div>
+  <div class="${fanoutClass}" data-tooltip="Rolling entities/player window summary: average, p95, and max. This is fanout pressure per connected player."><span>Entities/Player Rolling Average / P95 / Max</span><strong>${metrics ? `${replicationWindowMean} / ${replicationWindowP95} / ${replicationWindowMax}` : "n/a"}</strong></div>
+  <div data-tooltip="Timestamp of most recent heartbeat received from this map process."><span>Last Heartbeat Timestamp</span><strong>${escapeHtml(heartbeatIso)}</strong></div>
+  <div data-tooltip="Operating system process ID of this map process."><span>Process ID</span><strong>${map.pid ?? "n/a"}</strong></div>
+  <div data-tooltip="How many times this map process has exited and been restarted since orchestrator boot."><span>Restart Count</span><strong>${map.restartCount}</strong></div>
+  <div data-tooltip="Timestamp when this map process last exited."><span>Last Exit Timestamp</span><strong>${escapeHtml(formatTimestampToSecond(map.lastExitAtMs))}</strong></div>
+  <div data-tooltip="If quarantined, map process will not be restarted until this timestamp."><span>Quarantine Until Timestamp</span><strong>${escapeHtml(quarantine)}</strong></div>
+</div>
+</article>`;
+    })
+    .join("\n");
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Orchestrator Ops</title>
+<style>
+body { font-family: "Segoe UI", Tahoma, sans-serif; background: #0f1720; color: #e8eef5; margin: 0; padding: 18px; }
+h1 { margin: 0 0 12px; font-size: 24px; }
+.summary { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 10px; margin-bottom: 16px; }
+.card { background: #17212b; border: 1px solid #2a3a4c; border-radius: 10px; padding: 10px; position: relative; cursor: help; }
+.label { color: #8ca3ba; font-size: 12px; text-transform: uppercase; }
+.value { font-size: 20px; margin-top: 4px; }
+.maps-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.map-card { background: #121b24; border: 1px solid #2a3a4c; border-radius: 10px; padding: 12px; }
+.map-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.map-id { font-size: 18px; font-weight: 600; }
+.map-subtitle { color: #9cb3c9; margin-bottom: 8px; font-size: 13px; }
+.map-health { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.map-metrics { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.map-metrics div { display: flex; flex-direction: column; background: #162230; border: 1px solid #243445; border-radius: 8px; padding: 7px; }
+.map-metrics div { position: relative; cursor: help; }
+.map-metrics span { color: #9cb3c9; font-size: 11px; text-transform: uppercase; }
+.map-metrics strong { font-size: 13px; margin-top: 2px; }
+.map-metrics div::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: min(360px, 80vw);
+  background: linear-gradient(180deg, #1f2f43 0%, #182636 100%);
+  border: 1px solid #2f4b66;
+  border-radius: 8px;
+  color: #d7e7f7;
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 8px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 20;
+}
+.map-metrics div::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  bottom: calc(100% + 2px);
+  border-width: 6px;
+  border-style: solid;
+  border-color: #2f4b66 transparent transparent transparent;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 21;
+}
+.map-metrics div:hover::after,
+.map-metrics div:hover::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+.card::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: min(360px, 80vw);
+  background: linear-gradient(180deg, #1f2f43 0%, #182636 100%);
+  border: 1px solid #2f4b66;
+  border-radius: 8px;
+  color: #d7e7f7;
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 8px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 30;
+}
+.card::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  bottom: calc(100% + 2px);
+  border-width: 6px;
+  border-style: solid;
+  border-color: #2f4b66 transparent transparent transparent;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 31;
+}
+.card:hover::after,
+.card:hover::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+.ok { color: #4ade80; }
+.warn { color: #f59e0b; }
+.metric-good { border-color: #1f7a3f !important; background: #113021 !important; }
+.metric-warn { border-color: #946200 !important; background: #3b2c0f !important; }
+.metric-bad { border-color: #8b1d2c !important; background: #3a1720 !important; }
+.metric-neutral { }
+</style>
+</head>
+<body>
+<h1>Orchestrator Ops</h1>
+<div class="summary">
+  <div class="card" data-tooltip="Timestamp when this orchestrator metrics snapshot was generated."><div class="label">Generated</div><div class="value">${escapeHtml(formatTimestampToSecond(snapshot.generatedAtMs))}</div></div>
+  <div class="card" data-tooltip="Count of healthy map processes over total configured map processes."><div class="label">Healthy Maps</div><div class="value">${snapshot.orchestrator.healthyMapCount} / ${snapshot.orchestrator.totalConfiguredMaps}</div></div>
+  <div class="card" data-tooltip="Total connected players across all map processes."><div class="label">Online Players</div><div class="value">${snapshot.orchestrator.totalOnlinePlayers}</div></div>
+  <div class="card" data-tooltip="Currently active transfer records tracked by orchestrator."><div class="label">Active Transfers</div><div class="value">${snapshot.orchestrator.activeTransfers}</div></div>
+  <div class="card" data-tooltip="Average and p95 end-to-end transfer completion latency in milliseconds."><div class="label">Transfer Complete Avg / P95</div><div class="value">${snapshot.orchestrator.transferSla.completionLatencyAvgMs.toFixed(0)} / ${snapshot.orchestrator.transferSla.completionLatencyP95Ms.toFixed(0)} ms</div></div>
+  <div class="card" data-tooltip="Total map process restarts and number currently quarantined."><div class="label">Restarts / Quarantined</div><div class="value">${snapshot.orchestrator.mapChurn.totalRestarts} / ${snapshot.orchestrator.mapChurn.quarantinedMapCount}</div></div>
+  <div class="card" data-tooltip="Current pending persistence queue size in orchestrator."><div class="label">Persistence Queue</div><div class="value">${snapshot.orchestrator.persistence.queueSize}</div></div>
+  <div class="card" data-tooltip="Current persistence queue growth rate per minute. Positive means backlog is growing."><div class="label">Queue Growth / Min</div><div class="value">${snapshot.orchestrator.persistence.queueGrowthRatePerMinute.toFixed(1)}</div></div>
+  <div class="card" data-tooltip="How many persistence flush batches are executed per minute."><div class="label">Persistence Flushes / Min</div><div class="value">${snapshot.orchestrator.persistence.flushesPerMinute.toFixed(1)}</div></div>
+  <div class="card" data-tooltip="How many player snapshots are flushed per minute by orchestrator persistence pipeline."><div class="label">Snapshots Flushed / Min</div><div class="value">${snapshot.orchestrator.persistence.snapshotsFlushedPerMinute.toFixed(1)}</div></div>
+  <div class="card" data-tooltip="Most frequent transfer abort reason with occurrence count since orchestrator boot."><div class="label">Top Transfer Abort Reason</div><div class="value">${escapeHtml(formatTopAbortReason(snapshot.orchestrator.transferSla.abortReasons))}</div></div>
+</div>
+<section class="maps-grid">${cards}</section>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatTimestampToSecond(timestampMs: number | null | undefined): string {
+  if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs) || timestampMs <= 0) {
+    return "none";
+  }
+  const date = new Date(timestampMs);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function computeAverage(values: readonly number[]): number {
+  if (values.length <= 0) {
+    return 0;
+  }
+  let sum = 0;
+  for (const value of values) {
+    sum += value;
+  }
+  return sum / values.length;
+}
+
+function computeP95(values: readonly number[]): number {
+  if (values.length <= 0) {
+    return 0;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * 0.95)));
+  return sorted[index] ?? 0;
+}
+
+function formatTopAbortReason(reasons: Readonly<Record<string, number>>): string {
+  const entries = Object.entries(reasons);
+  if (entries.length <= 0) {
+    return "none";
+  }
+  entries.sort((a, b) => b[1] - a[1]);
+  const [reason, count] = entries[0]!;
+  return `${reason} (${count})`;
+}
+
+function classifyTpsHealth(effectiveTps: number, targetTickMs: number): string {
+  const targetTps = targetTickMs > 0 ? 1000 / targetTickMs : 0;
+  if (!Number.isFinite(targetTps) || targetTps <= 0) {
+    return "metric-neutral";
+  }
+  const ratio = effectiveTps / targetTps;
+  if (ratio >= OPS_TPS_GOOD_RATIO) {
+    return "metric-good";
+  }
+  if (ratio >= OPS_TPS_WARN_RATIO) {
+    return "metric-warn";
+  }
+  return "metric-bad";
+}
+
+function classifyTickP95Health(tickP95Ms: number, targetTickMs: number): string {
+  if (!Number.isFinite(targetTickMs) || targetTickMs <= 0) {
+    return "metric-neutral";
+  }
+  if (tickP95Ms <= targetTickMs * OPS_TICK_P95_GOOD_MULTIPLIER) {
+    return "metric-good";
+  }
+  if (tickP95Ms <= targetTickMs * OPS_TICK_P95_WARN_MULTIPLIER) {
+    return "metric-warn";
+  }
+  return "metric-bad";
+}
+
+function classifyOverBudgetHealth(percent: number): string {
+  if (percent <= OPS_OVER_BUDGET_GOOD_PERCENT) {
+    return "metric-good";
+  }
+  if (percent <= OPS_OVER_BUDGET_WARN_PERCENT) {
+    return "metric-warn";
+  }
+  return "metric-bad";
+}
+
+function classifyFanoutHealth(p95EntitiesPerPlayer: number): string {
+  if (!Number.isFinite(p95EntitiesPerPlayer)) {
+    return "metric-neutral";
+  }
+  if (p95EntitiesPerPlayer <= OPS_FANOUT_GOOD_P95) {
+    return "metric-good";
+  }
+  if (p95EntitiesPerPlayer <= OPS_FANOUT_WARN_P95) {
+    return "metric-warn";
+  }
+  return "metric-bad";
+}
+
+function readPositiveEnvNumber(name: string, fallback: number): number {
+  const raw = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return fallback;
+  }
+  return raw;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {

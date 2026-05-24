@@ -50,6 +50,7 @@ export const ASSET_GROUP_CORE = "core";
 export const ASSET_GROUP_WORLD_DEFAULT = "world:default";
 export const ASSET_GROUP_WORLD_SKYBOXES = "world:skyboxes";
 export const ASSET_GROUP_SFX = "sfx";
+export const ASSET_GROUP_CREATOR_APPEARANCE = "creator:appearance";
 
 export const CHARACTER_MALE_ASSET_ID = "character.male";
 export const CHARACTER_ANIM_IDLE_ASSET_ID = "character.anim.idle";

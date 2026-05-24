@@ -9,6 +9,7 @@ import type { InventorySnapshot } from "../shared/items";
 import { NType, SERVER_PORT, SERVER_TICK_MS, SERVER_TICK_SECONDS } from "../shared/index";
 import { GameSimulation } from "./GameSimulation";
 import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
+import type { MapRuntimeMetricsSnapshot } from "./orchestrator/OrchestratorProtocol";
 import { PersistenceService } from "./persistence/PersistenceService";
 import { OrchestratorPersistenceBridge } from "./persistence/OrchestratorPersistenceBridge";
 import {
@@ -29,6 +30,8 @@ import {
 import { ServerNetworkEventRouter } from "./net/ServerNetworkEventRouter";
 
 const MAX_TICK_INTERVAL_SAMPLES = 6000;
+const MAX_TICK_DURATION_SAMPLES = 6000;
+const MAX_REPLICATION_FANOUT_SAMPLES = 1800;
 const DEFAULT_PERSIST_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_HEALTH_LOG_INTERVAL_MS = 30000;
 const DEFAULT_NET_DIAGNOSTICS_BROADCAST_INTERVAL_MS = 1000;
@@ -64,6 +67,7 @@ export class GameServer {
   private tickDurationCount = 0;
   private tickDurationMaxMs = 0;
   private readonly tickDurationSamplesMs: number[] = [];
+  private tickDurationSampleWriteIndex = 0;
   private tickOverBudgetCount = 0;
   private tickIntervalAccumMs = 0;
   private tickIntervalCount = 0;
@@ -88,6 +92,11 @@ export class GameServer {
   private readonly inputDiagnosticsEnabled =
     process.env.SERVER_INPUT_DIAGNOSTICS === "1" || process.env.SERVER_INPUT_DIAGNOSTICS === "true";
   private tickCounter = 0;
+  private commandIngressTotalCommandSets = 0;
+  private commandIngressTotalInputCommands = 0;
+  private commandIngressPeakInputCommandsPerPlayerPerSecond = 0;
+  private readonly replicationEntitiesPerPlayerSamples: number[] = [];
+  private replicationEntitiesPerPlayerSampleWriteIndex = 0;
 
   public constructor(context: Context, private readonly ipcChannel: MapProcessIpcChannel | null = null) {
     this.netDiagnostics = new ServerNetDiagnosticsCollector();
@@ -159,8 +168,8 @@ export class GameServer {
       throw new Error("Handshake payload required.");
     }
     const baseAuthKey =
-      (handshake as { accessKey?: unknown; authKey?: unknown }).accessKey
-      ?? (handshake as { accessKey?: unknown; authKey?: unknown }).authKey;
+      (handshake as { accountKey?: unknown; authKey?: unknown }).accountKey
+      ?? (handshake as { accountKey?: unknown; authKey?: unknown }).authKey;
     const directAuthKey = typeof baseAuthKey === "string" ? baseAuthKey : undefined;
     const mapInstanceId = process.env.MAP_INSTANCE_ID;
     if (!this.ipcChannel?.isAvailable() || !mapInstanceId) {
@@ -279,10 +288,80 @@ export class GameServer {
     activeNpcs: number;
     inactiveNpcs: number;
     hibernatingNpcs: number;
+    replicationNearEntities: number;
+    replicationFarEntities: number;
+    replicationTotalEntities: number;
     pilotedReferenceFrames: number;
     effectAuditSuccesses: Readonly<Record<string, number>>;
   } {
     return this.simulation.getRuntimeStats();
+  }
+
+  public getMapRuntimeMetricsSnapshot(nowMs = Date.now()): MapRuntimeMetricsSnapshot {
+    const runtime = this.simulation.getRuntimeStats();
+    const nowPerformanceMs = performance.now();
+    const uptimeSeconds = Math.max(0, Math.floor((nowPerformanceMs - this.serverStartAtMs) / 1000));
+    const avgDuration = this.tickDurationCount > 0 ? this.tickDurationAccumMs / this.tickDurationCount : 0;
+    const avgInterval = this.tickIntervalCount > 0 ? this.tickIntervalAccumMs / this.tickIntervalCount : 0;
+    const stddevDurationMs = this.computeStdDev(this.tickDurationSamplesMs, avgDuration);
+    const effectiveTps = avgInterval > 0 ? 1000 / avgInterval : 0;
+    const overBudgetPercent = this.tickDurationCount > 0 ? (this.tickOverBudgetCount / this.tickDurationCount) * 100 : 0;
+    const p95TickDurationMs = this.computeP95(this.tickDurationSamplesMs);
+    const worstSpikeOverTargetMs = Math.max(0, this.tickDurationMaxMs - SERVER_TICK_MS);
+    const netDiagnostics = this.captureNetDiagnostics(nowMs);
+    const replicationWindow = this.computeReplicationEntitiesPerPlayerWindow();
+    return {
+      uptimeSeconds,
+      onlinePlayers: runtime.onlinePlayers,
+      activeNpcs: runtime.activeNpcs,
+      inactiveNpcs: runtime.inactiveNpcs,
+      hibernatingNpcs: runtime.hibernatingNpcs,
+      activeProjectiles: runtime.activeProjectiles,
+      pendingOfflineSnapshots: runtime.pendingOfflineSnapshots,
+      pilotedReferenceFrames: runtime.pilotedReferenceFrames,
+      tick: {
+        targetMs: SERVER_TICK_MS,
+        lastDurationMs: this.lastTickDurationMs,
+        meanDurationMs: avgDuration,
+        stddevDurationMs,
+        p95DurationMs: p95TickDurationMs,
+        maxDurationMs: this.tickDurationMaxMs,
+        worstSpikeOverTargetMs,
+        overBudgetPercent,
+        effectiveTps
+      },
+      loop: {
+        catchUpLoopCount: this.catchUpLoopCount,
+        catchUpStepCount: this.catchUpStepCount,
+        skippedTickResyncCount: this.skippedTickResyncCount
+      },
+      net: {
+        connectedPlayers: netDiagnostics.connectedPlayers,
+        windowSeconds: netDiagnostics.windowSeconds,
+        avgInboundBytesPerSecond: netDiagnostics.avgInboundBytesPerSecond,
+        avgOutboundBytesPerSecond: netDiagnostics.avgOutboundBytesPerSecond,
+        avgInboundMessagesPerSecond: netDiagnostics.avgInboundMessagesPerSecond,
+        avgOutboundMessagesPerSecond: netDiagnostics.avgOutboundMessagesPerSecond,
+        p95InboundBytesPerSecond: netDiagnostics.p95InboundBytesPerSecond,
+        p95OutboundBytesPerSecond: netDiagnostics.p95OutboundBytesPerSecond,
+        p95InboundMessagesPerSecond: netDiagnostics.p95InboundMessagesPerSecond,
+        p95OutboundMessagesPerSecond: netDiagnostics.p95OutboundMessagesPerSecond,
+        warningMask: netDiagnostics.warningMask
+      },
+      commandIngress: {
+        commandSetsPerSecond: uptimeSeconds > 0 ? this.commandIngressTotalCommandSets / uptimeSeconds : 0,
+        inputCommandsPerSecond: uptimeSeconds > 0 ? this.commandIngressTotalInputCommands / uptimeSeconds : 0,
+        peakInputCommandsPerPlayerPerSecond: this.commandIngressPeakInputCommandsPerPlayerPerSecond
+      },
+      replication: {
+        nearEntities: runtime.replicationNearEntities,
+        farEntities: runtime.replicationFarEntities,
+        totalEntities: runtime.replicationTotalEntities,
+        entitiesPerPlayer:
+          runtime.onlinePlayers > 0 ? runtime.replicationTotalEntities / runtime.onlinePlayers : 0,
+        entitiesPerPlayerWindow: replicationWindow
+      }
+    };
   }
 
   private tick(): void {
@@ -309,8 +388,9 @@ export class GameServer {
 
     const phaseDrainStart = performance.now();
     this.networkEventRouter.drainQueue();
+    const inputStats = this.networkEventRouter.consumeLastDrainInputStats();
+    this.recordCommandIngress(inputStats);
     if (this.inputDiagnosticsEnabled) {
-      const inputStats = this.networkEventRouter.consumeLastDrainInputStats();
       if (inputStats.commandSets > 0 || inputStats.inputCommands > 0) {
         const details = inputStats.byUserId
           .map((entry) => `u${entry.userId}:sets=${entry.commandSets},inputs=${entry.inputCommands}`)
@@ -319,8 +399,6 @@ export class GameServer {
           `[input-diag] tick=${this.tickCounter} commandSets=${inputStats.commandSets} inputCommands=${inputStats.inputCommands}${details.length > 0 ? ` ${details}` : ""}`
         );
       }
-    } else {
-      this.networkEventRouter.consumeLastDrainInputStats();
     }
     const phaseDrainMs = performance.now() - phaseDrainStart;
     this.tickPhaseDrainQueueAccumMs += phaseDrainMs;
@@ -337,6 +415,7 @@ export class GameServer {
     }
 
     const phasePostSimulationStart = performance.now();
+    this.recordReplicationFanoutSample();
     this.maybeFlushPersistence(performance.now());
     this.maybeBroadcastNetDiagnostics(performance.now());
     const phasePostSimulationMs = performance.now() - phasePostSimulationStart;
@@ -357,7 +436,7 @@ export class GameServer {
     this.lastTickDurationMs = tickDurationMs;
     this.tickDurationAccumMs += tickDurationMs;
     this.tickDurationCount += 1;
-    this.tickDurationSamplesMs.push(tickDurationMs);
+    this.pushTickDurationSample(tickDurationMs);
     if (tickDurationMs > this.tickDurationMaxMs) {
       this.tickDurationMaxMs = tickDurationMs;
     }
@@ -395,7 +474,7 @@ export class GameServer {
       this.skippedTickResyncCount += 1;
     }
 
-    if (process.env.SERVER_TICK_LOG !== "0" && now - this.lastHealthLogMs >= this.healthLogIntervalMs) {
+    if (this.isConsoleHealthLogEnabled() && now - this.lastHealthLogMs >= this.healthLogIntervalMs) {
       this.logHealth(now);
     }
 
@@ -463,6 +542,10 @@ export class GameServer {
     return Math.floor(raw);
   }
 
+  private isConsoleHealthLogEnabled(): boolean {
+    return process.env.SERVER_HEALTH_CONSOLE === "1" || process.env.SERVER_HEALTH_CONSOLE === "true";
+  }
+
   private logHealth(nowMs: number): void {
     const avgDuration =
       this.tickDurationCount > 0 ? this.tickDurationAccumMs / this.tickDurationCount : 0;
@@ -510,6 +593,18 @@ export class GameServer {
     return sorted[index] ?? 0;
   }
 
+  private computeStdDev(samples: readonly number[], mean: number): number {
+    if (samples.length <= 0) {
+      return 0;
+    }
+    let varianceSum = 0;
+    for (const sample of samples) {
+      const diff = sample - mean;
+      varianceSum += diff * diff;
+    }
+    return Math.sqrt(varianceSum / samples.length);
+  }
+
   private pushTickIntervalSample(intervalMs: number): void {
     if (this.tickIntervalsMs.length < MAX_TICK_INTERVAL_SAMPLES) {
       this.tickIntervalsMs.push(intervalMs);
@@ -519,6 +614,74 @@ export class GameServer {
         (this.tickIntervalSampleWriteIndex + 1) % MAX_TICK_INTERVAL_SAMPLES;
     }
     this.tickIntervalTotalSamples += 1;
+  }
+
+  private pushTickDurationSample(durationMs: number): void {
+    if (this.tickDurationSamplesMs.length < MAX_TICK_DURATION_SAMPLES) {
+      this.tickDurationSamplesMs.push(durationMs);
+    } else {
+      this.tickDurationSamplesMs[this.tickDurationSampleWriteIndex] = durationMs;
+      this.tickDurationSampleWriteIndex =
+        (this.tickDurationSampleWriteIndex + 1) % MAX_TICK_DURATION_SAMPLES;
+    }
+  }
+
+  private recordCommandIngress(inputStats: {
+    commandSets: number;
+    inputCommands: number;
+    byUserId: ReadonlyArray<{ userId: number; commandSets: number; inputCommands: number }>;
+  }): void {
+    this.commandIngressTotalCommandSets += Math.max(0, inputStats.commandSets);
+    this.commandIngressTotalInputCommands += Math.max(0, inputStats.inputCommands);
+    for (const user of inputStats.byUserId) {
+      const perSecond = user.inputCommands / SERVER_TICK_SECONDS;
+      if (perSecond > this.commandIngressPeakInputCommandsPerPlayerPerSecond) {
+        this.commandIngressPeakInputCommandsPerPlayerPerSecond = perSecond;
+      }
+    }
+  }
+
+  private recordReplicationFanoutSample(): void {
+    const runtime = this.simulation.getRuntimeStats();
+    const value =
+      runtime.onlinePlayers > 0
+        ? runtime.replicationTotalEntities / runtime.onlinePlayers
+        : 0;
+    if (this.replicationEntitiesPerPlayerSamples.length < MAX_REPLICATION_FANOUT_SAMPLES) {
+      this.replicationEntitiesPerPlayerSamples.push(value);
+      return;
+    }
+    this.replicationEntitiesPerPlayerSamples[this.replicationEntitiesPerPlayerSampleWriteIndex] = value;
+    this.replicationEntitiesPerPlayerSampleWriteIndex =
+      (this.replicationEntitiesPerPlayerSampleWriteIndex + 1) % MAX_REPLICATION_FANOUT_SAMPLES;
+  }
+
+  private computeReplicationEntitiesPerPlayerWindow(): {
+    samples: number;
+    mean: number;
+    p95: number;
+    max: number;
+  } {
+    if (this.replicationEntitiesPerPlayerSamples.length <= 0) {
+      return { samples: 0, mean: 0, p95: 0, max: 0 };
+    }
+    const samples = [...this.replicationEntitiesPerPlayerSamples];
+    let sum = 0;
+    let max = 0;
+    for (const sample of samples) {
+      sum += sample;
+      if (sample > max) {
+        max = sample;
+      }
+    }
+    samples.sort((a, b) => a - b);
+    const p95 = samples[Math.min(samples.length - 1, Math.max(0, Math.floor(samples.length * 0.95)))] ?? 0;
+    return {
+      samples: this.replicationEntitiesPerPlayerSamples.length,
+      mean: sum / this.replicationEntitiesPerPlayerSamples.length,
+      p95,
+      max
+    };
   }
 
   private computeTickMetrics():

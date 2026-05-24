@@ -20,13 +20,28 @@ import {
   NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES,
   coerceClientLocalSettings,
   getAbilityDefinitionById,
-  getLocationCraftBenchSockets,
+  getLocationStationSockets,
+  getLocationStationCreatorProfile,
+  getLocationStationInteractionLabel,
+  getLocationStationAllowedTemplateBlueprintIds,
   getLocationDefinitionByPid,
   getLocationPilotConsoleSockets,
   getItemDefinitionById,
-  resolveWorldAnchorAttachmentPoint,
+  getBlueprintDefinitionsForProfile,
+  filterCreatorTemplateBlueprintIdsForStation,
+  buildWorldInteractionSocketCandidates,
+  findNearestInteractionSocket,
+  getWorldInteractionActions,
+  resolveWorldInteractionActionBySlot,
+  getCreatorAppearanceOptions,
+  resolveReadyAppearanceRuntimeBinding,
+  resolveActivationAppearanceRuntimeBinding,
+  type WorldInteractionAction,
+  worldInteractionSlotToKeyLabel,
   movementModeToLabel,
   type ClientLocalSettings,
+  INVENTORY_MAX_SLOTS,
+  type CreatorProfileId,
   type PlayerSettings,
   coercePlayerSettings,
   normalizeYaw,
@@ -43,12 +58,17 @@ import { RenderSnapshotAssembler } from "./RenderSnapshotAssembler";
 import { WorldRenderer } from "./WorldRenderer";
 import { ClientNetworkOrchestrator } from "./network/ClientNetworkOrchestrator";
 import type { MovementInput, PlayerPose, RenderFrameSnapshot } from "./types";
-import { ensureAccessKey, resolveAccessKey } from "../auth/accessKey";
+import { ensureAccountKey, resolveAccountKey } from "../auth/accountKey";
 import {
   type NetworkDiagnosticsSnapshot
 } from "../ui/NetworkDiagnosticsPanel";
 import { preloadAssetGroup } from "../assets/assetLoader";
-import { ASSET_GROUP_SFX, ASSET_GROUP_WORLD_DEFAULT } from "../assets/assetManifest";
+import {
+  ASSET_GROUP_CREATOR_APPEARANCE,
+  ASSET_CATALOG,
+  ASSET_GROUP_SFX,
+  ASSET_GROUP_WORLD_DEFAULT
+} from "../assets/assetManifest";
 import { ClientUiManager } from "../ui/ClientUiManager";
 
 const FIXED_STEP = 1 / 60;
@@ -65,12 +85,21 @@ interface TransferBootstrapPayload {
   wsUrl: string;
   joinTicket: string;
   mapConfig: RuntimeMapConfig;
-  accessKeyScopeUrl: string | null;
+  accountKeyScopeUrl: string | null;
   issuedAtMs: number;
   expiresAtMs: number;
 }
 
 export type ClientCreatePhase = "physics" | "network" | "ready";
+type WorldInteractTarget =
+  | {
+      kind: "pickup";
+      pickupNid: number;
+      pickupContext: { itemName: string; itemQuantity: number };
+      actions: readonly WorldInteractionAction[];
+    }
+  | { kind: "station"; actions: readonly WorldInteractionAction[] }
+  | { kind: "pilot_console"; actions: readonly WorldInteractionAction[] };
 
 export class GameClientApp {
   private readonly input: InputController;
@@ -84,6 +113,9 @@ export class GameClientApp {
   private readonly physics: LocalPhysicsWorld;
   private accumulator = 0;
   private running = false;
+  private uiDestroyed = false;
+  private rendererDisposed = false;
+  private networkDisconnected = false;
   private rafId = 0;
   private fps = 0;
   private fpsSampleSeconds = 0;
@@ -104,15 +136,16 @@ export class GameClientApp {
   private queuedTestPrimaryActionCount = 0;
   private queuedTestSecondaryActionCount = 0;
   private queuedTestInteractCount = 0;
+  private queuedTestInteractSlot = 0;
   private testPrimaryHeld = false;
   private testSecondaryHeld = false;
-  private activeAccessKey: string | null = null;
+  private activeAccountKey: string | null = null;
   private transferInProgress = false;
-  private currentInteractTargetNid: number | null = null;
+  private currentWorldInteractTarget: WorldInteractTarget | null = null;
   private playerSettings = coercePlayerSettings(null);
   private clientLocalSettings = coerceClientLocalSettings(null);
   private readonly settingsSaveScheduler = new SettingsSaveScheduler(SETTINGS_SAVE_DEBOUNCE_MS);
-  private inventoryState: InventorySnapshot = { maxSlots: 32, itemInstances: [], equipment: {}, hotbarSlots: [] };
+  private inventoryState: InventorySnapshot = { maxSlots: INVENTORY_MAX_SLOTS, itemInstances: [], equipment: {}, hotbarSlots: [] };
   private readonly visualCarrierPreviousYawByFramePid = new Map<number, number>();
   private renderedLocationFrameSnapshot: ReadonlyMap<
     number,
@@ -124,6 +157,9 @@ export class GameClientApp {
   private previousKinematicsPose: { x: number; y: number; z: number } | null = null;
   private currentClientFrameVelocity = { x: 0, y: 0, z: 0 };
   private smoothedClientSpeed = 0;
+  private lastCreatorSessionId = 0;
+  private pendingStationCreatorOpenUntilMs = 0;
+  private readonly testAlertsEnabled: boolean;
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -131,12 +167,13 @@ export class GameClientApp {
     cspEnabled: boolean,
     e2eSimulationOnly: boolean,
     private readonly serverUrl: string,
-    initialAccessKey: string,
+    initialAccountKey: string,
     private readonly joinTicket: string | null
   ) {
     this.physics = physics;
     this.cspEnabled = cspEnabled;
     this.e2eSimulationOnly = e2eSimulationOnly;
+    this.testAlertsEnabled = GameClientApp.resolveTestAlertsEnabled();
     this.playerSettings = GameClientApp.loadCachedPlayerSettings();
     this.clientLocalSettings = GameClientApp.loadCachedClientLocalSettings();
     this.input = new InputController(canvas);
@@ -187,9 +224,6 @@ export class GameClientApp {
       onHotbarSlotDropped: (slot) => {
         this.network.queueDropHotbarSlot(slot);
       },
-      onCraftRecipeRequested: (recipeId) => {
-        this.network.queueCraftRecipe(recipeId);
-      },
       onPlayerSettingsChanged: (settingsPatch) => {
         this.applyPlayerSettingsPatch(settingsPatch, true);
       },
@@ -197,7 +231,7 @@ export class GameClientApp {
         this.applyClientLocalSettingsPatch(settingsPatch);
       }
     });
-    this.activeAccessKey = initialAccessKey.length > 0 ? initialAccessKey : null;
+    this.activeAccountKey = initialAccountKey.length > 0 ? initialAccountKey : null;
     this.renderer = new WorldRenderer(canvas, {
       clientLocalSettings: this.clientLocalSettings
     });
@@ -224,15 +258,15 @@ export class GameClientApp {
     onCreatePhase?.("physics");
     const physics = await LocalPhysicsWorld.create();
     const serverUrl = connectionTarget.serverUrl;
-    const resolvedAccessKey = ensureAccessKey(connectionTarget.accessKeyScopeUrl ?? serverUrl);
-    const accessKey = resolvedAccessKey.key.length > 0 ? resolvedAccessKey.key : null;
+    const resolvedAccountKey = ensureAccountKey(connectionTarget.accountKeyScopeUrl ?? serverUrl);
+    const accountKey = resolvedAccountKey.key.length > 0 ? resolvedAccountKey.key : null;
     const app = new GameClientApp(
       canvas,
       physics,
       GameClientApp.resolveCspEnabled(),
       GameClientApp.resolveE2eSimulationOnly(),
       serverUrl,
-      accessKey ?? "",
+      accountKey ?? "",
       connectionTarget.joinTicket
     );
     void preloadAssetGroup(ASSET_GROUP_WORLD_DEFAULT, { priority: "near" }).catch((error) => {
@@ -241,13 +275,16 @@ export class GameClientApp {
     void preloadAssetGroup(ASSET_GROUP_SFX, { priority: "background" }).catch((error) => {
       console.warn("[assets] sfx preload group failed", error);
     });
+    void preloadAssetGroup(ASSET_GROUP_CREATOR_APPEARANCE, { priority: "background" }).catch((error) => {
+      console.warn("[assets] creator appearance preload group failed", error);
+    });
     onCreatePhase?.("network");
-    await app.network.connect(serverUrl, accessKey, { joinTicket: app.joinTicket });
-    if (app.network.getConnectionState() !== "connected" && app.joinTicket && connectionTarget.accessKeyScopeUrl) {
-      const fallback = await GameClientApp.bootstrapFromOrchestrator(connectionTarget.accessKeyScopeUrl);
+    await app.network.connect(serverUrl, accountKey, { joinTicket: app.joinTicket });
+    if (app.network.getConnectionState() !== "connected" && app.joinTicket && connectionTarget.accountKeyScopeUrl) {
+      const fallback = await GameClientApp.bootstrapFromOrchestrator(connectionTarget.accountKeyScopeUrl);
       if (fallback) {
         GameClientApp.installRuntimeMapConfig(fallback.mapConfig);
-        await app.network.connect(fallback.wsUrl, accessKey, { joinTicket: fallback.joinTicket });
+        await app.network.connect(fallback.wsUrl, accountKey, { joinTicket: fallback.joinTicket });
       }
     }
     onCreatePhase?.("ready");
@@ -279,7 +316,18 @@ export class GameClientApp {
       window.removeEventListener("resize", this.onResize);
       window.cancelAnimationFrame(this.rafId);
     }
-    this.renderer.dispose();
+    if (!this.networkDisconnected) {
+      this.network.disconnect("client-stop");
+      this.networkDisconnected = true;
+    }
+    if (!this.uiDestroyed) {
+      this.ui.destroy();
+      this.uiDestroyed = true;
+    }
+    if (!this.rendererDisposed) {
+      this.renderer.dispose();
+      this.rendererDisposed = true;
+    }
   }
 
   private readonly loop = (): void => {
@@ -303,13 +351,44 @@ export class GameClientApp {
       }
     }
 
-    this.currentInteractTargetNid = this.resolveInteractionTargetNid();
-    if (!this.ui.isMainMenuOpen() && (this.input.consumeInteractTrigger() || this.consumeTestInteractTrigger())) {
-      if (this.currentInteractTargetNid !== null) {
-        this.network.queuePickupWorldItem(this.currentInteractTargetNid);
+    this.currentWorldInteractTarget = this.resolveWorldInteractTarget();
+    const queuedInteractSlot = this.input.consumeInteractSlotTrigger();
+    const queuedTestInteractSlot = this.consumeTestInteractTriggerSlot();
+    const interactSlot = queuedInteractSlot ?? queuedTestInteractSlot;
+    if (!this.ui.isMainMenuOpen() && interactSlot !== null) {
+      const target = this.currentWorldInteractTarget;
+      if (target) {
+        const resolvedAction = this.resolveTargetActionBySlot(target, interactSlot);
+        if (!resolvedAction) {
+          this.ui.showAlert("That interaction key is not available for this target.", "warning");
+          return;
+        }
+        if (!resolvedAction.enabled) {
+          this.ui.showAlert(
+            resolvedAction.disabledReason && resolvedAction.disabledReason.trim().length > 0
+              ? resolvedAction.disabledReason
+              : "That interaction is currently unavailable.",
+            "warning"
+          );
+          return;
+        }
+        if (resolvedAction.id === "pickup_collect" && target.kind === "pickup") {
+          this.network.queuePickupWorldItem(target.pickupNid, interactSlot);
+        } else {
+          if (target.kind === "station" && resolvedAction.id === "station_open_creator") {
+            this.pendingStationCreatorOpenUntilMs = performance.now() + 1500;
+            this.ui.setCreatorState(null);
+            this.ui.openCreatorSection();
+            this.input.setMainUiOpen(true);
+            if (document.pointerLockElement === this.canvas) {
+              void document.exitPointerLock();
+            }
+          }
+          // Authoritative world interact fallback (station session / pilot console toggle).
+          this.network.queuePickupWorldItem(0, interactSlot);
+        }
       } else {
-        // Authoritative world interact fallback (bench session / pilot console toggle).
-        this.network.queuePickupWorldItem(0);
+        this.network.queuePickupWorldItem(0, interactSlot);
       }
     }
 
@@ -342,6 +421,7 @@ export class GameClientApp {
     this.applyAbilityEvents();
     this.applyAbilityCreatorEvents();
     this.applyInventoryEvents();
+    this.applyCreatorActionResultEvents();
     this.applyInventoryFeedbackEvents();
     this.applySettingsEvents();
     this.applyServerAlertEvents();
@@ -353,12 +433,14 @@ export class GameClientApp {
     this.renderedLocationFrameSnapshot = this.renderer.getRenderedLocationFrameSnapshot();
     this.applyVisualCarrierYawFromRenderedLocations();
     this.updateInteractPrompt();
-    this.updateCraftingBenchAvailability();
     this.updateDiagnosticsOverlay(seconds);
     this.updateTestAlert(seconds);
   }
 
   private updateTestAlert(deltaSeconds: number): void {
+    if (!this.testAlertsEnabled) {
+      return;
+    }
     this.testAlertElapsedSeconds += deltaSeconds;
     while (this.testAlertElapsedSeconds >= TEST_ALERT_INTERVAL_SECONDS) {
       this.testAlertElapsedSeconds -= TEST_ALERT_INTERVAL_SECONDS;
@@ -468,6 +550,15 @@ export class GameClientApp {
     const genCreatorState = this.network.consumeCreatorState();
     if (genCreatorState) {
       this.ui.setCreatorState(genCreatorState);
+      if (
+        genCreatorState.sessionId > 0 &&
+        genCreatorState.sessionId !== this.lastCreatorSessionId &&
+        performance.now() <= this.pendingStationCreatorOpenUntilMs
+      ) {
+        this.ui.openCreatorSection();
+        this.pendingStationCreatorOpenUntilMs = 0;
+      }
+      this.lastCreatorSessionId = genCreatorState.sessionId;
     }
   }
 
@@ -494,6 +585,17 @@ export class GameClientApp {
     this.ui.setHotbarAssignments(this.hotbarAbilityIds);
   }
 
+  private applyCreatorActionResultEvents(): void {
+    const results = this.network.consumeCreatorActionResults();
+    for (const result of results) {
+      const text = result.message.trim();
+      if (text.length <= 0) {
+        continue;
+      }
+      this.ui.showAlert(text, result.ok ? "success" : "warning");
+    }
+  }
+
   private applyInventoryFeedbackEvents(): void {
     const feedbacks = this.network.consumeInventoryActionFeedback();
     for (const feedback of feedbacks) {
@@ -501,15 +603,6 @@ export class GameClientApp {
         continue;
       }
       console.warn(`[inventory] action=${feedback.action} failed reason=${feedback.reason}`);
-      if (feedback.reason === "bench_session_missing" || feedback.reason === "bench_session_invalid") {
-        this.ui.showAlert("Use the craft bench first (press E nearby).", "warning");
-      } else if (feedback.reason === "bench_out_of_range") {
-        this.ui.showAlert("Move back near the craft bench.", "warning");
-      } else if (feedback.reason === "missing_resources") {
-        this.ui.showAlert("Missing required resources.", "warning");
-      } else if (feedback.reason === "inventory_full") {
-        this.ui.showAlert("Inventory full.", "warning");
-      }
     }
   }
 
@@ -810,6 +903,17 @@ export class GameClientApp {
         })),
         equipment: this.inventoryState.equipment
       },
+      worldInteraction: this.currentWorldInteractTarget
+        ? {
+            kind: this.currentWorldInteractTarget.kind,
+            actions: this.currentWorldInteractTarget.actions.map((action) => ({
+              slot: action.slot,
+              label: action.label,
+              enabled: action.enabled,
+              disabledReason: action.disabledReason
+            }))
+          }
+        : null,
       localAbility: {
         ui: {
           mainMenuOpen: this.ui.isMainMenuOpen()
@@ -912,8 +1016,10 @@ export class GameClientApp {
         1024
       );
     };
-    window.trigger_test_interact = (count = 1) => {
+    window.trigger_test_interact = (count = 1, slot = 0) => {
       const normalized = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+      const normalizedSlot = Number.isFinite(slot) ? Math.max(0, Math.floor(slot)) : 0;
+      this.queuedTestInteractSlot = normalizedSlot;
       this.queuedTestInteractCount = Math.min(this.queuedTestInteractCount + normalized, 1024);
     };
     window.drop_first_inventory_item = () => {
@@ -955,6 +1061,197 @@ export class GameClientApp {
         return;
       }
       this.network.queueMapTransfer(targetMapInstanceId);
+    };
+    window.get_creator_state = () => {
+      const state = this.network.getLatestCreatorState();
+      if (!state) {
+        return null;
+      }
+      return {
+        sessionId: state.sessionId,
+        profileId: state.profileId,
+        baseBlueprintId: state.draft.baseBlueprintId,
+        draft: {
+          name: state.draft.name,
+          profileId: state.draft.profileId,
+          baseBlueprintId: state.draft.baseBlueprintId,
+          fieldValues: { ...state.draft.fieldValues }
+        },
+        capacity: {
+          statBudgetTotal: state.capacity.statBudgetTotal,
+          statBudgetSpent: state.capacity.statBudgetSpent,
+          statBudgetRemaining: state.capacity.statBudgetRemaining,
+          attributeBudget: { ...state.capacity.attributeBudget },
+          attributeSlots: { ...state.capacity.attributeSlots }
+        },
+        availableBlueprintIds: state.availableBlueprints.map((entry) => entry.id),
+        availableBlueprintCount: state.availableBlueprintCount,
+        validation: state.validation,
+        productionPreview: state.productionPreview
+      };
+    };
+    window.send_creator_command = (command) => {
+      if (!command || typeof command !== "object") {
+        return;
+      }
+      this.network.queueCreatorCommand(command);
+    };
+    window.get_recent_alerts = () => {
+      return this.ui.getRecentAlerts().map((entry) => ({ text: entry.text, severity: entry.severity }));
+    };
+    window.inspect_creator_appearance_rollout = () => {
+      const appearanceBindings = getCreatorAppearanceOptions().map((option) => {
+        const readyBinding = resolveReadyAppearanceRuntimeBinding(option.value);
+        const activationBinding = resolveActivationAppearanceRuntimeBinding(option.value);
+        return {
+          appearanceId: option.value,
+          ready: {
+            equipped: {
+              assetId: readyBinding.equipped.assetId,
+              renderArchetypeId: readyBinding.equipped.renderArchetypeId ?? null,
+              previewTextureUrl: readyBinding.equipped.previewTextureUrl
+            },
+            pickup: {
+              assetId: readyBinding.pickup.assetId,
+              renderArchetypeId: readyBinding.pickup.renderArchetypeId ?? null,
+              previewTextureUrl: readyBinding.pickup.previewTextureUrl
+            }
+          },
+          activation: {
+            assetId: activationBinding.assetId,
+            projectileKind: activationBinding.projectileKind,
+            previewTextureUrl: activationBinding.previewTextureUrl
+          }
+        };
+      });
+      const itemByInstanceId = new Map(this.inventoryState.itemInstances.map((item) => [item.itemInstanceId, item]));
+      const equippedItems = Object.entries(this.inventoryState.equipment)
+        .map(([slot, itemInstanceId]) => {
+          const item = itemByInstanceId.get(itemInstanceId ?? 0);
+          if (!item) {
+            return null;
+          }
+          const definition = getItemDefinitionById(item.definitionId);
+          if (!definition) {
+            return null;
+          }
+          return {
+            slot,
+            itemInstanceId: item.itemInstanceId,
+            definitionId: definition.id,
+            key: definition.key,
+            name: definition.name,
+            readyAppearanceId: definition.readyAppearanceId ?? null,
+            readyAppearanceEquippedAssetId: definition.readyAppearanceEquippedAssetId ?? definition.readyAppearanceAssetId ?? null,
+            readyAppearancePickupAssetId: definition.readyAppearancePickupAssetId ?? definition.readyAppearanceAssetId ?? null
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      const worldPickups = this.network.getWorldEntities()
+        .filter((entry) => entry.pickupDefinitionId > 0)
+        .map((entry) => {
+          const definition = getItemDefinitionById(entry.pickupDefinitionId);
+          if (!definition) {
+            return null;
+          }
+          return {
+            nid: entry.nid,
+            definitionId: definition.id,
+            key: definition.key,
+            name: definition.name,
+            readyAppearanceId: definition.readyAppearanceId ?? null,
+            readyAppearancePickupAssetId: definition.readyAppearancePickupAssetId ?? definition.readyAppearanceAssetId ?? null
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      const ownedAbilities = this.network.getOwnedAbilityIds()
+        .map((abilityId) => {
+          const definition = this.network.getAbilityById(abilityId);
+          if (!definition) {
+            return null;
+          }
+          return {
+            abilityId: definition.id,
+            key: definition.key,
+            name: definition.name,
+            activationAppearanceId: definition.activationAppearanceId ?? null,
+            activationAppearanceAssetId: definition.activationAppearanceAssetId ?? null
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      return {
+        appearanceBindings,
+        equippedItems,
+        worldPickups,
+        ownedAbilities
+      };
+    };
+    window.validate_creator_appearance_rollout = () => {
+      const snapshot = window.inspect_creator_appearance_rollout?.();
+      const issues: string[] = [];
+      if (!snapshot) {
+        return {
+          ok: false,
+          issues: ["Creator appearance snapshot is unavailable."],
+          counts: { bindings: 0, equippedItems: 0, worldPickups: 0, ownedAbilities: 0 }
+        };
+      }
+      const assetIds = new Set(ASSET_CATALOG.map((entry) => entry.id));
+      for (const binding of snapshot.appearanceBindings) {
+        if (!binding.ready.equipped.assetId || !assetIds.has(binding.ready.equipped.assetId)) {
+          issues.push(`Missing/unknown equipped asset id for appearance "${binding.appearanceId}".`);
+        }
+        if (!binding.ready.pickup.assetId || !assetIds.has(binding.ready.pickup.assetId)) {
+          issues.push(`Missing/unknown pickup asset id for appearance "${binding.appearanceId}".`);
+        }
+        if (!binding.activation.assetId || !assetIds.has(binding.activation.assetId)) {
+          issues.push(`Missing/unknown activation asset id for appearance "${binding.appearanceId}".`);
+        }
+        if (binding.ready.equipped.renderArchetypeId === null || binding.ready.pickup.renderArchetypeId === null) {
+          issues.push(`Missing ready render archetype for appearance "${binding.appearanceId}".`);
+        }
+      }
+      for (const item of snapshot.equippedItems) {
+        if (item.readyAppearanceId && !item.readyAppearanceEquippedAssetId) {
+          issues.push(`Equipped item "${item.name}" (${item.slot}) missing ready equipped asset id.`);
+        }
+        if (item.readyAppearanceId && !item.readyAppearancePickupAssetId) {
+          issues.push(`Equipped item "${item.name}" (${item.slot}) missing ready pickup asset id.`);
+        }
+      }
+      for (const pickup of snapshot.worldPickups) {
+        if (pickup.readyAppearanceId && !pickup.readyAppearancePickupAssetId) {
+          issues.push(`World pickup "${pickup.name}" missing ready pickup asset id.`);
+        }
+      }
+      for (const ability of snapshot.ownedAbilities) {
+        if (ability.activationAppearanceId && !ability.activationAppearanceAssetId) {
+          issues.push(`Owned ability "${ability.name}" missing activation appearance asset id.`);
+        }
+      }
+      return {
+        ok: issues.length <= 0,
+        issues,
+        counts: {
+          bindings: snapshot.appearanceBindings.length,
+          equippedItems: snapshot.equippedItems.length,
+          worldPickups: snapshot.worldPickups.length,
+          ownedAbilities: snapshot.ownedAbilities.length
+        }
+      };
+    };
+    window.inspect_actor_capabilities = () => {
+      this.network.queueCreatorCommand({ inspectActorCapabilities: true });
+    };
+    window.set_actor_capability = (key, value) => {
+      if (typeof key !== "string" || key.trim().length <= 0 || !Number.isFinite(value)) {
+        return;
+      }
+      this.network.queueCreatorCommand({
+        setActorCapability: true,
+        capabilityKey: key.trim(),
+        capabilityValue: value
+      });
     };
   }
 
@@ -1088,12 +1385,12 @@ export class GameClientApp {
     return true;
   }
 
-  private consumeTestInteractTrigger(): boolean {
+  private consumeTestInteractTriggerSlot(): number | null {
     if (this.queuedTestInteractCount <= 0) {
-      return false;
+      return null;
     }
     this.queuedTestInteractCount -= 1;
-    return true;
+    return this.queuedTestInteractSlot;
   }
 
   private resolveInteractionTargetNid(): number | null {
@@ -1127,45 +1424,103 @@ export class GameClientApp {
       this.ui.clearInteractPrompt();
       return;
     }
-    const targetNid = this.currentInteractTargetNid;
-    if (targetNid === null) {
-      const pose = this.getRenderPose();
-      if (this.findNearbyCraftBenchPrompt(pose)) {
-        this.ui.showInteractPrompt("E  Use Craft Bench");
-        return;
-      }
-      const referenceFrames = this.network.getActiveCarrierFramePids();
-      if (referenceFrames.length > 0 && this.findNearbyPilotConsolePrompt(pose)) {
-        this.ui.showInteractPrompt("E  Toggle Pilot Console");
-        return;
-      }
+    if (!this.currentWorldInteractTarget) {
       this.ui.clearInteractPrompt();
       return;
     }
-    const item = this.network.getWorldEntities().find((entry) => entry.nid === targetNid && entry.pickupDefinitionId > 0);
-    const definition = item ? getItemDefinitionById(item.pickupDefinitionId) : null;
-    if (!item || !definition) {
-      this.ui.clearInteractPrompt();
-      return;
-    }
-    this.ui.showInteractPrompt(
-      `E  Pick up ${definition.name}${item.itemQuantity > 1 ? ` x${item.itemQuantity}` : ""}`
+    this.ui.showInteractPromptActions(
+      Array.from(
+        new Map(
+          this.currentWorldInteractTarget.actions.map((action) => [
+            `${action.id}:${action.slot}`,
+            {
+              keyLabel: this.getInteractKeyLabel(action.slot),
+              label: action.label,
+              enabled: action.enabled,
+              disabledReason: action.disabledReason
+            }
+          ])
+        ).values()
+      )
     );
   }
 
-  private updateCraftingBenchAvailability(): void {
+  private resolveWorldInteractTarget(): WorldInteractTarget | null {
+    const pickupNid = this.resolveInteractionTargetNid();
+    if (pickupNid !== null) {
+      const item = this.network.getWorldEntities().find((entry) => entry.nid === pickupNid && entry.pickupDefinitionId > 0);
+      const definition = item ? getItemDefinitionById(item.pickupDefinitionId) : null;
+      if (item) {
+        const itemName = definition?.name ?? `Item #${item.pickupDefinitionId}`;
+        return {
+          kind: "pickup",
+          pickupNid,
+          pickupContext: { itemName, itemQuantity: item.itemQuantity },
+          actions: getWorldInteractionActions("pickup", {
+            itemName,
+            itemQuantity: item.itemQuantity
+          })
+        };
+      }
+    }
     const pose = this.getRenderPose();
-    this.ui.setBenchCraftingAvailable(this.findNearbyCraftBenchPrompt(pose));
+    const nearbyStationPrompt = this.findNearbyStationPrompt(pose);
+    if (nearbyStationPrompt) {
+      const profileTemplateIds = getBlueprintDefinitionsForProfile(nearbyStationPrompt.creatorProfileId).map((blueprint) => blueprint.id);
+      const filteredTemplateIds = filterCreatorTemplateBlueprintIdsForStation(
+        profileTemplateIds,
+        nearbyStationPrompt.allowedTemplateBlueprintIds
+      );
+      const templateCount = filteredTemplateIds.length;
+      const actions = getWorldInteractionActions("station").map((action) => ({
+        ...action,
+        label: nearbyStationPrompt.label,
+        enabled: templateCount > 0,
+        disabledReason: templateCount > 0
+          ? undefined
+          : `No creator templates are configured for profile ${nearbyStationPrompt.creatorProfileId} on this station.`
+      }));
+      return { kind: "station", actions };
+    }
+    const referenceFrames = this.network.getActiveCarrierFramePids();
+    if (referenceFrames.length > 0 && this.findNearbyPilotConsolePrompt(pose)) {
+      return { kind: "pilot_console", actions: getWorldInteractionActions("pilot_console") };
+    }
+    return null;
   }
 
-  private findNearbyCraftBenchPrompt(pose: { x: number; y: number; z: number }): boolean {
+  private resolveTargetActionBySlot(target: WorldInteractTarget, slot: number): WorldInteractionAction | null {
+    if (target.kind === "pickup") {
+      return resolveWorldInteractionActionBySlot("pickup", slot, {
+        itemName: target.pickupContext.itemName,
+        itemQuantity: target.pickupContext.itemQuantity
+      }) ?? target.actions.find((action) => action.slot === slot) ?? null;
+    }
+    return resolveWorldInteractionActionBySlot(target.kind, slot) ?? target.actions.find((action) => action.slot === slot) ?? null;
+  }
+
+  private getInteractKeyLabel(slot: number): string {
+    return worldInteractionSlotToKeyLabel(slot);
+  }
+
+  private findNearbyStationPrompt(pose: { x: number; y: number; z: number }): {
+    label: string;
+    creatorProfileId: CreatorProfileId;
+    allowedTemplateBlueprintIds: readonly number[];
+  } | null {
     const roots = this.network.getLocationRoots();
+    let best: {
+      label: string;
+      creatorProfileId: CreatorProfileId;
+      allowedTemplateBlueprintIds: readonly number[];
+    } | null = null;
+    let bestDistanceSq = Number.POSITIVE_INFINITY;
     for (const root of roots) {
       const definition = getLocationDefinitionByPid(root.worldAnchorId);
       if (!definition) {
         continue;
       }
-      const sockets = getLocationCraftBenchSockets(definition);
+      const sockets = getLocationStationSockets(definition);
       if (sockets.length <= 0) {
         continue;
       }
@@ -1176,21 +1531,26 @@ export class GameClientApp {
       const yaw = rendered
         ? this.extractYawFromRotationQuaternion(rendered.rotation)
         : this.extractYawFromRotationQuaternion(root.rotation);
-      for (const socket of sockets) {
-        const world = resolveWorldAnchorAttachmentPoint(
-          { x: rootX, y: rootY, z: rootZ, yaw },
-          { x: socket.localX, y: socket.localY, z: socket.localZ }
-        );
-        const dx = world.x - pose.x;
-        const dy = world.y - pose.y;
-        const dz = world.z - pose.z;
-        const maxDistance = Math.max(0.5, socket.interactRadius + 0.75);
-        if (dx * dx + dy * dy + dz * dz <= maxDistance * maxDistance) {
-          return true;
-        }
+      const candidates = buildWorldInteractionSocketCandidates(
+        { x: rootX, y: rootY, z: rootZ, yaw },
+        sockets,
+        (socket) => ({
+          label: getLocationStationInteractionLabel(socket),
+          creatorProfileId: getLocationStationCreatorProfile(socket),
+          allowedTemplateBlueprintIds: getLocationStationAllowedTemplateBlueprintIds(socket)
+        })
+      );
+      const nearest = findNearestInteractionSocket(
+        { x: pose.x, y: pose.y, z: pose.z },
+        candidates,
+        { maxDistance: Number.POSITIVE_INFINITY, extraSlack: 0.75 }
+      );
+      if (nearest && nearest.distanceSq < bestDistanceSq) {
+        best = nearest.payload;
+        bestDistanceSq = nearest.distanceSq;
       }
     }
-    return false;
+    return best;
   }
 
   private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
@@ -1258,7 +1618,7 @@ export class GameClientApp {
     serverUrl: string;
     joinTicket: string | null;
     mapConfig?: RuntimeMapConfig;
-    accessKeyScopeUrl?: string;
+    accountKeyScopeUrl?: string;
   }> {
     const transferBootstrap = GameClientApp.consumeTransferBootstrapPayload();
     if (transferBootstrap) {
@@ -1266,7 +1626,7 @@ export class GameClientApp {
         serverUrl: transferBootstrap.wsUrl,
         joinTicket: transferBootstrap.joinTicket,
         mapConfig: transferBootstrap.mapConfig,
-        accessKeyScopeUrl: transferBootstrap.accessKeyScopeUrl ?? undefined
+        accountKeyScopeUrl: transferBootstrap.accountKeyScopeUrl ?? undefined
       };
     }
 
@@ -1276,7 +1636,7 @@ export class GameClientApp {
       return {
         serverUrl: directServerUrl,
         joinTicket: null,
-        accessKeyScopeUrl: directServerUrl
+        accountKeyScopeUrl: directServerUrl
       };
     }
 
@@ -1290,7 +1650,7 @@ export class GameClientApp {
       serverUrl: payload.wsUrl,
       joinTicket: payload.joinTicket,
       mapConfig: payload.mapConfig,
-      accessKeyScopeUrl: orchestratorUrl
+      accountKeyScopeUrl: orchestratorUrl
     };
   }
 
@@ -1299,13 +1659,13 @@ export class GameClientApp {
     joinTicket: string;
     mapConfig: RuntimeMapConfig;
   } | null> {
-    const accessKey = ensureAccessKey(orchestratorUrl).key;
-    const authKey = accessKey.length > 0 ? accessKey : null;
+    const accountKey = ensureAccountKey(orchestratorUrl).key;
+    const authKey = accountKey.length > 0 ? accountKey : null;
     const response = await fetch(`${orchestratorUrl}/bootstrap`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        accessKey: authKey,
+        accountKey: authKey,
         authKey
       } satisfies BootstrapRequest)
     });
@@ -1350,6 +1710,12 @@ export class GameClientApp {
   private static resolveE2eSimulationOnly(): boolean {
     const params = new URLSearchParams(window.location.search);
     const raw = params.get("e2eSimOnly");
+    return raw === "1" || raw === "true";
+  }
+
+  private static resolveTestAlertsEnabled(): boolean {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("testAlerts");
     return raw === "1" || raw === "true";
   }
 
@@ -1428,7 +1794,7 @@ export class GameClientApp {
     }
     GameClientApp.installRuntimeMapConfig(transfer.mapConfig);
     void this.network
-      .connect(transfer.wsUrl, this.activeAccessKey, { joinTicket: transfer.joinTicket })
+      .connect(transfer.wsUrl, this.activeAccountKey, { joinTicket: transfer.joinTicket })
       .finally(() => {
         this.transferInProgress = false;
       });
@@ -1440,7 +1806,7 @@ export class GameClientApp {
       wsUrl: transfer.wsUrl,
       joinTicket: transfer.joinTicket,
       mapConfig: transfer.mapConfig,
-      accessKeyScopeUrl: this.resolveAccessKeyScopeUrl(),
+      accountKeyScopeUrl: this.resolveAccountKeyScopeUrl(),
       issuedAtMs: now,
       expiresAtMs: now + TRANSFER_BOOTSTRAP_TTL_MS
     };
@@ -1454,7 +1820,7 @@ export class GameClientApp {
     }
   }
 
-  private resolveAccessKeyScopeUrl(): string | null {
+  private resolveAccountKeyScopeUrl(): string | null {
     const params = new URLSearchParams(window.location.search);
     const orchestratorUrl = params.get("orchestrator");
     if (typeof orchestratorUrl === "string" && orchestratorUrl.length > 0) {
@@ -1490,9 +1856,9 @@ export class GameClientApp {
         wsUrl: parsed.wsUrl,
         joinTicket: parsed.joinTicket,
         mapConfig: parsed.mapConfig as RuntimeMapConfig,
-        accessKeyScopeUrl:
-          typeof parsed.accessKeyScopeUrl === "string" && parsed.accessKeyScopeUrl.length > 0
-            ? parsed.accessKeyScopeUrl
+        accountKeyScopeUrl:
+          typeof parsed.accountKeyScopeUrl === "string" && parsed.accountKeyScopeUrl.length > 0
+            ? parsed.accountKeyScopeUrl
             : null,
         issuedAtMs: Number(parsed.issuedAtMs) || now,
         expiresAtMs
@@ -1566,6 +1932,11 @@ export class GameClientApp {
   }
 
   private findNearbyPilotConsolePrompt(pose: { x: number; y: number; z: number }): boolean {
+    const candidates: Array<{
+      payload: boolean;
+      socketPoint: { x: number; y: number; z: number };
+      interactRadius: number;
+    }> = [];
     const roots = this.network.getLocationRoots();
     for (const root of roots) {
       const definition = getLocationDefinitionByPid(root.worldAnchorId);
@@ -1583,25 +1954,19 @@ export class GameClientApp {
       const yaw = rendered
         ? this.extractYawFromRotationQuaternion(rendered.rotation)
         : this.extractYawFromRotationQuaternion(root.rotation);
-      for (const socket of sockets) {
-        const world = resolveWorldAnchorAttachmentPoint(
+      candidates.push(
+        ...buildWorldInteractionSocketCandidates(
           { x: rootX, y: rootY, z: rootZ, yaw },
-          { x: socket.localX, y: socket.localY, z: socket.localZ }
-        );
-        const worldX = world.x;
-        const worldY = world.y;
-        const worldZ = world.z;
-        const dx = worldX - pose.x;
-        const dy = worldY - pose.y;
-        const dz = worldZ - pose.z;
-        const distanceSq = dx * dx + dy * dy + dz * dz;
-        const maxDistance = Math.max(0.5, socket.interactRadius);
-        if (distanceSq <= maxDistance * maxDistance) {
-          return true;
-        }
-      }
+          sockets,
+          () => true
+        )
+      );
     }
-    return false;
+    return Boolean(findNearestInteractionSocket(
+      { x: pose.x, y: pose.y, z: pose.z },
+      candidates,
+      { maxDistance: 4, extraSlack: 0 }
+    ));
   }
 }
 

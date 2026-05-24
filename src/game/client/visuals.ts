@@ -27,7 +27,6 @@ import {
   MODEL_ID_ITEM_VITALITY_SHARD,
   MODEL_ID_ITEM_FOCUS_BLADE,
   MODEL_ID_ITEM_ETHER_CRYSTAL,
-  MODEL_ID_PROJECTILE_PRIMARY,
   MODEL_ID_TRAINING_DUMMY,
   MODEL_ID_LOCATION_STATIC_CASTLE,
   MODEL_ID_LOCATION_MOVING_CASTLE,
@@ -148,7 +147,13 @@ const locations = new Map<string, LocationVisualDef>([
 ]);
 
 const projectilePalettes = new Map<number, Readonly<ProjectilePalette>>([
-  [MODEL_ID_PROJECTILE_PRIMARY, Object.freeze({
+  [1, Object.freeze({
+    coreColor: 0xff7b7b, emissiveColor: 0xc53939, glowColor: 0xff6666, burstColor: 0xffb0b0
+  })],
+  [2, Object.freeze({
+    coreColor: 0x68ff9e, emissiveColor: 0x2ea85b, glowColor: 0x57ff94, burstColor: 0xa8ffca
+  })],
+  [3, Object.freeze({
     coreColor: 0x78dfff, emissiveColor: 0x2d9cc5, glowColor: 0x67d4ff, burstColor: 0x9ce8ff
   })]
 ]);

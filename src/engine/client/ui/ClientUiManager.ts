@@ -32,6 +32,7 @@ export class ClientUiManager {
   private readonly playerHealthBar: PlayerHealthBar;
   private readonly clientKinematicsPanel: ClientKinematicsPanel;
   private diagnosticsVisible = false;
+  private destroyed = false;
 
   private constructor(documentRef: Document, abilityHudOptions: AbilityHudOptions) {
     this.runtime = UiRuntime.ensureDocumentRoot(documentRef);
@@ -98,12 +99,12 @@ export class ClientUiManager {
     this.abilityHud.setCreatorState(state);
   }
 
-  public setInventoryState(state: InventorySnapshot): void {
-    this.abilityHud.setInventoryState(state);
+  public openCreatorSection(): void {
+    this.abilityHud.openCreatorSection();
   }
 
-  public setBenchCraftingAvailable(available: boolean): void {
-    this.abilityHud.setBenchCraftingAvailable(available);
+  public setInventoryState(state: InventorySnapshot): void {
+    this.abilityHud.setInventoryState(state);
   }
 
   public toggleDiagnostics(): boolean {
@@ -133,8 +134,16 @@ export class ClientUiManager {
     this.interactPrompt.show(text);
   }
 
+  public showInteractPromptActions(actions: ReadonlyArray<{ keyLabel: string; label: string; enabled?: boolean; disabledReason?: string }>): void {
+    this.interactPrompt.showActions(actions);
+  }
+
   public showAlert(message: string, severity: AlertSeverity = "info"): void {
     this.alertFeed.enqueue(message, severity);
+  }
+
+  public getRecentAlerts(): ReadonlyArray<{ text: string; severity: AlertSeverity }> {
+    return this.alertFeed.getRecentHistory();
   }
 
   public updateLocalPlayerHealth(currentHealth: number | null, maxHealth: number | null, deltaSeconds: number): void {
@@ -146,6 +155,14 @@ export class ClientUiManager {
       return;
     }
     this.clientKinematicsPanel.update(snapshot);
+  }
+
+  public destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
+    this.abilityHud.destroy();
   }
 }
 

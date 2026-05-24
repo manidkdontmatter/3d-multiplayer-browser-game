@@ -38,6 +38,11 @@ export function injectProjectilePalettes(palettes: ReadonlyMap<number, Readonly<
   PROJECTILE_PALETTES = new Map(palettes);
 }
 
+export function getProjectilePalette(kind: number): Readonly<ProjectilePalette> | undefined {
+  const normalizedKind = Number.isFinite(kind) ? Math.max(0, Math.floor(kind)) : 0;
+  return PROJECTILE_PALETTES.get(normalizedKind);
+}
+
 const PROJECTILE_VISUAL_POOL_PREWARM = 24;
 const PROJECTILE_SPAWN_BURST_POOL_PREWARM = 12;
 const PROJECTILE_SPAWN_BURST_POOL_MAX = 80;

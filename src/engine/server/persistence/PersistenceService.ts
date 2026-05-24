@@ -28,7 +28,7 @@ import {
 } from "../../shared/index";
 import type { MeleeAbilityProfile, ProjectileAbilityProfile } from "../../shared/abilities";
 
-const ACCESS_KEY_PATTERN = /^[A-Za-z0-9]{10,30}$/;
+const ACCOUNT_KEY_PATTERN = /^[A-Za-z0-9]{10,30}$/;
 const KEY_SCRYPT_BYTES = 64;
 const KEY_SALT_BYTES = 16;
 const CHARACTER_SCHEMA_VERSION = 1;
@@ -42,6 +42,7 @@ const TEMP_BAN_THRESHOLD = 60;
 const TEMP_BAN_DURATION_MS = 15 * 60 * 1000;
 const BACKOFF_BASE_MS = 250;
 const BACKOFF_MAX_MS = 30000;
+const MAX_BLUEPRINTS_PER_ACCOUNT = 1000;
 export const GUEST_ACCOUNT_ID_BASE = 1_000_000_000;
 
 type AuthResultCode = "ok" | "invalid_key_format" | "rate_limited" | "banned" | "invalid_credentials" | "server_error";
@@ -117,12 +118,14 @@ export interface PersistedPickupState {
 }
 
 export type PersistedPlayerSettings = PlayerSettings;
+export type PersistedActorCapabilities = Record<string, number>;
 
 export interface SaveBlueprintAndGrantAccessRequest {
   blueprint: BlueprintDefinition;
   runtimeCapability?: BlueprintRuntimeCapabilityEntry | null;
   createdByAccountId: number;
   grantAccessTags: readonly BlueprintAccessTag[];
+  globalGrantAccessTags?: readonly BlueprintAccessTag[];
 }
 
 export interface PersistedBlueprintRecord {
@@ -168,11 +171,11 @@ export class PersistenceService {
     this.db.close();
   }
 
-  public authenticateOrCreate(rawAccessKey: unknown, remoteIpRaw: unknown): AuthResult {
+  public authenticateOrCreate(rawAccountKey: unknown, remoteIpRaw: unknown): AuthResult {
     const remoteIp = this.normalizeRemoteIp(remoteIpRaw);
     const now = Date.now();
-    const accessKey = typeof rawAccessKey === "string" ? rawAccessKey : "";
-    if (!ACCESS_KEY_PATTERN.test(accessKey)) {
+    const accountKey = typeof rawAccountKey === "string" ? rawAccountKey : "";
+    if (!ACCOUNT_KEY_PATTERN.test(accountKey)) {
       this.appendAuthAudit(remoteIp, "fail", "invalid_key_format");
       return {
         ok: false,
@@ -182,7 +185,7 @@ export class PersistenceService {
       };
     }
 
-    const keyFingerprint = this.computeKeyFingerprint(accessKey);
+    const keyFingerprint = this.computeKeyFingerprint(accountKey);
     if (this.disablePersistenceWrites) {
       const existingAccountId = this.transientAccountIdByKey.get(keyFingerprint);
       if (typeof existingAccountId === "number") {
@@ -228,7 +231,7 @@ export class PersistenceService {
 
       if (!playerRow) {
         const salt = randomBytes(KEY_SALT_BYTES);
-        const hash = this.deriveKeyHash(accessKey, salt);
+        const hash = this.deriveKeyHash(accountKey, salt);
         const accountId = this.createPlayer(keyFingerprint, salt, hash, now);
         this.markAuthSuccess(remoteIp);
         this.appendAuthAudit(remoteIp, "success", "created");
@@ -241,7 +244,7 @@ export class PersistenceService {
       }
 
       const expectedHash = Buffer.from(playerRow.keyHash);
-      const actualHash = this.deriveKeyHash(accessKey, Buffer.from(playerRow.keySalt));
+      const actualHash = this.deriveKeyHash(accountKey, Buffer.from(playerRow.keySalt));
       const valid = expectedHash.length === actualHash.length && timingSafeEqual(expectedHash, actualHash);
       if (!valid) {
         const retryAfterMs = this.markAuthFailure(remoteIp, now);
@@ -375,10 +378,22 @@ export class PersistenceService {
            ORDER BY blueprint_id ASC`
         )
         .all(characterId, tag) as Array<{ blueprintId: number }>;
-      if (rows.length > 0) {
-        return rows
-          .map((row) => this.clampInteger(row.blueprintId, 0, 0xffff))
-          .filter((blueprintId) => blueprintId > ABILITY_ID_NONE);
+      const globalRows = this.db
+        .prepare(
+          `SELECT blueprint_id AS blueprintId
+           FROM global_blueprint_access
+           WHERE access_tag = ?
+           ORDER BY blueprint_id ASC`
+        )
+        .all(tag) as Array<{ blueprintId: number }>;
+      if (rows.length > 0 || globalRows.length > 0) {
+        return Array.from(
+          new Set(
+            [...rows, ...globalRows]
+              .map((row) => this.clampInteger(row.blueprintId, 0, 0xffff))
+              .filter((blueprintId) => blueprintId > ABILITY_ID_NONE)
+          )
+        ).sort((a, b) => a - b);
       }
 
       const defaultsNormalized = Array.from(
@@ -397,7 +412,23 @@ export class PersistenceService {
       for (const blueprintId of defaultsNormalized) {
         insertAccess.run(characterId, blueprintId, tag, now);
       }
-      return defaultsNormalized;
+      const globalRowsAfterDefault = this.db
+        .prepare(
+          `SELECT blueprint_id AS blueprintId
+           FROM global_blueprint_access
+           WHERE access_tag = ?
+           ORDER BY blueprint_id ASC`
+        )
+        .all(tag) as Array<{ blueprintId: number }>;
+      if (globalRowsAfterDefault.length <= 0) {
+        return defaultsNormalized;
+      }
+      return Array.from(
+        new Set(
+          [...defaultsNormalized, ...globalRowsAfterDefault.map((row) => this.clampInteger(row.blueprintId, 0, 0xffff))]
+            .filter((blueprintId) => blueprintId > ABILITY_ID_NONE)
+        )
+      ).sort((a, b) => a - b);
     });
 
     return tx(accountId, accessTag, defaultBlueprintIds);
@@ -464,8 +495,35 @@ export class PersistenceService {
     const accessTags = Array.from(new Set(request.grantAccessTags)).filter(
       (tag): tag is BlueprintAccessTag => typeof tag === "string" && tag.length > 0
     );
+    const globalAccessTags = Array.from(new Set(request.globalGrantAccessTags ?? [])).filter(
+      (tag): tag is BlueprintAccessTag => typeof tag === "string" && tag.length > 0
+    );
     const tx = this.db.transaction(() => {
       const now = Date.now();
+      const activeRows = this.db
+        .prepare(
+          `SELECT blueprint_id AS blueprintId
+           FROM blueprints
+           WHERE created_by_player_id = ? AND archived = 0
+           ORDER BY created_at ASC, blueprint_id ASC`
+        )
+        .all(characterId) as Array<{ blueprintId: number }>;
+      const overflow = activeRows.length - MAX_BLUEPRINTS_PER_ACCOUNT + 1;
+      if (overflow > 0) {
+        const toArchive = activeRows.slice(0, overflow).map((row) => row.blueprintId);
+        const archiveStmt = this.db.prepare(
+          `UPDATE blueprints
+           SET archived = 1, updated_at = ?
+           WHERE blueprint_id = ?`
+        );
+        const revokeStmt = this.db.prepare(
+          `DELETE FROM character_blueprint_access WHERE blueprint_id = ?`
+        );
+        for (const archivedBlueprintId of toArchive) {
+          archiveStmt.run(now, archivedBlueprintId);
+          revokeStmt.run(archivedBlueprintId);
+        }
+      }
       this.db
         .prepare(
           `INSERT INTO blueprints (
@@ -480,6 +538,16 @@ export class PersistenceService {
       );
       for (const accessTag of accessTags) {
         insertAccess.run(characterId, blueprintId, accessTag, now, characterId);
+      }
+      if (globalAccessTags.length > 0) {
+        const insertGlobalAccess = this.db.prepare(
+          `INSERT OR REPLACE INTO global_blueprint_access (
+             blueprint_id, access_tag, granted_at, granted_by_character_id
+           ) VALUES (?, ?, ?, ?)`
+        );
+        for (const accessTag of globalAccessTags) {
+          insertGlobalAccess.run(blueprintId, accessTag, now, characterId);
+        }
       }
     });
     tx();
@@ -639,6 +707,54 @@ export class PersistenceService {
         JSON.stringify(normalized),
         Date.now()
       );
+  }
+
+  public loadActorCapabilities(accountId: number): PersistedActorCapabilities {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return {};
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT capability_key AS capabilityKey, capability_value AS capabilityValue
+         FROM player_actor_capabilities
+         WHERE player_id = ?`
+      )
+      .all(accountId) as Array<{ capabilityKey: string; capabilityValue: number }>;
+    const capabilities: PersistedActorCapabilities = {};
+    for (const row of rows) {
+      if (typeof row.capabilityKey !== "string" || row.capabilityKey.length <= 0) {
+        continue;
+      }
+      capabilities[row.capabilityKey] = Number.isFinite(row.capabilityValue) ? row.capabilityValue : 0;
+    }
+    return capabilities;
+  }
+
+  public saveActorCapabilities(accountId: number, capabilities: PersistedActorCapabilities): void {
+    if (this.disablePersistenceWrites || accountId >= GUEST_ACCOUNT_ID_BASE) {
+      return;
+    }
+    const normalizedAccountId = Math.max(1, this.clampInteger(accountId, 1, 0x7fffffff));
+    const entries = Object.entries(capabilities)
+      .filter(([key, value]) => typeof key === "string" && key.trim().length > 0 && Number.isFinite(value))
+      .map(([key, value]) => [key.trim().slice(0, 96), Number(value)] as const);
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare("DELETE FROM player_actor_capabilities WHERE player_id = ?")
+        .run(normalizedAccountId);
+      if (entries.length <= 0) {
+        return;
+      }
+      const insert = this.db.prepare(
+        `INSERT INTO player_actor_capabilities (player_id, capability_key, capability_value, updated_at)
+         VALUES (?, ?, ?, ?)`
+      );
+      const now = Date.now();
+      for (const [key, value] of entries) {
+        insert.run(normalizedAccountId, key, value, now);
+      }
+    });
+    tx();
   }
 
   public saveInventoryState(accountId: number, state: InventorySnapshot): void {
@@ -1068,6 +1184,15 @@ export class PersistenceService {
         FOREIGN KEY(granted_by_character_id) REFERENCES players(account_id) ON DELETE SET NULL
       );
 
+      CREATE TABLE IF NOT EXISTS global_blueprint_access (
+        blueprint_id INTEGER NOT NULL,
+        access_tag TEXT NOT NULL,
+        granted_at INTEGER NOT NULL,
+        granted_by_character_id INTEGER,
+        PRIMARY KEY (blueprint_id, access_tag),
+        FOREIGN KEY(granted_by_character_id) REFERENCES players(account_id) ON DELETE SET NULL
+      );
+
       CREATE TABLE IF NOT EXISTS player_inventory_items (
         player_id INTEGER NOT NULL,
         item_instance_id INTEGER NOT NULL,
@@ -1124,6 +1249,15 @@ export class PersistenceService {
         FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS player_actor_capabilities (
+        player_id INTEGER NOT NULL,
+        capability_key TEXT NOT NULL,
+        capability_value REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (player_id, capability_key),
+        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS auth_audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts INTEGER NOT NULL,
@@ -1143,6 +1277,9 @@ export class PersistenceService {
     `);
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_character_blueprint_access_character_tag ON character_blueprint_access(character_id, access_tag)"
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_global_blueprint_access_tag ON global_blueprint_access(access_tag, blueprint_id)"
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_blueprints_archived ON blueprints(archived, blueprint_id)"
@@ -1444,12 +1581,12 @@ export class PersistenceService {
     return Number(result.lastInsertRowid);
   }
 
-  private computeKeyFingerprint(accessKey: string): string {
-    return createHash("sha256").update(accessKey).digest("hex");
+  private computeKeyFingerprint(accountKey: string): string {
+    return createHash("sha256").update(accountKey).digest("hex");
   }
 
-  private deriveKeyHash(accessKey: string, salt: Buffer): Buffer {
-    return scryptSync(accessKey, salt, KEY_SCRYPT_BYTES) as Buffer;
+  private deriveKeyHash(accountKey: string, salt: Buffer): Buffer {
+    return scryptSync(accountKey, salt, KEY_SCRYPT_BYTES) as Buffer;
   }
 
   private evaluateThrottle(

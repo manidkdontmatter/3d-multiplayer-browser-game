@@ -22,11 +22,17 @@ async function main(): Promise<void> {
   }
 
   console.log("[assets] runtime manifest missing/stale; rebuilding...");
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(npmCommand, ["run", "assets:build:manifest"], {
-    cwd: repoRoot,
-    stdio: "inherit"
-  });
+  const result = process.platform === "win32"
+    ? spawnSync("cmd.exe", ["/d", "/s", "/c", "npm run assets:build:manifest"], {
+      cwd: repoRoot,
+      stdio: "inherit",
+      shell: false
+    })
+    : spawnSync("npm", ["run", "assets:build:manifest"], {
+      cwd: repoRoot,
+      stdio: "inherit",
+      shell: false
+    });
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }

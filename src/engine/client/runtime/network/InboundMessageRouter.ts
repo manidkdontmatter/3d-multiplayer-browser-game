@@ -11,7 +11,9 @@ import type {
   IdentityMessage,
   InputAckMessage,
   InventoryStateMessage,
+  ItemDefinitionMessage,
   InventoryActionResultMessage,
+  CreatorActionResultMessage,
   PlayerSettingsMessage,
   ServerAlertMessage,
   MapTransferMessage,
@@ -26,9 +28,11 @@ export interface InboundMessageRouterHandlers {
   readonly onServerNetDiagnosticsMessage: (message: ServerNetDiagnosticsMessage) => void;
   readonly onMapTransferMessage: (message: MapTransferMessage) => void;
   readonly onInventoryStateMessage: (message: InventoryStateMessage) => void;
+  readonly onItemDefinitionMessage: (message: ItemDefinitionMessage) => void;
   readonly onReferenceFrameVolumeEnteredMessage: (message: ReferenceFrameVolumeEnteredMessage) => void;
   readonly onReferenceFrameVolumeExitedMessage: (message: ReferenceFrameVolumeExitedMessage) => void;
   readonly onInventoryActionResultMessage: (message: InventoryActionResultMessage) => void;
+  readonly onCreatorActionResultMessage: (message: CreatorActionResultMessage) => void;
   readonly onPlayerSettingsMessage: (message: PlayerSettingsMessage) => void;
   readonly onServerAlertMessage: (message: ServerAlertMessage) => void;
   readonly onUnhandledMessage: (message: unknown) => void;
@@ -42,12 +46,14 @@ export class InboundMessageRouter {
         | InputAckMessage
         | AbilityUseMessage
         | InventoryStateMessage
+        | ItemDefinitionMessage
         | ServerNetDiagnosticsMessage
         | ServerPopulationMessage
         | MapTransferMessage
         | ReferenceFrameVolumeEnteredMessage
         | ReferenceFrameVolumeExitedMessage
         | InventoryActionResultMessage
+        | CreatorActionResultMessage
         | PlayerSettingsMessage
         | ServerAlertMessage
         | undefined;
@@ -81,6 +87,10 @@ export class InboundMessageRouter {
         handlers.onInventoryStateMessage(typed);
         continue;
       }
+      if (typed?.ntype === NType.ItemDefinitionMessage) {
+        handlers.onItemDefinitionMessage(typed);
+        continue;
+      }
 
       if (typed?.ntype === NType.ReferenceFrameVolumeEnteredMessage) {
         handlers.onReferenceFrameVolumeEnteredMessage(typed);
@@ -94,6 +104,10 @@ export class InboundMessageRouter {
 
       if (typed?.ntype === NType.InventoryActionResultMessage) {
         handlers.onInventoryActionResultMessage(typed);
+        continue;
+      }
+      if (typed?.ntype === NType.CreatorActionResultMessage) {
+        handlers.onCreatorActionResultMessage(typed);
         continue;
       }
       if (typed?.ntype === NType.PlayerSettingsMessage) {

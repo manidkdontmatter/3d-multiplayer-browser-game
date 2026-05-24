@@ -103,3 +103,10 @@ export interface ServerAlertState {
   severity: AlertSeverity;
 }
 
+export interface CreatorActionResultState {
+  ok: boolean;
+  message: string;
+  createdBlueprintId: number;
+  createdItemInstanceId: number;
+}
+

@@ -53,6 +53,64 @@ export interface MapHeartbeatRequest {
   onlinePlayers: number;
   uptimeSeconds: number;
   atMs: number;
+  mapMetrics?: MapRuntimeMetricsSnapshot;
+}
+
+export interface MapRuntimeMetricsSnapshot {
+  uptimeSeconds: number;
+  onlinePlayers: number;
+  activeNpcs: number;
+  inactiveNpcs: number;
+  hibernatingNpcs: number;
+  activeProjectiles: number;
+  pendingOfflineSnapshots: number;
+  pilotedReferenceFrames: number;
+  tick: {
+    targetMs: number;
+    lastDurationMs: number;
+    meanDurationMs: number;
+    stddevDurationMs: number;
+    p95DurationMs: number;
+    maxDurationMs: number;
+    worstSpikeOverTargetMs: number;
+    overBudgetPercent: number;
+    effectiveTps: number;
+  };
+  loop: {
+    catchUpLoopCount: number;
+    catchUpStepCount: number;
+    skippedTickResyncCount: number;
+  };
+  net: {
+    connectedPlayers: number;
+    windowSeconds: number;
+    avgInboundBytesPerSecond: number;
+    avgOutboundBytesPerSecond: number;
+    avgInboundMessagesPerSecond: number;
+    avgOutboundMessagesPerSecond: number;
+    p95InboundBytesPerSecond: number;
+    p95OutboundBytesPerSecond: number;
+    p95InboundMessagesPerSecond: number;
+    p95OutboundMessagesPerSecond: number;
+    warningMask: number;
+  };
+  commandIngress: {
+    commandSetsPerSecond: number;
+    inputCommandsPerSecond: number;
+    peakInputCommandsPerPlayerPerSecond: number;
+  };
+  replication: {
+    nearEntities: number;
+    farEntities: number;
+    totalEntities: number;
+    entitiesPerPlayer: number;
+    entitiesPerPlayerWindow: {
+      samples: number;
+      mean: number;
+      p95: number;
+      max: number;
+    };
+  };
 }
 
 export interface GenericOrchestratorResponse {
@@ -61,7 +119,7 @@ export interface GenericOrchestratorResponse {
 }
 
 export interface TransferRequest {
-  accessKey?: string | null;
+  accountKey?: string | null;
   authKey: string | null;
   accountId: number;
   fromMapInstanceId: string;

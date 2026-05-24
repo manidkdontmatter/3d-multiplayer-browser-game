@@ -16,7 +16,7 @@ It is written so a future AI can implement the systems without prior chat contex
 - The global server-list website is a separate app and out of scope here.
 - Joining from the global server list means leaving that website and loading the host's own URL/domain/IP.
 - No traditional account/password login exists.
-- Identity is key-based (`accessKey`); no key means disposable session character.
+- Identity is key-based (`accountKey`); no key means disposable session character.
 - Networking runtime for map simulation remains nengi 2.x patterns only.
 
 ## Terms
@@ -39,7 +39,7 @@ It is written so a future AI can implement the systems without prior chat contex
 #### Orchestrator
 
 - Entry coordination for clients arriving on this host.
-- Resolve identity from `accessKey` (or mark as disposable session).
+- Resolve identity from `accountKey` (or mark as disposable session).
 - Route initial join to default map instance.
 - Supervise map processes (spawn/restart/health registry).
 - Issue, consume, and audit one-time join tickets and transfer tokens.
@@ -106,7 +106,7 @@ Operational rules:
 ### Initial join
 
 1. Browser loads host's game client.
-2. Client submits `accessKey` (if present) to orchestrator bootstrap endpoint.
+2. Client submits `accountKey` (if present) to orchestrator bootstrap endpoint.
 3. Orchestrator resolves saved/default/disposable character state. If no persisted character exists, spawn default human and allow in-world customization later.
 4. Orchestrator returns `JoinTicket` with target default map endpoint + one-time token.
 5. Client connects to that map process via nengi handshake using the ticket/token.
@@ -135,7 +135,7 @@ Operational rules:
 `JoinTicket` should follow the same security posture as transfer tokens and minimally include:
 
 - `joinId`
-- `accessKeyHash` (or disposable session id)
+- `accountKeyHash` (or disposable session id)
 - `characterId` (if persistent)
 - `targetMapId`
 - `issuedAtMs`
@@ -157,7 +157,7 @@ Token intent: authorization + replay protection + handoff integrity.
 Required claims:
 
 - `transferId`
-- `accessKeyHash` (never raw key in logs)
+- `accountKeyHash` (never raw key in logs)
 - `characterId`
 - `fromMapId`
 - `toMapId`
@@ -289,7 +289,7 @@ Minimum `MapConfig` fields:
 - Map processes send snapshot/event updates to orchestrator.
 - Orchestrator maintains latest in-memory state cache.
 - Orchestrator performs periodic checkpoint flushes (default target: every 5 minutes).
-- Disposable sessions (no `accessKey`) are not required to persist on disconnect.
+- Disposable sessions (no `accountKey`) are not required to persist on disconnect.
 
 ### Snapshot contract (map process -> orchestrator)
 
@@ -341,7 +341,7 @@ Minimum `MapConfig` fields:
 - Seed/config generation on client is a rendering/prediction convenience for static world only.
 - Orchestrator is the source of truth for issuing and consuming transfer tokens and map join tickets.
 - Receiving map processes must never self-authorize joins/transfers purely from client-provided data; admission requires orchestrator-issued ticket/token consumption.
-- Avoid exposing raw `accessKey` in logs/telemetry; use redacted/hash form.
+- Avoid exposing raw `accountKey` in logs/telemetry; use redacted/hash form.
 - Internal orchestrator <-> map-process control traffic must use supervised process IPC only.
 - IPC payloads must be schema-validated and accepted only from the direct supervised parent/child relationship.
 

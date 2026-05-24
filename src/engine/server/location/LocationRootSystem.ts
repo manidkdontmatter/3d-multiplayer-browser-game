@@ -13,13 +13,23 @@ import {
   MOVEMENT_MODE_GROUNDED,
   sampleWorldAnchorTransform,
   WORLD_ANCHOR_DEFINITIONS,
-  getWorldAnchorCraftBenchSockets,
+  getWorldAnchorStationSockets,
+  getWorldAnchorStationCreatorProfile,
+  getWorldAnchorStationAllowedTemplateBlueprintIds,
+  getWorldAnchorStationInventorySourcePolicy,
+  getWorldAnchorStationConsumeOrderPolicy,
+  getWorldAnchorStationTierMaxOverride,
+  getWorldAnchorStationActorRequirementPolicy,
   getWorldAnchorPilotConsoleSockets,
+  buildWorldInteractionSocketCandidates,
+  findNearestInteractionSocket,
+  resolveSocketInteractionDistanceSq,
   resolveWorldAnchorAttachmentPoint,
   type WorldAnchorDefinition
 } from "../../shared/index";
 import type { ReferenceFrameVolumeDefinition } from "../../shared/index";
 import type { MovementMode } from "../../shared/index";
+import type { CreatorProfileId } from "../../shared/index";
 
 export interface LocationRootEntity {
   nid: number;
@@ -79,12 +89,19 @@ export interface PilotConsoleInteractionRef {
   volumeId: string;
 }
 
-export interface CraftBenchInteractionRef {
+export interface StationInteractionRef {
   framePid: number;
-  benchId: string;
+  stationId: string;
   interactRadius: number;
   sessionId: string;
+  creatorProfileId: CreatorProfileId;
+  allowedTemplateBlueprintIds: readonly number[];
+  inventorySourcePolicy: "player_only" | "player_and_station";
+  consumeOrderPolicy: "player_first" | "station_first";
+  tierMaxOverride: number | null;
+  actorRequirementPolicy: "enforce" | "ignore";
 }
+
 
 const REFERENCE_FRAME_STICKY_MARGIN = 0.25;
 
@@ -370,9 +387,11 @@ export class LocationRootSystem {
     point: { x: number; y: number; z: number },
     maxDistance: number
   ): PilotConsoleInteractionRef | null {
-    const maxDistanceSq = Math.max(0, maxDistance) * Math.max(0, maxDistance);
-    let best: PilotConsoleInteractionRef | null = null;
-    let bestDistanceSq = Number.POSITIVE_INFINITY;
+    const candidates: Array<{
+      payload: PilotConsoleInteractionRef;
+      socketPoint: { x: number; y: number; z: number };
+      interactRadius: number;
+    }> = [];
     for (const location of this.locationsByPid.values()) {
       if (location.definition.motion === "static") {
         continue;
@@ -381,79 +400,71 @@ export class LocationRootSystem {
       if (sockets.length <= 0) {
         continue;
       }
-      for (const socket of sockets) {
-        const world = resolveWorldAnchorAttachmentPoint(
+      candidates.push(
+        ...buildWorldInteractionSocketCandidates(
           { x: location.x, y: location.y, z: location.z, yaw: location.yaw },
-          { x: socket.localX, y: socket.localY, z: socket.localZ }
-        );
-        const dx = world.x - point.x;
-        const dy = world.y - point.y;
-        const dz = world.z - point.z;
-        const distanceSq = dx * dx + dy * dy + dz * dz;
-        const socketDistance = Math.max(0.25, socket.interactRadius);
-        const allowed = Math.min(maxDistanceSq, socketDistance * socketDistance);
-        if (distanceSq > allowed || distanceSq >= bestDistanceSq) {
-          continue;
-        }
-        const volumeId = this.resolveReferenceFrameVolumeId(location, socket.preferredReferenceFrameVolumeId);
-        if (!volumeId) {
-          continue;
-        }
-        best = {
-          framePid: location.pid,
-          consoleId: socket.id,
-          volumeId
-        };
-        bestDistanceSq = distanceSq;
-      }
+          sockets,
+          (socket) => {
+            const volumeId = this.resolveReferenceFrameVolumeId(location, socket.preferredReferenceFrameVolumeId);
+            if (!volumeId) {
+              return null;
+            }
+            return {
+              framePid: location.pid,
+              consoleId: socket.id,
+              volumeId
+            };
+          }
+        )
+      );
     }
-    return best;
+    const best = findNearestInteractionSocket(point, candidates, { maxDistance, extraSlack: 0 });
+    return best?.payload ?? null;
   }
 
-  public findNearbyCraftBench(
+  public findNearbyStation(
     point: { x: number; y: number; z: number },
     maxDistance: number
-  ): CraftBenchInteractionRef | null {
-    const maxDistanceSq = Math.max(0, maxDistance) * Math.max(0, maxDistance);
-    let best: CraftBenchInteractionRef | null = null;
-    let bestDistanceSq = Number.POSITIVE_INFINITY;
+  ): StationInteractionRef | null {
+    const candidates: Array<{
+      payload: StationInteractionRef;
+      socketPoint: { x: number; y: number; z: number };
+      interactRadius: number;
+    }> = [];
     for (const location of this.locationsByPid.values()) {
-      const sockets = getWorldAnchorCraftBenchSockets(location.definition);
+      const sockets = getWorldAnchorStationSockets(location.definition);
       if (sockets.length <= 0) {
         continue;
       }
-      for (const socket of sockets) {
-        const world = resolveWorldAnchorAttachmentPoint(
+      candidates.push(
+        ...buildWorldInteractionSocketCandidates(
           { x: location.x, y: location.y, z: location.z, yaw: location.yaw },
-          { x: socket.localX, y: socket.localY, z: socket.localZ }
-        );
-        const dx = world.x - point.x;
-        const dy = world.y - point.y;
-        const dz = world.z - point.z;
-        const distanceSq = dx * dx + dy * dy + dz * dz;
-        const socketDistance = Math.max(0.25, socket.interactRadius);
-        const allowed = Math.min(maxDistanceSq, socketDistance * socketDistance);
-        if (distanceSq > allowed || distanceSq >= bestDistanceSq) {
-          continue;
-        }
-        best = {
-          framePid: location.pid,
-          benchId: socket.id,
-          interactRadius: socketDistance,
-          sessionId: this.buildCraftBenchSessionId(location.pid, socket.id)
-        };
-        bestDistanceSq = distanceSq;
-      }
+          sockets,
+          (socket) => ({
+            framePid: location.pid,
+            stationId: socket.id,
+            interactRadius: Math.max(0.25, socket.interactRadius),
+            sessionId: this.buildStationSessionId(location.pid, socket.id),
+            creatorProfileId: getWorldAnchorStationCreatorProfile(socket),
+            allowedTemplateBlueprintIds: getWorldAnchorStationAllowedTemplateBlueprintIds(socket),
+            inventorySourcePolicy: getWorldAnchorStationInventorySourcePolicy(socket),
+            consumeOrderPolicy: getWorldAnchorStationConsumeOrderPolicy(socket),
+            tierMaxOverride: getWorldAnchorStationTierMaxOverride(socket),
+            actorRequirementPolicy: getWorldAnchorStationActorRequirementPolicy(socket)
+          })
+        )
+      );
     }
-    return best;
+    const best = findNearestInteractionSocket(point, candidates, { maxDistance, extraSlack: 0 });
+    return best?.payload ?? null;
   }
 
-  public isPointWithinCraftBenchSession(
+  public isPointWithinStationSession(
     point: { x: number; y: number; z: number },
     sessionId: string,
     extraSlack: number
   ): boolean {
-    const parsed = this.parseCraftBenchSessionId(sessionId);
+    const parsed = this.parseStationSessionId(sessionId);
     if (!parsed) {
       return false;
     }
@@ -461,7 +472,7 @@ export class LocationRootSystem {
     if (!location) {
       return false;
     }
-    const socket = getWorldAnchorCraftBenchSockets(location.definition).find((entry) => entry.id === parsed.benchId);
+    const socket = getWorldAnchorStationSockets(location.definition).find((entry) => entry.id === parsed.stationId);
     if (!socket) {
       return false;
     }
@@ -469,22 +480,51 @@ export class LocationRootSystem {
       { x: location.x, y: location.y, z: location.z, yaw: location.yaw },
       { x: socket.localX, y: socket.localY, z: socket.localZ }
     );
-    const dx = world.x - point.x;
-    const dy = world.y - point.y;
-    const dz = world.z - point.z;
-    const maxDistance = Math.max(0.5, Math.max(0.25, socket.interactRadius) + Math.max(0, extraSlack));
-    return dx * dx + dy * dy + dz * dz <= maxDistance * maxDistance;
+    return resolveSocketInteractionDistanceSq(
+      point,
+      world,
+      socket.interactRadius,
+      extraSlack,
+      Math.max(0.5, Math.max(0.25, socket.interactRadius) + Math.max(0, extraSlack))
+    ) !== null;
   }
 
-  public getMaxCraftBenchInteractRadius(extraSlack: number): number {
+  public getMaxStationInteractRadius(extraSlack: number): number {
     let max = 0;
     for (const location of this.locationsByPid.values()) {
-      const sockets = getWorldAnchorCraftBenchSockets(location.definition);
+      const sockets = getWorldAnchorStationSockets(location.definition);
       for (const socket of sockets) {
         max = Math.max(max, Math.max(0.25, socket.interactRadius) + Math.max(0, extraSlack));
       }
     }
     return max;
+  }
+
+  public getStationBySessionId(sessionId: string): StationInteractionRef | null {
+    const parsed = this.parseStationSessionId(sessionId);
+    if (!parsed) {
+      return null;
+    }
+    const location = this.locationsByPid.get(parsed.framePid);
+    if (!location) {
+      return null;
+    }
+    const socket = getWorldAnchorStationSockets(location.definition).find((entry) => entry.id === parsed.stationId);
+    if (!socket) {
+      return null;
+    }
+    return {
+      framePid: location.pid,
+      stationId: socket.id,
+      interactRadius: Math.max(0.25, socket.interactRadius),
+      sessionId: this.buildStationSessionId(location.pid, socket.id),
+      creatorProfileId: getWorldAnchorStationCreatorProfile(socket),
+      allowedTemplateBlueprintIds: getWorldAnchorStationAllowedTemplateBlueprintIds(socket),
+      inventorySourcePolicy: getWorldAnchorStationInventorySourcePolicy(socket),
+      consumeOrderPolicy: getWorldAnchorStationConsumeOrderPolicy(socket),
+      tierMaxOverride: getWorldAnchorStationTierMaxOverride(socket),
+      actorRequirementPolicy: getWorldAnchorStationActorRequirementPolicy(socket)
+    };
   }
 
   private resolveReferenceFrameVolumeId(location: LocationRootEntity, preferredVolumeId?: string): string | null {
@@ -526,22 +566,23 @@ export class LocationRootSystem {
     return hasReferenceFrameVolumesContainingPoint(getWorldAnchorReferenceFrameVolumes(location.definition), current, point, margin);
   }
 
-  private buildCraftBenchSessionId(framePid: number, benchId: string): string {
-    return `${framePid}:${benchId}`;
+  private buildStationSessionId(framePid: number, stationId: string): string {
+    return `${framePid}:${stationId}`;
   }
 
-  private parseCraftBenchSessionId(sessionId: string): { framePid: number; benchId: string } | null {
+  private parseStationSessionId(sessionId: string): { framePid: number; stationId: string } | null {
     const pivot = sessionId.indexOf(":");
     if (pivot <= 0 || pivot >= sessionId.length - 1) {
       return null;
     }
     const framePid = Math.floor(Number(sessionId.slice(0, pivot)));
-    const benchId = sessionId.slice(pivot + 1);
-    if (!Number.isFinite(framePid) || framePid <= 0 || benchId.length <= 0) {
+    const stationId = sessionId.slice(pivot + 1);
+    if (!Number.isFinite(framePid) || framePid <= 0 || stationId.length <= 0) {
       return null;
     }
-    return { framePid, benchId };
+    return { framePid, stationId };
   }
+
 }
 
 function yawToQuaternion(yaw: number): { x: number; y: number; z: number; w: number } {

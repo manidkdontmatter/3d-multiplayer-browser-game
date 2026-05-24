@@ -32,6 +32,8 @@ interface MapProcessSupervisorOptions {
 export class MapProcessSupervisor {
   private readonly managed = new Map<string, ManagedMapProcess>();
   private readonly restartHistory = new Map<string, number[]>();
+  private readonly restartCountByInstance = new Map<string, number>();
+  private readonly lastExitAtMsByInstance = new Map<string, number>();
   private readonly quarantineUntilByInstance = new Map<string, number>();
   private readonly restartWindowMs: number;
   private readonly restartMaxInWindow: number;
@@ -95,6 +97,15 @@ export class MapProcessSupervisor {
     return typeof until === "number" ? until : null;
   }
 
+  public getRestartCount(instanceId: string): number {
+    return this.restartCountByInstance.get(instanceId) ?? 0;
+  }
+
+  public getLastExitAtMs(instanceId: string): number | null {
+    const value = this.lastExitAtMsByInstance.get(instanceId);
+    return typeof value === "number" ? value : null;
+  }
+
   private spawnMapProcess(spec: MapProcessSpec): boolean {
     const now = Date.now();
     const quarantineUntil = this.quarantineUntilByInstance.get(spec.instanceId) ?? 0;
@@ -141,6 +152,8 @@ export class MapProcessSupervisor {
     });
     child.on("exit", (code, signal) => {
       this.managed.delete(spec.instanceId);
+      this.lastExitAtMsByInstance.set(spec.instanceId, Date.now());
+      this.restartCountByInstance.set(spec.instanceId, (this.restartCountByInstance.get(spec.instanceId) ?? 0) + 1);
       this.onMapProcessExit?.(spec.instanceId);
       console.error(
         `[orchestrator] map process exited instance=${spec.instanceId} code=${code ?? "null"} signal=${signal ?? "null"}`
