@@ -69,6 +69,18 @@ export interface ProjectileState {
   x: number;
   y: number;
   z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  patternSeed: number;
+  patternKind: number;
+  patternSpiralFrequencyHz: number;
+  patternSpiralStrength: number;
+  baseDirX: number;
+  baseDirY: number;
+  baseDirZ: number;
+  ttlSeconds: number;
+  initialTtlSeconds: number;
 }
 
 export interface WorldEntityState {

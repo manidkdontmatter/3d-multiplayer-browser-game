@@ -25,17 +25,19 @@ import {
   getBlueprintDefinitionsForProfile,
   getBlueprintRuntimeActivationSpecsByBlueprintId,
   resolveReadyAppearanceRuntimeBinding,
-  resolveWorldInteractionActionBySlot,
-  worldInteractionSlotToKeyLabel,
+  INTERACTION_SLOT_PRIMARY,
   upsertBlueprintRuntimeCapabilityEntry,
+  type WorldInteractionActionId,
+  type WorldInteractionActivateIntent,
+  type WorldInteractionPromptViewState,
+  type WorldInteractionTargetDescriptor,
   type RuntimeActivationSpec,
   cloneBlueprintDefinition,
   sanitizeMovementMode,
   type BlueprintAccessTag,
   type BlueprintDefinition,
   type CreatorProfileId,
-  type InventorySnapshot, type MovementMode, type PlayerSettings, SERVER_TICK_SECONDS
-  , INVENTORY_OP_PICKUP, type EquipmentSlot
+  type InventorySnapshot, type MovementMode, type PlayerSettings, SERVER_TICK_SECONDS, type EquipmentSlot
 } from "../shared/index";
 import type { AbilityDefinition } from "../shared/index";
 import { sortedUniqueContains } from "../shared/sortedNumberList";
@@ -52,10 +54,12 @@ import { PersistenceService, type PlayerSnapshot } from "./persistence/Persisten
 import { MapProcessIpcChannel } from "./ipc/MapProcessIpcChannel";
 import { PersistenceSyncSystem } from "./persistence/PersistenceSyncSystem";
 import { DamageSystem } from "./combat/damage/DamageSystem";
+import { DeathLifecycleSystem, type DeathPolicyId } from "./combat/death/DeathLifecycleSystem";
 import { AbilityExecutionSystem } from "./combat/abilities/AbilityExecutionSystem";
 import { ActionEffectPipeline } from "./combat/actions/ActionEffectPipeline";
 import { MeleeCombatSystem } from "./combat/melee/MeleeCombatSystem";
 import { ProjectileSystem } from "./combat/projectiles/ProjectileSystem";
+import { AttackRuntimeSystem } from "./combat/attack/AttackRuntimeSystem";
 import { InputSystem } from "./input/InputSystem";
 import { PlayerLifecycleSystem, type PlayerSpawnContext } from "./lifecycle/PlayerLifecycleSystem";
 import { LocationRootSystem, type LocationFrameActor } from "./location/LocationRootSystem";
@@ -83,10 +87,13 @@ import {
   type PlayerSpawnedPayload,
   type PlayerDespawnedPayload,
   type DamageDealtPayload,
+  type DamagePacketAppliedPayload,
   type HealthChangedPayload,
   type AbilityUsedPayload,
   type ItemEquippedPayload,
-  type ItemUnequippedPayload
+  type ItemUnequippedPayload,
+  type DeathPolicyStartedPayload,
+  type DeathPolicyCompletedPayload
 } from "./events/GameEvents";
 import { StatusEffectSystem } from "./combat/status/StatusEffectSystem";
 import {
@@ -153,6 +160,10 @@ type InventoryWireCommand = {
   activationChannel?: number;
   payloadKind?: number;
 };
+type ResolvedInteractionTarget =
+  | { targetId: string; actionId: WorldInteractionActionId; targetType: "pickup"; pickupNid: number; descriptor: WorldInteractionTargetDescriptor }
+  | { targetId: string; actionId: WorldInteractionActionId; targetType: "station"; stationSessionId: string; descriptor: WorldInteractionTargetDescriptor }
+  | { targetId: string; actionId: WorldInteractionActionId; targetType: "pilot_console"; framePid: number; volumeId: string; descriptor: WorldInteractionTargetDescriptor };
 const PORTAL_TRANSFER_ZONES: readonly PortalTransferZone[] = Object.freeze([
   { sourceMapInstanceId: "map-a", targetMapInstanceId: "map-b", centerX: 12, centerY: 34, centerZ: 0, sensorRadius: 2.2 },
   { sourceMapInstanceId: "map-b", targetMapInstanceId: "map-a", centerX: 0, centerY: 4, centerZ: 0, sensorRadius: 2.2 }
@@ -187,8 +198,10 @@ export class GameSimulation {
   private readonly persistenceSyncSystem = new PersistenceSyncSystem();
   private readonly worldContentCoordinator: WorldContentCoordinator;
   private readonly damageSystem: DamageSystem;
+  private readonly deathLifecycleSystem: DeathLifecycleSystem;
   private readonly meleeCombatSystem: MeleeCombatSystem;
   private readonly abilityExecutionSystem: AbilityExecutionSystem;
+  private readonly attackRuntimeSystem: AttackRuntimeSystem;
   private readonly actionEffectPipeline: ActionEffectPipeline;
   private readonly projectileSystem: ProjectileSystem;
   private readonly inputSystem: InputSystem;
@@ -290,30 +303,10 @@ export class GameSimulation {
           z
         });
       },
-      spawnProjectile: (req) => this.spawnProjectile(req),
-      applyMeleeHit: (req) => {
-        const body = this.simulationEcs.getPlayerBody(req.attackerEid);
-        const collider = this.simulationEcs.getPlayerCollider(req.attackerEid);
-        if (!body || !collider) return;
-        this.meleeCombatSystem.tryApplyMeleeHit({
-          nid: c.NetworkId.value[req.attackerEid] ?? 0,
-          yaw: c.Yaw.value[req.attackerEid] ?? 0,
-          pitch: c.Pitch.value[req.attackerEid] ?? 0,
-          body,
-          collider
-        }, {
-          damage: req.damage,
-          range: req.range,
-          radius: req.radius,
-          cooldownSeconds: 0,
-          arcDegrees: req.arcDegrees
-        });
-      },
       restoreHealth: (userId, amount) => {
         const state = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
         if (!state) return false;
-        const nextHealth = Math.min(state.maxHealth, state.health + Math.max(0, Math.floor(amount)));
-        return this.simulationEcs.setPlayerHealthByUserId(userId, nextHealth);
+        return this.damageSystem.applyHealingByEid(state.eid, amount);
       },
       equipItemInstance: (userId, itemInstanceId) => this.itemInventorySystem?.applyEquipEffectByUserId(userId, itemInstanceId) ?? false,
       unequipSlot: (userId, slot) => this.itemInventorySystem?.applyUnequipEffectByUserId(userId, slot) ?? false,
@@ -500,7 +493,15 @@ export class GameSimulation {
         if (typeof eid !== "number") {
           return false;
         }
-        return this.abilityExecutionSystem.tryUseAbilityByIdByEid(eid, abilityId);
+        return this.abilityExecutionSystem.tryUseKnownAbilityByIdByEid(eid, abilityId);
+      },
+      canAssignHotbarAbility: (userId, abilityId) => {
+        const eid = this.simulationEcs.getPlayerEidByUserId(userId);
+        if (typeof eid !== "number") {
+          return false;
+        }
+        const unlocked = this.simulationEcs.world.components.UnlockedAbilityIds.value[eid] ?? [];
+        return this.getAbilityDefinitionForUnlockedList(unlocked, abilityId) !== null;
       },
       applyEntityRenderAppearanceByEid: (eid, patch) => {
         return this.applyRuntimeAppearancePatchByEid(eid, patch);
@@ -588,17 +589,74 @@ export class GameSimulation {
 
     // ── Damage ────────────────────────────────────────────────────────────
     this.damageSystem = new DamageSystem({
-      maxPlayerHealth: this.archetypes.player.maxHealth,
-      playerBodyCenterHeight: PLAYER_BODY_CENTER_HEIGHT,
-      playerCameraOffsetY: PLAYER_CAMERA_OFFSET_Y,
-      getSpawnPosition: () => this.getSpawnPosition(),
-      getSpawnBodyY: (x, z) => this.getSpawnBodyY(x, z),
       markCharacterDirtyByAccountId: (accountId, options) => this.persistenceSyncSystem.markAccountDirty(accountId, options),
-      getCharacterStateByEid: (eid) => this.simulationEcs.getCharacterDamageStateByEid(eid),
-      applyCharacterStateByEid: (eid, state) => this.simulationEcs.applyCharacterDamageStateByEid(eid, state),
-      getDummyStateByEid: (eid) => this.simulationEcs.getDummyDamageStateByEid(eid),
-      applyDummyStateByEid: (eid, state) => this.simulationEcs.applyDummyDamageStateByEid(eid, state),
+      getDamageableStateByEid: (eid) => this.simulationEcs.getDamageableStateByEid(eid),
+      applyDamageableStateByEid: (eid, state) => this.simulationEcs.applyDamageableStateByEid(eid, state),
+      onZeroHealth: (eid, accountId) => this.deathLifecycleSystem.handleZeroHealth({ eid, accountId }),
       events: this.events
+    });
+
+    this.deathLifecycleSystem = new DeathLifecycleSystem({
+      resolvePolicyByEid: (eid): DeathPolicyId => {
+        if (this.simulationEcs.isPlayerEntity(eid)) return "player_respawn_immediate";
+        if (this.simulationEcs.isNpcEntity(eid)) return "npc_respawn_delay";
+        return "reset_health";
+      },
+      handlePlayerRespawnImmediate: (eid, context) => {
+        const character = this.simulationEcs.getCharacterDamageStateByEid(eid);
+        if (!character) {
+          return;
+        }
+        const spawn = this.getSpawnPosition();
+        const spawnBodyY = this.getSpawnBodyY(spawn.x, spawn.z);
+        character.body.setTranslation({ x: spawn.x, y: spawnBodyY, z: spawn.z }, true);
+        character.vx = 0;
+        character.vy = 0;
+        character.vz = 0;
+        character.grounded = true;
+        character.movementMode = MOVEMENT_MODE_GROUNDED;
+        character.groundedPlatformPid = null;
+        character.carriedFramePid = null;
+        character.health = this.archetypes.player.maxHealth;
+        character.maxHealth = this.archetypes.player.maxHealth;
+        character.x = spawn.x;
+        character.y = spawnBodyY + PLAYER_CAMERA_OFFSET_Y;
+        character.z = spawn.z;
+        this.simulationEcs.applyCharacterDamageStateByEid(eid, character);
+        this.resetCombatExecutionStateByEid(eid);
+        if (context.accountId > 0) {
+          this.persistenceSyncSystem.markAccountDirty(context.accountId, {
+            dirtyCharacter: true,
+            dirtyAbilityState: false
+          });
+        }
+      },
+      handleNpcRespawnDelay: (eid, _context, delaySeconds) => {
+        this.resetCombatExecutionStateByEid(eid);
+        const queued = this.npcAiSystem.queueRespawnForNpcEid(eid, this.elapsedSeconds, delaySeconds);
+        if (!queued) {
+          this.deathLifecycleSystem.completeDelayedPolicyByEid(eid);
+        }
+      },
+      handleResetHealth: (eid) => {
+        this.damageSystem.restoreHealthToMaxByEid(eid);
+        this.resetCombatExecutionStateByEid(eid);
+      },
+      npcRespawnDelaySeconds: 30,
+      onPolicyStarted: (context, policyId) => {
+        this.events.emit<DeathPolicyStartedPayload>(GameEvent.DEATH_POLICY_STARTED, {
+          eid: context.eid,
+          accountId: context.accountId,
+          policyId
+        });
+      },
+      onPolicyCompleted: (context, policyId) => {
+        this.events.emit<DeathPolicyCompletedPayload>(GameEvent.DEATH_POLICY_COMPLETED, {
+          eid: context.eid,
+          accountId: context.accountId,
+          policyId
+        });
+      }
     });
 
     // ── World content ─────────────────────────────────────────────────────
@@ -622,32 +680,134 @@ export class GameSimulation {
     this.projectileSystem = new ProjectileSystem({
       world: this.world,
       ecsWorld: this.simulationEcs.world,
-      getOwnerColliderByNid: (ownerNid) => this.simulationEcs.getCharacterColliderByNid(ownerNid),
-      resolveTargetByColliderHandle: (h) => this.damageSystem.resolveTargetByColliderHandle(h),
-      applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage),
+      spiralFrequencyScale: this.resolveClampedEnvNumber("PROJECTILE_SPIRAL_FREQUENCY_SCALE", 0.1, 0, 10),
+      getOwnerColliderByEid: (ownerEid) => this.simulationEcs.resolveCombatTargetRuntimeByEid(ownerEid)?.collider,
+      resolveTargetEidByColliderHandle: (h) => this.damageSystem.resolveTargetEidByColliderHandle(h),
+      shouldProjectileHitTarget: (ownerEid, targetEid, projectileEid) => {
+        const c = this.simulationEcs.world.components;
+        const allowSelf = (c.ProjectileTargetAllowSelf.value[projectileEid] ?? 0) !== 0;
+        const allowPlayers = (c.ProjectileTargetAllowPlayers.value[projectileEid] ?? 0) !== 0;
+        const allowNpcs = (c.ProjectileTargetAllowNpcs.value[projectileEid] ?? 0) !== 0;
+        const allowDummies = (c.ProjectileTargetAllowDummies.value[projectileEid] ?? 0) !== 0;
+        if (!allowSelf && typeof ownerEid === "number" && ownerEid === targetEid) {
+          return false;
+        }
+        if (this.simulationEcs.isDummyEntity(targetEid)) {
+          return allowDummies;
+        }
+        if (this.simulationEcs.isNpcEntity(targetEid)) {
+          return allowNpcs;
+        }
+        if (this.simulationEcs.isPlayerEntity(targetEid)) {
+          return allowPlayers;
+        }
+        // Unknown classified targets are still valid damageables if they reached this path.
+        return true;
+      },
+      applyDamage: (sourceEid, targetEid, damage) => this.damageSystem.applyProjectileDamageByEid(targetEid, damage, sourceEid ?? null),
       despawnProjectile: (eid) => { this.replication.despawnEntity(eid); this.simulationEcs.destroyEid(eid); }
     });
 
     // ── Melee ─────────────────────────────────────────────────────────────
     this.meleeCombatSystem = new MeleeCombatSystem({
       world: this.world,
-      playerCapsuleRadius: PLAYER_CAPSULE_RADIUS, playerCapsuleHalfHeight: PLAYER_CAPSULE_HALF_HEIGHT,
-      dummyRadius: this.archetypes.trainingDummy.capsuleRadius,
-      dummyHalfHeight: this.archetypes.trainingDummy.capsuleHalfHeight,
-      getTargets: () => this.damageSystem.getTargets(),
-      resolveTargetRuntime: (t) => this.simulationEcs.resolveCombatTargetRuntime(t),
-      applyDamage: (target, damage) => this.damageSystem.applyDamage(target, damage)
+      forEachTarget: (visitor) => this.damageSystem.forEachTarget(visitor),
+      resolveTargetRuntime: (targetEid) => this.simulationEcs.resolveCombatTargetRuntimeByEid(targetEid),
+      resolveAttackerCollisionRadius: (attacker) => {
+        const runtimeBounds = this.simulationEcs.resolveCombatCollisionBoundsByEid(attacker.eid);
+        if (runtimeBounds) {
+          return runtimeBounds.radius;
+        }
+        if (this.simulationEcs.isDummyEntity(attacker.eid)) {
+          return this.archetypes.trainingDummy.capsuleRadius;
+        }
+        return PLAYER_CAPSULE_RADIUS;
+      },
+      resolveTargetCollisionBounds: (targetEid) => {
+        const runtimeBounds = this.simulationEcs.resolveCombatCollisionBoundsByEid(targetEid);
+        if (runtimeBounds) {
+          return runtimeBounds;
+        }
+        if (this.simulationEcs.isDummyEntity(targetEid)) {
+          return {
+            radius: this.archetypes.trainingDummy.capsuleRadius,
+            halfHeight: this.archetypes.trainingDummy.capsuleHalfHeight
+          };
+        }
+        return {
+          radius: PLAYER_CAPSULE_RADIUS,
+          halfHeight: PLAYER_CAPSULE_HALF_HEIGHT
+        };
+      },
+      shouldMeleeHitTarget: (attacker, targetEid, meleeProfile) => {
+        const policy = meleeProfile.targetPolicy;
+        const allowSelf = policy?.allowSelf === true;
+        const allowPlayers = policy?.allowPlayers !== false;
+        const allowNpcs = policy?.allowNpcs !== false;
+        const allowDummies = policy?.allowDummies !== false;
+        if (!allowSelf && attacker.eid === targetEid) {
+          return false;
+        }
+        if (this.simulationEcs.isDummyEntity(targetEid)) {
+          return allowDummies;
+        }
+        if (this.simulationEcs.isNpcEntity(targetEid)) {
+          return allowNpcs;
+        }
+        if (this.simulationEcs.isPlayerEntity(targetEid)) {
+          return allowPlayers;
+        }
+        // Unknown classified targets are still valid damageables if they reached this path.
+        return true;
+      },
+      applyDamage: (attacker, targetEid, damage) => this.damageSystem.applyMeleeDamageByEid(targetEid, damage, attacker.eid)
+    });
+
+    this.attackRuntimeSystem = new AttackRuntimeSystem({
+      worldSeed: this.resolveCombatWorldSeed(mapInstanceId),
+      resolveCanonicalAttackerEid: (attackerEid) =>
+        this.simulationEcs.resolveCombatOwnerIdentityByEid(attackerEid)?.eid ?? null,
+      executeProjectile: (request) => this.spawnProjectile(request),
+      executeMeleeHit: (request) => {
+        const attackerIdentity = this.simulationEcs.resolveCombatOwnerIdentityByEid(request.attackerEid);
+        if (!attackerIdentity) {
+          return;
+        }
+        const attackerRuntime = this.simulationEcs.resolveCombatTargetRuntimeByEid(attackerIdentity.eid);
+        if (!attackerRuntime) {
+          return;
+        }
+        this.meleeCombatSystem.tryApplyMeleeHit(
+          {
+            eid: attackerIdentity.eid,
+            yaw: c.Yaw.value[attackerIdentity.eid] ?? 0,
+            pitch: c.Pitch.value[attackerIdentity.eid] ?? 0,
+            body: attackerRuntime.body,
+            collider: attackerRuntime.collider
+          },
+          {
+            damage: request.damage,
+            range: request.range,
+            radius: request.radius,
+            cooldownSeconds: 0,
+            arcDegrees: request.arcDegrees
+          }
+        );
+      }
     });
 
     // ── Abilities ─────────────────────────────────────────────────────────
-    const simEcs = this.simulationEcs;
     this.abilityExecutionSystem = new AbilityExecutionSystem({
       getElapsedSeconds: () => this.elapsedSeconds,
+      getServerTick: () => this.tickNumber,
       resolveAbilityById: (unlockedAbilityIds, abilityId) => this.getAbilityDefinitionForUnlockedList(unlockedAbilityIds, abilityId),
+      resolveKnownAbilityById: (abilityId) => this.resolveAbilityDefinitionById(abilityId),
       resolveAbilityActivationSpec: (abilityId) =>
         getBlueprintRuntimeActivationSpecsByBlueprintId(abilityId).find((entry) => entry.source === "ability") ?? null,
+      resolveUserIdByEid: (eid) => this.simulationEcs.getPlayerUserIdByEid(eid) ?? null,
       ecsComponents: c,
-      effectPipeline: this.actionEffectPipeline
+      effectPipeline: this.actionEffectPipeline,
+      attackRuntime: this.attackRuntimeSystem
     });
 
     // ── Input ─────────────────────────────────────────────────────────────
@@ -817,6 +977,16 @@ export class GameSimulation {
       }
     });
 
+    this.events.on<DamagePacketAppliedPayload>(GameEvent.DAMAGE_PACKET_APPLIED, (payload) => {
+      const targetAccountId = this.simulationEcs.world.components.AccountId.value[payload.targetEid];
+      if (typeof targetAccountId === "number" && targetAccountId > 0) {
+        this.persistenceSyncSystem.markAccountDirty(targetAccountId, {
+          dirtyCharacter: true,
+          dirtyAbilityState: false
+        });
+      }
+    });
+
     this.events.on<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, (payload) => {
       const accountId = this.simulationEcs.world.components.AccountId.value[payload.eid];
       if (typeof accountId === "number" && accountId > 0) {
@@ -824,8 +994,30 @@ export class GameSimulation {
       }
     });
 
+    this.events.on<DeathPolicyStartedPayload>(GameEvent.DEATH_POLICY_STARTED, (payload) => {
+      if (payload.policyId === "player_respawn_immediate") {
+        const userId = this.simulationEcs.getPlayerUserIdByEid(payload.eid);
+        if (typeof userId === "number") {
+          this.queueServerAlertForUser(userId, "You died.", "warning");
+        }
+      }
+    });
+
+    this.events.on<DeathPolicyCompletedPayload>(GameEvent.DEATH_POLICY_COMPLETED, (payload) => {
+      if (payload.policyId === "player_respawn_immediate") {
+        const userId = this.simulationEcs.getPlayerUserIdByEid(payload.eid);
+        if (typeof userId === "number") {
+          this.queueServerAlertForUser(userId, "Respawned.", "info");
+        }
+      }
+    });
+
     // ── Status effects ────────────────────────────────────────────────────
-    this.statusEffects = new StatusEffectSystem(c, this.events);
+    this.statusEffects = new StatusEffectSystem(
+      this.events,
+      (targetEid, damage, sourceEid) => this.damageSystem.applyStatusDamageByEid(targetEid, damage, sourceEid),
+      (targetEid, heal) => this.damageSystem.applyHealingByEid(targetEid, heal)
+    );
     this.statusEffects.registerDefinition({
       id: "burning", key: "burning", name: "Burning", description: "Taking fire damage over time.",
       durationMs: 3000, tickIntervalMs: 500, maxStacks: 5, stackPolicy: "stack_add",
@@ -863,14 +1055,19 @@ export class GameSimulation {
       spawns: this.archetypes.npcSpawns,
       controllerKindAi: CONTROLLER_KIND_AI,
       onNpcSpawned: (eid, colliderHandle) => {
+        this.resetCombatExecutionStateByEid(eid);
         this.controllerSystem.attachAiController(eid);
-        this.damageSystem.registerCharacterCollider(colliderHandle, eid);
+        this.damageSystem.registerCollider(colliderHandle, eid);
       },
       hasPerceptionTargets: () => this.aiPerceptionTargetByColliderHandle.size > 0,
       resolvePerceptionTargetByColliderHandle: (h) => this.aiPerceptionTargetByColliderHandle.get(h) ?? null,
       usePrimaryAbilityByEid: (eid) => this.abilityExecutionSystem.tryUsePrimaryMouseAbilityByEid(eid),
       applyEntityAppearanceByEid: (eid, patch) =>
         this.appearanceSystem.applyAppearancePatch(eid, "npc_behavior", patch),
+      onNpcRespawned: (eid) => {
+        this.resetCombatExecutionStateByEid(eid);
+        this.deathLifecycleSystem.completeDelayedPolicyByEid(eid);
+      },
       aiTickIntervalSeconds: this.resolvePositiveEnvNumber("NPC_AI_TICK_INTERVAL", 0.2),
       perceptionTickIntervalSeconds: this.resolvePositiveEnvNumber("NPC_PERCEPTION_TICK_INTERVAL", 0.25),
       pathReplanIntervalSeconds: this.resolvePositiveEnvNumber("NPC_PATH_REPLAN_INTERVAL", 0.75),
@@ -898,7 +1095,7 @@ export class GameSimulation {
         modelId: this.archetypes.trainingDummy.modelId
       },
       resolveDummyEid: (dummy) => this.dummyEidByObject.get(dummy) ?? -1,
-      registerDummyCollider: (ch, eid) => this.damageSystem.registerDummyCollider(ch, eid)
+      registerDummyCollider: (ch, eid) => this.damageSystem.registerCollider(ch, eid)
     });
     this.locationRootSystem.initializeLocations();
     this.itemInventorySystem.initializeWorldItems();
@@ -1048,6 +1245,35 @@ export class GameSimulation {
         message: result.ok ? "" : result.reason,
         resultJson: JSON.stringify({
           action: result.action,
+          reason: result.reason
+        })
+      });
+      return;
+    }
+    if (viewType === "world_interaction") {
+      const activateIntent = this.parseWorldInteractionActivateIntent(intent);
+      if (!activateIntent) {
+        user.queueMessage({
+          ntype: NType.UiIntentResultMessage,
+          viewId,
+          sequence,
+          ok: false,
+          message: "UI intent rejected: invalid interaction activate payload.",
+          resultJson: "{}"
+        });
+        return;
+      }
+      const result = this.executeWorldInteractionIntent(user.id, activateIntent);
+      user.queueMessage({
+        ntype: NType.UiIntentResultMessage,
+        viewId,
+        sequence,
+        ok: result.ok,
+        message: result.ok ? "" : result.reason,
+        resultJson: JSON.stringify({
+          targetId: activateIntent.targetId,
+          actionId: activateIntent.actionId,
+          slot: activateIntent.slot,
           reason: result.reason
         })
       });
@@ -1280,28 +1506,37 @@ export class GameSimulation {
     rawItemInstanceId: number | undefined,
     rawName: string | undefined
   ): void {
+    const reportFailure = (message: string): void => {
+      this.creatorSystem.overrideSessionStatus(user.id, message);
+      const failedState = this.creatorSystem.synchronizeSessionAvailability(user.id);
+      if (failedState) {
+        this.publishCreatorStateForUser(user, failedState);
+      }
+      this.queueCreatorActionResultForUser(user, false, message);
+    };
     const itemInstanceId = typeof rawItemInstanceId === "number" ? Math.max(0, Math.floor(rawItemInstanceId)) : 0;
     if (itemInstanceId <= 0) {
-      this.queueCreatorActionResultForUser(user, false, "Blueprint fork failed: invalid item instance.");
+      reportFailure("Blueprint fork failed: invalid item instance.");
       return;
     }
     const inventoryItem = this.itemInventorySystem.getInventoryItemInstanceForUser(user.id, itemInstanceId);
     if (!inventoryItem) {
-      this.queueCreatorActionResultForUser(user, false, "Blueprint fork failed: item not found in inventory.");
+      reportFailure("Blueprint fork failed: item not found in inventory.");
       return;
     }
     const sourceBlueprint = this.creatorSystem.resolveBlueprintDefinitionById(inventoryItem.definitionId);
     if (!sourceBlueprint) {
-      this.queueCreatorActionResultForUser(user, false, "Blueprint fork failed: source blueprint missing.");
+      reportFailure("Blueprint fork failed: source blueprint missing.");
       return;
     }
     const nextName = typeof rawName === "string" && rawName.trim().length > 0
       ? rawName.trim()
       : `${sourceBlueprint.name} Copy`;
+    const derivedProfileId = this.resolveCreatorProfileForDerivedBlueprint(sourceBlueprint);
     const createdBlueprint = this.creatorSystem.createDerivedBlueprintFromExisting({
       sourceBlueprint,
       name: nextName,
-      authoredViaProfile: "item_creator",
+      authoredViaProfile: derivedProfileId,
       derivedFromInstanceId: inventoryItem.itemInstanceId
     });
     const createdAbility = buildAbilityDefinitionFromBlueprint(createdBlueprint);
@@ -1311,12 +1546,15 @@ export class GameSimulation {
       ability: createdAbility,
       item: createdItem,
       platform: null,
-      activations: getBlueprintRuntimeActivationSpecsByBlueprintId(sourceBlueprint.id)
+      activations: this.cloneRuntimeActivationSpecs(getBlueprintRuntimeActivationSpecsByBlueprintId(sourceBlueprint.id))
     };
     const persistedBlueprint = this.withBlueprintProvenance(createdBlueprint, accountId, user.id);
     runtimeCapabilityEntry.blueprintId = persistedBlueprint.id;
     upsertBlueprintRuntimeCapabilityEntry(runtimeCapabilityEntry);
-    const grantedAccessTags = this.resolveGrantedAccessTagsForAuthoring(accountId, ["item.craft", "blueprint.template"]);
+    const grantedAccessTags = this.resolveGrantedAccessTagsForAuthoring(
+      accountId,
+      creatorProfileIdToGrantedAccessTags(derivedProfileId)
+    );
     const globalGrantedAccessTags = this.resolveGlobalGrantedAccessTagsForAuthoring(accountId, grantedAccessTags);
     this.persistence.saveBlueprintAndGrantAccess({
       blueprint: persistedBlueprint,
@@ -1327,6 +1565,16 @@ export class GameSimulation {
     });
     for (const accessTag of grantedAccessTags) {
       this.creatorSystem.grantBlueprintAccess(accountId, accessTag, createdBlueprint.id);
+    }
+    if (createdAbility) {
+      const unlockedAbilityIds = this.creatorSystem.getAccessibleBlueprintIds(accountId, "ability.use") ?? [];
+      this.simulationEcs.setPlayerUnlockedAbilityIdsByUserId(user.id, unlockedAbilityIds);
+      this.replication.queueAbilityDefinitionMessage(user, createdAbility);
+      const refreshed = this.simulationEcs.getPlayerAbilityStateByUserId(user.id);
+      if (refreshed) {
+        this.replication.queueAbilityOwnershipMessage(user, refreshed.unlockedAbilityIds);
+        this.replication.queueAbilityStateMessageFromSnapshot(user, refreshed);
+      }
     }
     const snap = this.creatorSystem.synchronizeSessionAvailability(user.id);
     if (snap) {
@@ -1346,12 +1594,6 @@ export class GameSimulation {
       return { ok: false, action: 0, reason: "player_missing" };
     }
     const action = typeof command.action === "number" ? Math.floor(command.action) : 0;
-    const pickupNid = typeof command.pickupNid === "number" ? Math.floor(command.pickupNid) : 0;
-    const interactSlot = typeof command.payloadKind === "number" ? Math.max(0, Math.floor(command.payloadKind)) : 0;
-    if (action === INVENTORY_OP_PICKUP && pickupNid <= 0) {
-      this.applyWorldInteractIntent(user.id, interactSlot);
-      return { ok: true, action, reason: "ok" };
-    }
     return this.itemInventorySystem.applyCommand(user.id, command);
   }
 
@@ -1419,134 +1661,255 @@ export class GameSimulation {
     this.tickAiIntentPhase();
     this.tickAbilityIntentPhase();
     this.tickMovementPhase(delta);
+    this.tickInteractionViewPhase();
     this.tickPortalTransferPhase();
     this.tickCombatPhase(delta);
     this.tickReplicationPhase();
     this.tickPhysicsFinalizePhase();
   }
 
-  private applyWorldInteractIntent(userId: number, interactSlot = 0): void {
-    const normalizedInteractSlot = Number.isFinite(interactSlot) ? Math.max(0, Math.floor(interactSlot)) : 0;
-    const stationInteraction = this.tryBeginNearbyStationSession(userId);
-    if (stationInteraction) {
-      const action = resolveWorldInteractionActionBySlot("station", normalizedInteractSlot);
-      if (!action) {
-        this.queueServerAlertForUser(
-          userId,
-          `Station does not support ${worldInteractionSlotToKeyLabel(normalizedInteractSlot)} interaction.`,
-          "warning"
-        );
-        return;
+  private tickInteractionViewPhase(): void {
+    for (const user of this.usersById.values()) {
+      const target = this.resolveBestInteractionTargetForUser(user.id)?.descriptor ?? null;
+      const payload: WorldInteractionPromptViewState = {
+        kind: "world_interaction",
+        target
+      };
+      this.uiViewRuntime.publish(user, "world_interaction", payload as unknown as Record<string, unknown>);
+    }
+  }
+
+  private resolveBestInteractionTargetForUser(userId: number): ResolvedInteractionTarget | null {
+    const runtime = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
+    if (!runtime) {
+      return null;
+    }
+    const candidates: ResolvedInteractionTarget[] = [];
+    const pickup = this.itemInventorySystem.findBestPickupInteractionForUser(userId);
+    if (pickup && pickup.pickupNid > 0) {
+      const actionId: WorldInteractionActionId = "pickup_collect";
+      const targetId = `pickup:${pickup.pickupNid}`;
+      candidates.push({
+        targetId,
+        actionId,
+        targetType: "pickup",
+        pickupNid: pickup.pickupNid,
+        descriptor: {
+          targetId,
+          targetType: "pickup",
+          label: `Pick up ${pickup.itemName}${pickup.itemQuantity > 1 ? ` x${pickup.itemQuantity}` : ""}`,
+          distanceMeters: pickup.distanceMeters,
+          priority: 200,
+          actions: [{ id: actionId, slot: INTERACTION_SLOT_PRIMARY, label: "Pick Up", enabled: true, priority: 200 }]
+        }
+      });
+    }
+    const station = this.tryBeginNearbyStationSession(userId);
+    if (station) {
+      const templateIds = filterCreatorTemplateBlueprintIdsForStation(
+        getBlueprintDefinitionsForProfile(station.creatorProfileId).map((blueprint) => blueprint.id),
+        station.allowedTemplateBlueprintIds
+      );
+      const enabled = templateIds.length > 0;
+      const actionId: WorldInteractionActionId = "station_open_creator";
+      const targetId = `station:${station.sessionId}`;
+      candidates.push({
+        targetId,
+        actionId,
+        targetType: "station",
+        stationSessionId: station.sessionId,
+        descriptor: {
+          targetId,
+          targetType: "station",
+          label: `Use ${station.creatorProfileId}`,
+          distanceMeters: 0,
+          priority: 300,
+          actions: [{
+            id: actionId,
+            slot: INTERACTION_SLOT_PRIMARY,
+            label: `Use ${station.creatorProfileId}`,
+            enabled,
+            disabledReason: enabled ? undefined : `No templates are configured for profile ${station.creatorProfileId}.`,
+            priority: 300
+          }]
+        }
+      });
+    }
+    const pilot = this.locationRootSystem.findNearbyPilotConsole({ x: runtime.x, y: runtime.y, z: runtime.z }, 4);
+    if (pilot) {
+      const actionId: WorldInteractionActionId = "pilot_console_toggle";
+      const targetId = `pilot:${pilot.framePid}:${pilot.volumeId}`;
+      const seatOwner = this.pilotUserIdByReferenceFramePid.get(pilot.framePid);
+      const enabled = typeof seatOwner !== "number" || seatOwner === userId;
+      candidates.push({
+        targetId,
+        actionId,
+        targetType: "pilot_console",
+        framePid: pilot.framePid,
+        volumeId: pilot.volumeId,
+        descriptor: {
+          targetId,
+          targetType: "pilot_console",
+          label: "Pilot Console",
+          distanceMeters: 0,
+          priority: 250,
+          actions: [{
+            id: actionId,
+            slot: INTERACTION_SLOT_PRIMARY,
+            label: "Toggle Pilot Console",
+            enabled,
+            disabledReason: enabled ? undefined : "Pilot console is in use.",
+            priority: 250
+          }]
+        }
+      });
+    }
+    if (candidates.length <= 0) {
+      return null;
+    }
+    candidates.sort((a, b) =>
+      (b.descriptor.priority - a.descriptor.priority)
+      || (a.descriptor.distanceMeters - b.descriptor.distanceMeters)
+      || a.descriptor.targetId.localeCompare(b.descriptor.targetId)
+    );
+    return candidates[0] ?? null;
+  }
+
+  private parseWorldInteractionActivateIntent(intent: { kind?: unknown; [key: string]: unknown }): WorldInteractionActivateIntent | null {
+    if (intent.kind !== "interaction_activate") {
+      return null;
+    }
+    const targetId = typeof intent.targetId === "string" ? intent.targetId.trim() : "";
+    const actionId = typeof intent.actionId === "string" ? intent.actionId.trim() : "";
+    const slot = typeof intent.slot === "number" && Number.isFinite(intent.slot)
+      ? Math.max(0, Math.floor(intent.slot))
+      : INTERACTION_SLOT_PRIMARY;
+    if (targetId.length <= 0 || actionId.length <= 0) {
+      return null;
+    }
+    if (
+      actionId !== "pickup_collect"
+      && actionId !== "station_open_creator"
+      && actionId !== "pilot_console_toggle"
+    ) {
+      return null;
+    }
+    return {
+      kind: "interaction_activate",
+      targetId,
+      actionId,
+      slot
+    };
+  }
+
+  private executeWorldInteractionIntent(
+    userId: number,
+    intent: WorldInteractionActivateIntent
+  ): { ok: boolean; reason: string } {
+    const resolved = this.resolveBestInteractionTargetForUser(userId);
+    if (!resolved) {
+      return { ok: false, reason: "No interaction is currently available here." };
+    }
+    if (resolved.targetId !== intent.targetId) {
+      return { ok: false, reason: "Interaction target is no longer valid." };
+    }
+    const action = resolved.descriptor.actions.find((entry) => entry.id === intent.actionId && entry.slot === intent.slot) ?? null;
+    if (!action) {
+      return { ok: false, reason: "That interaction action is not available for this target." };
+    }
+    if (!action.enabled) {
+      return {
+        ok: false,
+        reason:
+          typeof action.disabledReason === "string" && action.disabledReason.trim().length > 0
+            ? action.disabledReason.trim()
+            : "That interaction is currently unavailable."
+      };
+    }
+    const failureState: { reason: string } = { reason: "" };
+    const ok = this.executeWorldInteractionTarget(userId, resolved, failureState);
+    if (!ok) {
+      return {
+        ok: false,
+        reason: failureState.reason.length > 0 ? failureState.reason : "Interaction execution failed."
+      };
+    }
+    return { ok: true, reason: "" };
+  }
+
+  private executeWorldInteractionTarget(
+    userId: number,
+    target: ResolvedInteractionTarget,
+    failureState?: { reason: string }
+  ): boolean {
+    const setFailureReason = (reason: string): void => {
+      if (failureState) {
+        failureState.reason = reason;
       }
-      if (!action.enabled) {
-        this.queueServerAlertForUser(
-          userId,
-          action.disabledReason && action.disabledReason.trim().length > 0
-            ? action.disabledReason
-            : "Station interaction is currently unavailable.",
-          "warning"
-        );
-        return;
+    };
+    if (target.targetType === "pickup") {
+      const pickupResult = this.itemInventorySystem.executePickupWorldItemForUser(userId, target.pickupNid);
+      const ok = pickupResult.ok;
+      if (!ok) {
+        setFailureReason(this.formatPickupInteractionFailureReason(pickupResult.reason));
       }
-      if (action.id !== "station_open_creator") {
-        this.queueServerAlertForUser(userId, "Unsupported station interaction action.", "warning");
-        return;
+      return ok;
+    }
+    if (target.targetType === "station") {
+      const station = this.tryBeginNearbyStationSession(userId);
+      if (!station || station.sessionId !== target.stationSessionId) {
+        setFailureReason("Station interaction is no longer valid.");
+        return false;
       }
       const accountId = this.simulationEcs.getPlayerAccountIdByUserId(userId);
       const user = this.usersById.get(userId);
-      if (typeof accountId === "number" && user) {
-        const itemTemplateIds = getBlueprintDefinitionsForProfile(stationInteraction.creatorProfileId).map((blueprint) => blueprint.id);
-        const filteredTemplateIds = filterCreatorTemplateBlueprintIdsForStation(
-          itemTemplateIds,
-          stationInteraction.allowedTemplateBlueprintIds
-        );
-        const templateIdsForSession = filteredTemplateIds;
-        if (templateIdsForSession.length <= 0) {
-          this.queueServerAlertForUser(
-            userId,
-            `Station unavailable: no templates are configured for profile ${stationInteraction.creatorProfileId}.`,
-            "warning"
-          );
-          return;
-        }
-        const creatorState = this.creatorSystem.initializeSession(
-          userId,
-          accountId,
-          templateIdsForSession,
-          stationInteraction.creatorProfileId,
-          stationInteraction.sessionId
-        );
-        this.publishCreatorStateForUser(user, creatorState);
+      if (typeof accountId !== "number" || !user) {
+        return false;
       }
-      return;
-    }
-    const runtime = this.simulationEcs.getPlayerRuntimeStateByUserId(userId);
-    if (!runtime) {
-      return;
-    }
-    const consoleRef = this.locationRootSystem.findNearbyPilotConsole(
-      { x: runtime.x, y: runtime.y, z: runtime.z },
-      4
-    );
-    if (!consoleRef) {
-      if (normalizedInteractSlot > 0) {
-        this.queueServerAlertForUser(
-          userId,
-          `No ${worldInteractionSlotToKeyLabel(normalizedInteractSlot)} interaction is available here.`,
-          "warning"
-        );
+      const templateIds = filterCreatorTemplateBlueprintIdsForStation(
+        getBlueprintDefinitionsForProfile(station.creatorProfileId).map((blueprint) => blueprint.id),
+        station.allowedTemplateBlueprintIds
+      );
+      if (templateIds.length <= 0) {
+        setFailureReason(`Station unavailable: no templates are configured for profile ${station.creatorProfileId}.`);
+        return false;
       }
-      return;
-    }
-    const pilotAction = resolveWorldInteractionActionBySlot("pilot_console", normalizedInteractSlot);
-    if (!pilotAction) {
-      this.queueServerAlertForUser(
+      const creatorState = this.creatorSystem.initializeSession(
         userId,
-        `Pilot console does not support ${worldInteractionSlotToKeyLabel(normalizedInteractSlot)} interaction.`,
-        "warning"
+        accountId,
+        templateIds,
+        station.creatorProfileId,
+        station.sessionId
       );
-      return;
-    }
-    if (!pilotAction.enabled) {
-      this.queueServerAlertForUser(
-        userId,
-        pilotAction.disabledReason && pilotAction.disabledReason.trim().length > 0
-          ? pilotAction.disabledReason
-          : "Pilot console interaction is currently unavailable.",
-        "warning"
-      );
-      return;
-    }
-    if (pilotAction.id !== "pilot_console_toggle") {
-      this.queueServerAlertForUser(userId, "Unsupported pilot console interaction action.", "warning");
-      return;
+      this.publishCreatorStateForUser(user, creatorState);
+      return true;
     }
     const memberships = this.referenceFrameMembershipByUserId.get(userId) ?? null;
-    if (!memberships || !memberships.has(this.toReferenceFrameMembershipKey(consoleRef.framePid, consoleRef.volumeId))) {
-      return;
+    if (!memberships || !memberships.has(this.toReferenceFrameMembershipKey(target.framePid, target.volumeId))) {
+      setFailureReason("Pilot console interaction is no longer valid.");
+      return false;
     }
     const current = this.pilotedReferenceFrameByUserId.get(userId) ?? null;
-    if (current && current.framePid === consoleRef.framePid) {
+    if (current && current.framePid === target.framePid) {
       this.actionEffectPipeline.execute({
         type: "pilot_reference_frame_end",
         userId,
-        framePid: consoleRef.framePid
+        framePid: target.framePid
       });
-      this.queueServerAlertForUser(userId, "Piloting disengaged.", "info");
-      return;
+      return true;
     }
-    const seatOwner = this.pilotUserIdByReferenceFramePid.get(consoleRef.framePid);
+    const seatOwner = this.pilotUserIdByReferenceFramePid.get(target.framePid);
     if (typeof seatOwner === "number" && seatOwner !== userId) {
-      this.queueServerAlertForUser(userId, "Pilot console is in use.", "warning");
-      return;
+      setFailureReason("Pilot console is in use.");
+      return false;
     }
     this.actionEffectPipeline.execute({
       type: "pilot_reference_frame_begin",
       userId,
-      framePid: consoleRef.framePid,
-      volumeId: consoleRef.volumeId
+      framePid: target.framePid,
+      volumeId: target.volumeId
     });
-    this.queueServerAlertForUser(userId, "Piloting engaged.", "success");
+    return true;
   }
 
   private isUserInPilotControlMode(userId: number): boolean {
@@ -1799,7 +2162,7 @@ export class GameSimulation {
           const impactSpeed = Math.max(0, -minVyBefore);
           const damage = this.computeFallDamageFromImpactSpeed(impactSpeed);
           if (damage > 0) {
-            this.damageSystem.applyFallDamageByCharacterEid(eid, damage);
+            this.damageSystem.applyFallDamageByEid(eid, damage);
           }
         }
         this.minAirborneVyByEid.set(eid, 0);
@@ -1923,11 +2286,15 @@ export class GameSimulation {
     replicationFarEntities: number;
     replicationTotalEntities: number;
     pilotedReferenceFrames: number;
+    attackRuntimeActiveInstances: number;
+    attackRuntimePooledInstances: number;
+    attackRuntimePeakActiveInstances: number;
     effectAuditSuccesses: Readonly<Record<string, number>>;
   } {
     const es = this.simulationEcs.getStats();
     const ai = this.npcAiSystem.getStats();
     const replicationCounts = this.replication.getLiveReplicationCounts();
+    const attackRuntimeStats = this.attackRuntimeSystem.getRuntimeStats();
     return {
       onlinePlayers: this.simulationEcs.getOnlinePlayerCount(),
       activeProjectiles: this.projectileSystem.getActiveCount(),
@@ -1940,6 +2307,9 @@ export class GameSimulation {
       replicationFarEntities: replicationCounts.farEntities,
       replicationTotalEntities: replicationCounts.totalEntities,
       pilotedReferenceFrames: this.pilotedReferenceFrameByUserId.size,
+      attackRuntimeActiveInstances: attackRuntimeStats.active,
+      attackRuntimePooledInstances: attackRuntimeStats.pooled,
+      attackRuntimePeakActiveInstances: attackRuntimeStats.peakActive,
       effectAuditSuccesses: Object.freeze(Object.fromEntries(this.effectAuditSuccessCountByType.entries()))
     };
   }
@@ -2214,6 +2584,16 @@ export class GameSimulation {
   private resolveBooleanEnv(name: string, fallback: boolean): boolean {
     const r = process.env[name]; if (r === undefined) return fallback; const n = r.trim().toLowerCase(); return n === "1" || n === "true" || n === "yes";
   }
+  private resolveCombatWorldSeed(mapInstanceId: string): number {
+    const normalized = mapInstanceId.trim().toLowerCase();
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < normalized.length; i += 1) {
+      hash ^= normalized.charCodeAt(i) ?? 0;
+      hash = Math.imul(hash, 0x01000193);
+    }
+    const seeded = hash >>> 0;
+    return seeded === 0 ? 1 : seeded;
+  }
   private resolveOptionalEnvString(name: string): string | undefined {
     const r = process.env[name]; if (!r) return undefined; const t = r.trim(); return t.length > 0 ? t : undefined;
   }
@@ -2233,29 +2613,60 @@ export class GameSimulation {
   }
 
   private spawnProjectile(req: {
-    ownerNid: number; kind: number;
+    ownerEid: number;
+    kind: number;
     x: number; y: number; z: number;
     vx: number; vy: number; vz: number;
     radius: number; damage: number; lifetimeSeconds: number;
     maxRange: number; gravity: number; drag: number;
     maxSpeed: number; minSpeed: number; pierceCount: number;
     despawnOnDamageableHit: boolean; despawnOnWorldHit: boolean;
+    targetPolicy: {
+      allowSelf: boolean;
+      allowPlayers: boolean;
+      allowNpcs: boolean;
+      allowDummies: boolean;
+    };
+    patternSeed: number;
+    patternKind: number;
+    patternSpiralFrequencyHz: number;
+    patternSpiralStrength: number;
+    baseDirX: number;
+    baseDirY: number;
+    baseDirZ: number;
   }): void {
+    const ownerIdentity = this.simulationEcs.resolveCombatOwnerIdentityByEid(req.ownerEid);
+    if (!ownerIdentity) {
+      return;
+    }
+    const ownerEid = ownerIdentity.eid;
+    const ownerNid = ownerIdentity.nid;
     const eid = this.simulationEcs.createEntityFromPreset("projectile", {
       modelId: this.resolveProjectileModelId(req.kind),
       position: { x: req.x, y: req.y, z: req.z },
       velocity: { x: req.vx, y: req.vy, z: req.vz },
-      projectileOwnerNid: req.ownerNid,
+      projectileOwnerEid: ownerEid,
+      projectileOwnerNid: ownerNid,
       projectileKind: req.kind,
       projectileRadius: req.radius,
       projectileDamage: req.damage,
       projectileTtl: req.lifetimeSeconds,
+      projectileInitialTtl: req.lifetimeSeconds,
       projectileRemainingRange: ProjectileSystem.resolveMaxRange(req.maxRange),
       projectileGravity: ProjectileSystem.resolveOptionalNumber(req.gravity, 0),
       projectileDrag: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.drag, 0)),
       projectileMaxSpeed: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.maxSpeed, Number.POSITIVE_INFINITY)),
       projectileMinSpeed: Math.max(0, ProjectileSystem.resolveOptionalNumber(req.minSpeed, 0)),
       projectileRemainingPierces: Math.max(0, Math.floor(ProjectileSystem.resolveOptionalNumber(req.pierceCount, 0))),
+      projectilePatternSeed: req.patternSeed >>> 0,
+      projectilePatternKind: Math.max(0, Math.floor(req.patternKind)),
+      projectilePatternSpiralFrequencyHz: Math.max(0, req.patternSpiralFrequencyHz),
+      projectilePatternSpiralStrength: Math.max(0, req.patternSpiralStrength),
+      projectileBaseDirection: { x: req.baseDirX, y: req.baseDirY, z: req.baseDirZ },
+      projectileTargetAllowSelf: req.targetPolicy.allowSelf,
+      projectileTargetAllowPlayers: req.targetPolicy.allowPlayers,
+      projectileTargetAllowNpcs: req.targetPolicy.allowNpcs,
+      projectileTargetAllowDummies: req.targetPolicy.allowDummies,
       projectileDespawnOnDamageableHit: Boolean(req.despawnOnDamageableHit),
       projectileDespawnOnWorldHit: Boolean(req.despawnOnWorldHit)
     });
@@ -2389,6 +2800,67 @@ export class GameSimulation {
     return filtered;
   }
 
+  private resolveCreatorProfileForDerivedBlueprint(sourceBlueprint: BlueprintDefinition): CreatorProfileId {
+    const profiles = sourceBlueprint.templateProfiles ?? {};
+    const preferredOrder: readonly CreatorProfileId[] = Object.freeze([
+      "item_creator",
+      "ability_creator",
+      "character_creator",
+      "mind_creator"
+    ]);
+    for (const profileId of preferredOrder) {
+      if (profiles[profileId]) {
+        return profileId;
+      }
+    }
+    if (buildItemDefinitionFromBlueprint(sourceBlueprint)) {
+      return "item_creator";
+    }
+    if (buildAbilityDefinitionFromBlueprint(sourceBlueprint)) {
+      return "ability_creator";
+    }
+    return "item_creator";
+  }
+
+  private cloneRuntimeActivationSpecs(specs: readonly RuntimeActivationSpec[]): RuntimeActivationSpec[] {
+    const cloned: RuntimeActivationSpec[] = [];
+    for (const spec of specs) {
+      cloned.push({
+        activationId: spec.activationId,
+        source: spec.source,
+        channel: spec.channel,
+        cooldownSeconds: spec.cooldownSeconds,
+        consumeQuantity: spec.consumeQuantity,
+        effects: spec.effects.map((effect) => {
+          if (effect.type === "spawn_projectile") {
+            return { type: "spawn_projectile", projectile: { ...effect.projectile } };
+          }
+          if (effect.type === "apply_melee_hit") {
+            return { type: "apply_melee_hit", melee: { ...effect.melee } };
+          }
+          if (effect.type === "restore_health") {
+            return { type: "restore_health", amount: effect.amount };
+          }
+          if (effect.type === "set_player_render_appearance") {
+            return {
+              type: "set_player_render_appearance",
+              renderArchetypeId: effect.renderArchetypeId,
+              materialVariantId: effect.materialVariantId,
+              tintColorRgb: effect.tintColorRgb,
+              uniformScalePct: effect.uniformScalePct
+            };
+          }
+          return {
+            type: "set_equipped_slot_tint",
+            slot: effect.slot,
+            tintColorRgb: effect.tintColorRgb
+          };
+        })
+      });
+    }
+    return cloned;
+  }
+
   private formatCreatorInstantiationFailureReason(reason: string): string {
     if (reason.startsWith("actor_requirement_unmet:")) {
       const key = reason.slice("actor_requirement_unmet:".length).trim();
@@ -2434,6 +2906,28 @@ export class GameSimulation {
       return "Creation blocked: player runtime state is unavailable.";
     }
     return `Creation blocked: ${reason}.`;
+  }
+
+  private formatPickupInteractionFailureReason(reason: string): string {
+    if (reason === "inventory_full") {
+      return "Pickup blocked: inventory is full.";
+    }
+    if (reason === "pickup_missing") {
+      return "Pickup blocked: target no longer exists.";
+    }
+    if (reason === "pickup_unavailable") {
+      return "Pickup blocked: target is out of range or unavailable.";
+    }
+    if (reason === "pickup_invalid") {
+      return "Pickup blocked: target is not a pickup.";
+    }
+    if (reason === "pickup_definition_missing") {
+      return "Pickup blocked: item definition is unavailable.";
+    }
+    if (reason === "player_missing") {
+      return "Pickup blocked: player runtime state is unavailable.";
+    }
+    return `Pickup blocked: ${reason}.`;
   }
 
   private resolveGlobalGrantedAccessTagsForAuthoring(
@@ -2513,6 +3007,11 @@ export class GameSimulation {
     return { ...DEFAULT_PLAYER_SETTINGS };
   }
 
+  private resetCombatExecutionStateByEid(eid: number): void {
+    this.abilityExecutionSystem.clearCooldownsForEid(eid);
+    this.attackRuntimeSystem.clearAttackerState(eid);
+  }
+
   // ── Player lifecycle ──────────────────────────────────────────────────────
   private createPlayerLifecycleSystem(): PlayerLifecycleSystem<UserLike> {
     return new PlayerLifecycleSystem<UserLike>({
@@ -2540,15 +3039,16 @@ export class GameSimulation {
           hotbarAbilityIds: ctx.hotbarAbilityIds,
           unlockedAbilityIds: ctx.unlockedAbilityIds,
           primaryMouseSlot: 0, secondaryMouseSlot: 1,
-          lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY, lastProcessedSequence: 0,
+          lastProcessedSequence: 0,
           primaryHeld: false, secondaryHeld: false
         });
         this.simulationEcs.registerPlayerPhysicsRefs(eid, ctx.body, ctx.collider);
+        this.resetCombatExecutionStateByEid(eid);
         const nid = this.replication.spawnEntity(eid);
         this.simulationEcs.setEntityNidByEid(eid, nid);
         this.simulationEcs.bindPlayerIndexes(user.id, eid);
         this.controllerSystem.attachPlayerController(user.id, eid);
-        this.damageSystem.registerPlayerCollider(ctx.collider.handle, eid);
+        this.damageSystem.registerCollider(ctx.collider.handle, eid);
         this.previousGroundedByEid.set(eid, true);
         this.minAirborneVyByEid.set(eid, 0);
         this.ensurePunchAssigned(eid);
@@ -2561,6 +3061,7 @@ export class GameSimulation {
         this.referenceFrameMembershipByUserId.delete(user.id);
         this.releaseUserPilotSeat(user.id);
         this.creatorSystem.removeSession(user.id);
+        this.resetCombatExecutionStateByEid(eid);
         this.controllerSystem.detachUser(user.id);
         this.previousGroundedByEid.delete(eid);
         this.minAirborneVyByEid.delete(eid);
@@ -2613,7 +3114,7 @@ export class GameSimulation {
       resolveOfflineSnapshotByAccountId: (aid) => this.simulationEcs.getPlayerPersistenceSnapshotByAccountId(aid),
       markPlayerDirty: (aid, opts) => this.persistenceSyncSystem.markAccountDirty(aid, opts),
       unregisterPlayerCollider: (h) => this.damageSystem.unregisterCollider(h),
-      removeProjectilesByOwner: (nid) => this.projectileSystem.removeByOwner(nid),
+      removeProjectilesByOwner: (owner) => this.projectileSystem.removeByOwner(owner),
       viewHalfWidth: 128, viewHalfHeight: 128, viewHalfDepth: 128,
       farViewHalfWidth: 3200, farViewHalfHeight: 1600, farViewHalfDepth: 3200
     });

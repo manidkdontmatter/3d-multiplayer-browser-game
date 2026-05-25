@@ -107,6 +107,20 @@ const GAME_TRAIT_DEFINITIONS: readonly TraitDefinition[] = [
     effects: [], constraints: [], appliesTo: ["ability"]
   },
   {
+    id: "pattern-spread", label: "Pattern Spread",
+    description: "Applies deterministic spread to projectile trajectory.",
+    polarity: "upside", budgetDelta: 50,
+    statModifiers: [],
+    effects: [], constraints: [], appliesTo: ["ability"]
+  },
+  {
+    id: "pattern-spiral", label: "Pattern Spiral",
+    description: "Applies deterministic spiral to projectile trajectory.",
+    polarity: "upside", budgetDelta: 50,
+    statModifiers: [],
+    effects: [], constraints: [], appliesTo: ["ability"]
+  },
+  {
     id: "berserker", label: "Berserker",
     description: "Deal more damage but take more damage.",
     polarity: "upside", budgetDelta: 50,

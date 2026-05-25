@@ -41,6 +41,15 @@ export class SimulationEcsIndexRegistry {
     return this.playerEidByUserId.get(userId);
   }
 
+  public getPlayerUserIdByEid(eid: number): number | undefined {
+    for (const [userId, mappedEid] of this.playerEidByUserId.entries()) {
+      if (mappedEid === eid) {
+        return userId;
+      }
+    }
+    return undefined;
+  }
+
   public getPlayerEidByAccountId(accountId: number): number | undefined {
     return this.playerEidByAccountId.get(Math.max(1, Math.floor(accountId)));
   }

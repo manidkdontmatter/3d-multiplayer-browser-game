@@ -58,7 +58,6 @@ export interface EntityFactoryOverrides {
   groundedPlatformPid?: number | null;
   carriedFramePid?: number | null;
   lastProcessedSequence?: number;
-  lastPrimaryFireAtSeconds?: number;
   primaryHeld?: boolean;
   secondaryHeld?: boolean;
   primaryMouseSlot?: number;
@@ -84,17 +83,28 @@ export interface EntityFactoryOverrides {
   worldAnchorStreamingRadius?: number;
   worldAnchorInfluenceRadius?: number;
   // Projectile
+  projectileOwnerEid?: number;
   projectileOwnerNid?: number;
   projectileKind?: number;
   projectileRadius?: number;
   projectileDamage?: number;
   projectileTtl?: number;
+  projectileInitialTtl?: number;
   projectileRemainingRange?: number;
   projectileGravity?: number;
   projectileDrag?: number;
   projectileMaxSpeed?: number;
   projectileMinSpeed?: number;
   projectileRemainingPierces?: number;
+  projectilePatternSeed?: number;
+  projectilePatternKind?: number;
+  projectilePatternSpiralFrequencyHz?: number;
+  projectilePatternSpiralStrength?: number;
+  projectileBaseDirection?: { x: number; y: number; z: number };
+  projectileTargetAllowSelf?: boolean;
+  projectileTargetAllowPlayers?: boolean;
+  projectileTargetAllowNpcs?: boolean;
+  projectileTargetAllowDummies?: boolean;
   projectileDespawnOnDamageableHit?: boolean;
   projectileDespawnOnWorldHit?: boolean;
 }
@@ -188,7 +198,6 @@ export class EntityFactory {
     if (overrides?.pitch !== undefined) c.Pitch.value[eid] = overrides.pitch;
     if (overrides?.accountId !== undefined) c.AccountId.value[eid] = overrides.accountId;
     if (overrides?.lastProcessedSequence !== undefined) c.LastProcessedSequence.value[eid] = overrides.lastProcessedSequence;
-    if (overrides?.lastPrimaryFireAtSeconds !== undefined) c.LastPrimaryFireAtSeconds.value[eid] = overrides.lastPrimaryFireAtSeconds;
     if (overrides?.primaryHeld !== undefined) c.PrimaryHeld.value[eid] = overrides.primaryHeld ? 1 : 0;
     if (overrides?.secondaryHeld !== undefined) c.SecondaryHeld.value[eid] = overrides.secondaryHeld ? 1 : 0;
     if (overrides?.primaryMouseSlot !== undefined) c.PrimaryMouseSlot.value[eid] = clampHotbarSlotIndex(overrides.primaryMouseSlot);
@@ -214,17 +223,32 @@ export class EntityFactory {
     }
 
     // Projectile overrides
+    if (overrides?.projectileOwnerEid !== undefined) c.ProjectileOwnerEid.value[eid] = overrides.projectileOwnerEid;
     if (overrides?.projectileOwnerNid !== undefined) c.ProjectileOwnerNid.value[eid] = overrides.projectileOwnerNid;
     if (overrides?.projectileKind !== undefined) c.ProjectileKind.value[eid] = overrides.projectileKind;
     if (overrides?.projectileRadius !== undefined) c.ProjectileRadius.value[eid] = overrides.projectileRadius;
     if (overrides?.projectileDamage !== undefined) c.ProjectileDamage.value[eid] = overrides.projectileDamage;
     if (overrides?.projectileTtl !== undefined) c.ProjectileTtl.value[eid] = overrides.projectileTtl;
+    if (overrides?.projectileInitialTtl !== undefined) c.ProjectileInitialTtl.value[eid] = overrides.projectileInitialTtl;
     if (overrides?.projectileRemainingRange !== undefined) c.ProjectileRemainingRange.value[eid] = overrides.projectileRemainingRange;
     if (overrides?.projectileGravity !== undefined) c.ProjectileGravity.value[eid] = overrides.projectileGravity;
     if (overrides?.projectileDrag !== undefined) c.ProjectileDrag.value[eid] = overrides.projectileDrag;
     if (overrides?.projectileMaxSpeed !== undefined) c.ProjectileMaxSpeed.value[eid] = overrides.projectileMaxSpeed;
     if (overrides?.projectileMinSpeed !== undefined) c.ProjectileMinSpeed.value[eid] = overrides.projectileMinSpeed;
     if (overrides?.projectileRemainingPierces !== undefined) c.ProjectileRemainingPierces.value[eid] = overrides.projectileRemainingPierces;
+    if (overrides?.projectilePatternSeed !== undefined) c.ProjectilePatternSeed.value[eid] = overrides.projectilePatternSeed >>> 0;
+    if (overrides?.projectilePatternKind !== undefined) c.ProjectilePatternKind.value[eid] = overrides.projectilePatternKind;
+    if (overrides?.projectilePatternSpiralFrequencyHz !== undefined) c.ProjectilePatternSpiralFrequencyHz.value[eid] = overrides.projectilePatternSpiralFrequencyHz;
+    if (overrides?.projectilePatternSpiralStrength !== undefined) c.ProjectilePatternSpiralStrength.value[eid] = overrides.projectilePatternSpiralStrength;
+    if (overrides?.projectileBaseDirection) {
+      c.ProjectileBaseDirection.x[eid] = overrides.projectileBaseDirection.x;
+      c.ProjectileBaseDirection.y[eid] = overrides.projectileBaseDirection.y;
+      c.ProjectileBaseDirection.z[eid] = overrides.projectileBaseDirection.z;
+    }
+    if (overrides?.projectileTargetAllowSelf !== undefined) c.ProjectileTargetAllowSelf.value[eid] = overrides.projectileTargetAllowSelf ? 1 : 0;
+    if (overrides?.projectileTargetAllowPlayers !== undefined) c.ProjectileTargetAllowPlayers.value[eid] = overrides.projectileTargetAllowPlayers ? 1 : 0;
+    if (overrides?.projectileTargetAllowNpcs !== undefined) c.ProjectileTargetAllowNpcs.value[eid] = overrides.projectileTargetAllowNpcs ? 1 : 0;
+    if (overrides?.projectileTargetAllowDummies !== undefined) c.ProjectileTargetAllowDummies.value[eid] = overrides.projectileTargetAllowDummies ? 1 : 0;
     if (overrides?.projectileDespawnOnDamageableHit !== undefined) c.ProjectileDespawnOnDamageableHit.value[eid] = overrides.projectileDespawnOnDamageableHit ? 1 : 0;
     if (overrides?.projectileDespawnOnWorldHit !== undefined) c.ProjectileDespawnOnWorldHit.value[eid] = overrides.projectileDespawnOnWorldHit ? 1 : 0;
   }

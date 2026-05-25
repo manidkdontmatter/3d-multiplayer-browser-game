@@ -292,6 +292,9 @@ export class GameServer {
     replicationFarEntities: number;
     replicationTotalEntities: number;
     pilotedReferenceFrames: number;
+    attackRuntimeActiveInstances: number;
+    attackRuntimePooledInstances: number;
+    attackRuntimePeakActiveInstances: number;
     effectAuditSuccesses: Readonly<Record<string, number>>;
   } {
     return this.simulation.getRuntimeStats();
@@ -568,7 +571,7 @@ export class GameServer {
     const netSummary = this.formatNetDiagnosticsSummary(netDiagnostics);
 
     console.log(
-      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} npcs(active/inactive/hibernating)=${runtime.activeNpcs}/${runtime.inactiveNpcs}/${runtime.hibernatingNpcs} projectiles=${runtime.activeProjectiles} piloted_frames=${pilotCount} effect_top=${effectAuditTop || "none"} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots} ${netSummary}`
+      `[server] health uptime=${uptimeSeconds}s players=${runtime.onlinePlayers} npcs(active/inactive/hibernating)=${runtime.activeNpcs}/${runtime.inactiveNpcs}/${runtime.hibernatingNpcs} projectiles=${runtime.activeProjectiles} attack_runtime(active/pooled/peak)=${runtime.attackRuntimeActiveInstances}/${runtime.attackRuntimePooledInstances}/${runtime.attackRuntimePeakActiveInstances} piloted_frames=${pilotCount} effect_top=${effectAuditTop || "none"} tps=${effectiveTps.toFixed(2)}/${targetTps.toFixed(2)} tick_ms(avg/p95/max)=${avgDuration.toFixed(3)}/${p95TickDurationMs.toFixed(3)}/${this.tickDurationMaxMs.toFixed(3)} over_budget=${overBudgetPercent.toFixed(1)}% catchup(loops/steps)=${this.catchUpLoopCount}/${this.catchUpStepCount} resyncs=${this.skippedTickResyncCount} pending_snapshots=${runtime.pendingOfflineSnapshots} ${netSummary}`
     );
 
     this.tickDurationAccumMs = 0;

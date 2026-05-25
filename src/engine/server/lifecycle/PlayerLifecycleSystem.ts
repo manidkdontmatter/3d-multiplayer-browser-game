@@ -67,7 +67,7 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser> {
   readonly resolveOfflineSnapshotByAccountId: (accountId: number) => PlayerSnapshot | null;
   readonly markPlayerDirty: (accountId: number, options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }) => void;
   readonly unregisterPlayerCollider: (colliderHandle: number) => void;
-  readonly removeProjectilesByOwner: (ownerNid: number) => void;
+  readonly removeProjectilesByOwner: (owner: { eid: number; nid: number }) => void;
   readonly viewHalfWidth: number; readonly viewHalfHeight: number; readonly viewHalfDepth: number;
   readonly farViewHalfWidth: number; readonly farViewHalfHeight: number; readonly farViewHalfDepth: number;
 }
@@ -163,7 +163,7 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
 
     this.options.unregisterPlayerCollider(collider.handle);
     this.options.usersById.delete(user.id);
-    this.options.removeProjectilesByOwner(nid);
+    this.options.removeProjectilesByOwner({ eid, nid });
     this.options.world.removeCollider(collider, true);
     this.options.world.removeRigidBody(body);
     this.options.despawnPlayer(user, eid);

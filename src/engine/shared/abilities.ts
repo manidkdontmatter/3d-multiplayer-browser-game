@@ -51,6 +51,8 @@ export type AbilityAttributeKey =
   | "wide-impact"
   | "quick-cast"
   | "long-reach"
+  | "pattern-spread"
+  | "pattern-spiral"
   | "example-upside"
   | "example-downside";
 
@@ -69,7 +71,19 @@ export interface AbilityStatPoints {
   control: number;
 }
 
+export interface CombatTargetPolicyProfile {
+  allowSelf: boolean;
+  allowPlayers: boolean;
+  allowNpcs: boolean;
+  allowDummies: boolean;
+}
+
 export interface ProjectileAbilityProfile {
+  targetPolicy?: Partial<CombatTargetPolicyProfile>;
+  patternType?: "straight" | "spiral" | "spread" | "spread_spiral";
+  spreadAngleDegrees?: number;
+  spiralFrequencyHz?: number;
+  spiralStrength?: number;
   kind: number;
   speed: number;
   damage: number;
@@ -89,6 +103,7 @@ export interface ProjectileAbilityProfile {
 }
 
 export interface MeleeAbilityProfile {
+  targetPolicy?: Partial<CombatTargetPolicyProfile>;
   damage: number;
   range: number;
   radius: number;
@@ -181,14 +196,26 @@ export const ABILITY_ATTRIBUTE_DEFINITIONS: ReadonlyArray<AbilityAttributeDefini
     description: "Longer lifetime/range with lighter impact."
   },
   {
-    key: "example-upside",
+    key: "pattern-spread",
     bit: 1 << 4,
+    name: "Pattern Spread",
+    description: "Applies deterministic spread pattern to projectile trajectory."
+  },
+  {
+    key: "pattern-spiral",
+    bit: 1 << 5,
+    name: "Pattern Spiral",
+    description: "Applies deterministic spiral pattern to projectile trajectory."
+  },
+  {
+    key: "example-upside",
+    bit: 1 << 6,
     name: "Example Upside",
     description: "Placeholder creator upside attribute used for authoring flow tests."
   },
   {
     key: "example-downside",
-    bit: 1 << 5,
+    bit: 1 << 7,
     name: "Example Downside",
     description: "Placeholder creator downside attribute used for authoring flow tests."
   }
@@ -322,6 +349,11 @@ export function createAbilityDefinitionFromDraft(
 }
 
 export interface ResolvedProjectileProfile {
+  targetPolicy: CombatTargetPolicyProfile;
+  patternType: "straight" | "spiral" | "spread" | "spread_spiral";
+  spreadAngleDegrees: number;
+  spiralFrequencyHz: number;
+  spiralStrength: number;
   kind: number;
   speed: number;
   damage: number;
@@ -341,6 +373,12 @@ export interface ResolvedProjectileProfile {
 }
 
 export function resolveProjectileProfile(profile: ProjectileAbilityProfile): ResolvedProjectileProfile {
+  const patternType =
+    profile.patternType === "spiral" ||
+    profile.patternType === "spread" ||
+    profile.patternType === "spread_spiral"
+      ? profile.patternType
+      : "straight";
   const speed = clampNumber(profile.speed, 0, 160);
   const radius = clampNumber(profile.radius, 0.01, 6);
   const lifetimeSeconds = clampNumber(profile.lifetimeSeconds, 0.05, 20);
@@ -372,6 +410,29 @@ export function resolveProjectileProfile(profile: ProjectileAbilityProfile): Res
     maxSpeed
   );
   return {
+    targetPolicy: resolveCombatTargetPolicy(profile.targetPolicy),
+    patternType,
+    spreadAngleDegrees: clampNumber(
+      typeof profile.spreadAngleDegrees === "number" && Number.isFinite(profile.spreadAngleDegrees)
+        ? profile.spreadAngleDegrees
+        : 0,
+      0,
+      45
+    ),
+    spiralFrequencyHz: clampNumber(
+      typeof profile.spiralFrequencyHz === "number" && Number.isFinite(profile.spiralFrequencyHz)
+        ? profile.spiralFrequencyHz
+        : 6,
+      0.1,
+      40
+    ),
+    spiralStrength: clampNumber(
+      typeof profile.spiralStrength === "number" && Number.isFinite(profile.spiralStrength)
+        ? profile.spiralStrength
+        : 0.22,
+      0,
+      2
+    ),
     kind: Math.max(0, Math.floor(profile.kind)),
     speed,
     damage: clampNumber(profile.damage, 0, 5000),
@@ -395,6 +456,18 @@ export function resolveProjectileProfile(profile: ProjectileAbilityProfile): Res
     despawnOnWorldHit: typeof profile.despawnOnWorldHit === "boolean" ? profile.despawnOnWorldHit : true,
     spawnForwardOffset: clampNumber(profile.spawnForwardOffset, -8, 8),
     spawnVerticalOffset: clampNumber(profile.spawnVerticalOffset, -8, 8)
+  };
+}
+
+export function resolveCombatTargetPolicy(
+  policy?: Partial<CombatTargetPolicyProfile> | null
+): CombatTargetPolicyProfile {
+  const source = policy ?? {};
+  return {
+    allowSelf: source.allowSelf === true,
+    allowPlayers: source.allowPlayers !== false,
+    allowNpcs: source.allowNpcs !== false,
+    allowDummies: source.allowDummies !== false
   };
 }
 
@@ -492,26 +565,11 @@ function buildAbilityProjectileProfile(
   let radius = 0.12 + points.control * 0.014;
   let cooldown = 0.75 - points.efficiency * 0.025;
   let lifetime = 1.2 + points.efficiency * 0.09 + points.velocity * 0.04;
-
-  if (draft.attributes.includes("homing-lite")) {
-    speed *= 0.92;
-    damage *= 0.95;
-    cooldown += 0.04;
-  }
-  if (draft.attributes.includes("wide-impact")) {
-    radius += 0.09;
-    damage *= 0.9;
-  }
-  if (draft.attributes.includes("quick-cast")) {
-    cooldown *= 0.78;
-    damage *= 0.9;
-  }
-  if (draft.attributes.includes("long-reach")) {
-    lifetime += 0.55;
-    damage *= 0.93;
-  }
-
-  return {
+  const profile: ProjectileAbilityProfile = {
+    patternType: "straight",
+    spreadAngleDegrees: 0,
+    spiralFrequencyHz: 6,
+    spiralStrength: 0.22,
     kind: MAGIC_BOLT_KIND_PRIMARY,
     speed: clampNumber(speed, 8, 34),
     damage: clampNumber(damage, 4, 42),
@@ -521,6 +579,8 @@ function buildAbilityProjectileProfile(
     spawnForwardOffset: MAGIC_BOLT_SPAWN_FORWARD_OFFSET,
     spawnVerticalOffset: MAGIC_BOLT_SPAWN_VERTICAL_OFFSET
   };
+  applyAbilityAttributeMappings(draft.category, draft.attributes, profile, undefined);
+  return profile;
 }
 
 function buildAbilityMeleeProfile(draft: AbilityCreationDraft): MeleeAbilityProfile | undefined {
@@ -534,34 +594,82 @@ function buildAbilityMeleeProfile(draft: AbilityCreationDraft): MeleeAbilityProf
   let radius = 0.2 + points.control * 0.02;
   let cooldown = 0.92 - points.efficiency * 0.035;
   let arcDegrees = 42 + points.control * 4;
-
-  if (draft.attributes.includes("homing-lite")) {
-    arcDegrees += 10;
-    range += 0.1;
-    damage *= 0.94;
-  }
-  if (draft.attributes.includes("wide-impact")) {
-    radius += 0.14;
-    arcDegrees += 14;
-    damage *= 0.9;
-  }
-  if (draft.attributes.includes("quick-cast")) {
-    cooldown *= 0.75;
-    damage *= 0.92;
-  }
-  if (draft.attributes.includes("long-reach")) {
-    range += 0.55;
-    cooldown += 0.07;
-    damage *= 0.9;
-  }
-
-  return {
+  const profile: MeleeAbilityProfile = {
     damage: clampNumber(damage, 6, 46),
     range: clampNumber(range, 0.9, 3.2),
     radius: clampNumber(radius, 0.16, 0.72),
     cooldownSeconds: clampNumber(cooldown, 0.12, 1.4),
     arcDegrees: clampNumber(arcDegrees, 30, 140)
   };
+  applyAbilityAttributeMappings(draft.category, draft.attributes, undefined, profile);
+  return profile;
+}
+
+export function applyAbilityAttributeMappings(
+  category: AbilityCategory,
+  attributes: ReadonlyArray<AbilityAttributeKey>,
+  projectile: ProjectileAbilityProfile | undefined,
+  melee: MeleeAbilityProfile | undefined
+): void {
+  const hasSpread = attributes.includes("pattern-spread");
+  const hasSpiral = attributes.includes("pattern-spiral");
+
+  if (category === "projectile" && projectile) {
+    if (attributes.includes("homing-lite")) {
+      projectile.speed = clampNumber(projectile.speed * 0.92, 8, 34);
+      projectile.damage = clampNumber(projectile.damage * 0.95, 4, 42);
+      projectile.cooldownSeconds = clampNumber(projectile.cooldownSeconds + 0.04, 0.12, 1.2);
+    }
+    if (attributes.includes("wide-impact")) {
+      projectile.radius = clampNumber(projectile.radius + 0.09, 0.1, 0.45);
+      projectile.damage = clampNumber(projectile.damage * 0.9, 4, 42);
+    }
+    if (attributes.includes("quick-cast")) {
+      projectile.cooldownSeconds = clampNumber(projectile.cooldownSeconds * 0.78, 0.12, 1.2);
+      projectile.damage = clampNumber(projectile.damage * 0.9, 4, 42);
+    }
+    if (attributes.includes("long-reach")) {
+      projectile.lifetimeSeconds = clampNumber(projectile.lifetimeSeconds + 0.55, 0.9, 4.2);
+      projectile.damage = clampNumber(projectile.damage * 0.93, 4, 42);
+    }
+
+    if (hasSpread && hasSpiral) {
+      projectile.patternType = "spread_spiral";
+      projectile.spreadAngleDegrees = Math.max(8, projectile.spreadAngleDegrees ?? 0);
+      projectile.spiralFrequencyHz = Math.max(10, projectile.spiralFrequencyHz ?? 0);
+      projectile.spiralStrength = Math.max(0.35, projectile.spiralStrength ?? 0);
+    } else if (hasSpread) {
+      projectile.patternType = "spread";
+      projectile.spreadAngleDegrees = Math.max(10, projectile.spreadAngleDegrees ?? 0);
+    } else if (hasSpiral) {
+      projectile.patternType = "spiral";
+      projectile.spiralFrequencyHz = Math.max(9, projectile.spiralFrequencyHz ?? 0);
+      projectile.spiralStrength = Math.max(0.32, projectile.spiralStrength ?? 0);
+    }
+    return;
+  }
+
+  if (category === "melee" && melee) {
+    if (attributes.includes("homing-lite")) {
+      melee.arcDegrees = clampNumber(melee.arcDegrees + 10, 30, 140);
+      melee.range = clampNumber(melee.range + 0.1, 0.9, 3.2);
+      melee.damage = clampNumber(melee.damage * 0.94, 6, 46);
+    }
+    if (attributes.includes("wide-impact")) {
+      melee.radius = clampNumber(melee.radius + 0.14, 0.16, 0.72);
+      melee.arcDegrees = clampNumber(melee.arcDegrees + 14, 30, 140);
+      melee.damage = clampNumber(melee.damage * 0.9, 6, 46);
+    }
+    if (attributes.includes("quick-cast")) {
+      melee.cooldownSeconds = clampNumber(melee.cooldownSeconds * 0.75, 0.12, 1.4);
+      melee.damage = clampNumber(melee.damage * 0.92, 6, 46);
+    }
+    if (attributes.includes("long-reach")) {
+      melee.range = clampNumber(melee.range + 0.55, 0.9, 3.2);
+      melee.cooldownSeconds = clampNumber(melee.cooldownSeconds + 0.07, 0.12, 1.4);
+      melee.damage = clampNumber(melee.damage * 0.9, 6, 46);
+    }
+  }
 }
 
 function buildAbilityDescription(draft: AbilityCreationDraft): string {
@@ -767,6 +875,11 @@ function parseProjectileProfile(
   }
   const entry = value as Record<string, unknown>;
   return {
+    targetPolicy: parseTargetPolicy(entry.targetPolicy, `${label}.targetPolicy`),
+    patternType: parseProjectilePatternType(entry.patternType, `${label}.patternType`),
+    spreadAngleDegrees: parseOptionalFiniteNumber(entry.spreadAngleDegrees, `${label}.spreadAngleDegrees`),
+    spiralFrequencyHz: parseOptionalFiniteNumber(entry.spiralFrequencyHz, `${label}.spiralFrequencyHz`),
+    spiralStrength: parseOptionalFiniteNumber(entry.spiralStrength, `${label}.spiralStrength`),
     kind: parseFiniteInt(entry.kind, `${label}.kind`),
     speed: parseFiniteNumber(entry.speed, `${label}.speed`),
     damage: parseFiniteNumber(entry.damage, `${label}.damage`),
@@ -776,6 +889,19 @@ function parseProjectileProfile(
     spawnForwardOffset: parseFiniteNumber(entry.spawnForwardOffset, `${label}.spawnForwardOffset`),
     spawnVerticalOffset: parseFiniteNumber(entry.spawnVerticalOffset, `${label}.spawnVerticalOffset`)
   };
+}
+
+function parseProjectilePatternType(
+  value: unknown,
+  label: string
+): "straight" | "spiral" | "spread" | "spread_spiral" | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "straight" || value === "spiral" || value === "spread" || value === "spread_spiral") {
+    return value;
+  }
+  throw new Error(`${label} must be one of straight|spiral|spread|spread_spiral.`);
 }
 
 function parseMeleeProfile(
@@ -791,12 +917,29 @@ function parseMeleeProfile(
   }
   const entry = value as Record<string, unknown>;
   return {
+    targetPolicy: parseTargetPolicy(entry.targetPolicy, `${label}.targetPolicy`),
     damage: parseFiniteNumber(entry.damage, `${label}.damage`),
     range: parseFiniteNumber(entry.range, `${label}.range`),
     radius: parseFiniteNumber(entry.radius, `${label}.radius`),
     cooldownSeconds: parseFiniteNumber(entry.cooldownSeconds, `${label}.cooldownSeconds`),
     arcDegrees: parseFiniteNumber(entry.arcDegrees, `${label}.arcDegrees`)
   };
+}
+
+function parseTargetPolicy(value: unknown, label: string): Partial<CombatTargetPolicyProfile> | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const entry = value as Record<string, unknown>;
+  const policy: Partial<CombatTargetPolicyProfile> = {};
+  if (typeof entry.allowSelf === "boolean") policy.allowSelf = entry.allowSelf;
+  if (typeof entry.allowPlayers === "boolean") policy.allowPlayers = entry.allowPlayers;
+  if (typeof entry.allowNpcs === "boolean") policy.allowNpcs = entry.allowNpcs;
+  if (typeof entry.allowDummies === "boolean") policy.allowDummies = entry.allowDummies;
+  return policy;
 }
 
 function parseAbilityIdList(value: unknown, label: string): number[] {
@@ -837,4 +980,11 @@ function parseFiniteNumber(value: unknown, label: string): number {
 
 function parseFiniteInt(value: unknown, label: string): number {
   return Math.max(0, Math.floor(parseFiniteNumber(value, label)));
+}
+
+function parseOptionalFiniteNumber(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return parseFiniteNumber(value, label);
 }

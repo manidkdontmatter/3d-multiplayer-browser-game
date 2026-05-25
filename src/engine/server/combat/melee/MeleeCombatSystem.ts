@@ -5,12 +5,10 @@
  */
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { MeleeAbilityProfile } from "../../../shared/index";
-import type { CombatTarget } from "../damage/DamageSystem";
-
 const MELEE_DIRECTION_EPSILON = 1e-6;
 
 export interface MeleeAttacker {
-  nid: number;
+  eid: number;
   yaw: number;
   pitch: number;
   body: RAPIER.RigidBody;
@@ -19,17 +17,18 @@ export interface MeleeAttacker {
 
 export interface MeleeCombatSystemOptions {
   readonly world: RAPIER.World;
-  readonly playerCapsuleRadius: number;
-  readonly playerCapsuleHalfHeight: number;
-  readonly dummyRadius: number;
-  readonly dummyHalfHeight: number;
-  readonly getTargets: () => Iterable<CombatTarget>;
-  readonly resolveTargetRuntime: (target: CombatTarget) => {
-    nid: number;
+  readonly forEachTarget: (visitor: (targetEid: number) => void) => void;
+  readonly resolveTargetRuntime: (targetEid: number) => {
     body: RAPIER.RigidBody;
     collider: RAPIER.Collider;
   } | null;
-  readonly applyDamage: (target: CombatTarget, damage: number) => void;
+  readonly resolveAttackerCollisionRadius: (attacker: MeleeAttacker) => number;
+  readonly resolveTargetCollisionBounds: (targetEid: number) => {
+    radius: number;
+    halfHeight: number;
+  };
+  readonly shouldMeleeHitTarget: (attacker: MeleeAttacker, targetEid: number, meleeProfile: MeleeAbilityProfile) => boolean;
+  readonly applyDamage: (attacker: MeleeAttacker, targetEid: number, damage: number) => void;
 }
 
 export class MeleeCombatSystem {
@@ -37,16 +36,16 @@ export class MeleeCombatSystem {
 
   public tryApplyMeleeHit(attacker: MeleeAttacker, meleeProfile: MeleeAbilityProfile): void {
     const hitTarget = this.findMeleeHitTarget(attacker, meleeProfile);
-    if (!hitTarget) {
+    if (hitTarget === null) {
       return;
     }
-    this.options.applyDamage(hitTarget, meleeProfile.damage);
+    this.options.applyDamage(attacker, hitTarget, meleeProfile.damage);
   }
 
   private findMeleeHitTarget(
     attacker: MeleeAttacker,
     meleeProfile: MeleeAbilityProfile
-  ): CombatTarget | null {
+  ): number | null {
     const direction = this.computeViewDirection(attacker.yaw, attacker.pitch);
     const attackerBody = attacker.body.translation();
     const originX = attackerBody.x;
@@ -55,37 +54,42 @@ export class MeleeCombatSystem {
     const range = Math.max(0.1, meleeProfile.range);
     const halfArcRadians = (Math.max(5, Math.min(175, meleeProfile.arcDegrees)) * Math.PI) / 360;
     const minFacingDot = Math.cos(halfArcRadians);
+    const attackerRadius = this.options.resolveAttackerCollisionRadius(attacker);
     const maxCenterDistance =
       range +
-      this.options.playerCapsuleRadius * 2 +
+      attackerRadius * 2 +
       meleeProfile.radius +
-      this.options.dummyRadius;
+      attackerRadius;
     const maxCenterDistanceSq = maxCenterDistance * maxCenterDistance;
     const attackEndX = originX + direction.x * range;
     const attackEndY = originY + direction.y * range;
     const attackEndZ = originZ + direction.z * range;
-    let bestTarget: CombatTarget | null = null;
+    let bestTargetEid: number | null = null;
     let bestForwardDistance = Number.POSITIVE_INFINITY;
 
-    for (const target of this.options.getTargets()) {
-      const runtime = this.options.resolveTargetRuntime(target);
+    this.options.forEachTarget((targetEid) => {
+      const runtime = this.options.resolveTargetRuntime(targetEid);
       if (!runtime) {
-        continue;
+        return;
       }
-      if (runtime.nid === attacker.nid) {
-        continue;
+      if (targetEid === attacker.eid) {
+        return;
+      }
+      if (!this.options.shouldMeleeHitTarget(attacker, targetEid, meleeProfile)) {
+        return;
       }
 
       const targetBody = runtime.body;
-      const targetRadius = this.getCombatTargetRadius(target);
-      const targetHalfHeight = this.getCombatTargetHalfHeight(target);
+      const bounds = this.options.resolveTargetCollisionBounds(targetEid);
+      const targetRadius = bounds.radius;
+      const targetHalfHeight = bounds.halfHeight;
       const bodyPos = targetBody.translation();
       const centerDx = bodyPos.x - originX;
       const centerDy = bodyPos.y - originY;
       const centerDz = bodyPos.z - originZ;
       const centerDistanceSq = centerDx * centerDx + centerDy * centerDy + centerDz * centerDz;
       if (centerDistanceSq > maxCenterDistanceSq) {
-        continue;
+        return;
       }
 
       const centerDistance = Math.sqrt(Math.max(centerDistanceSq, 0));
@@ -93,7 +97,7 @@ export class MeleeCombatSystem {
         const facingDot =
           (centerDx * direction.x + centerDy * direction.y + centerDz * direction.z) / centerDistance;
         if (facingDot < minFacingDot) {
-          continue;
+          return;
         }
       }
 
@@ -116,26 +120,27 @@ export class MeleeCombatSystem {
         bodyPos.z
       );
       if (distanceSq > combinedRadiusSq) {
-        continue;
+        return;
       }
 
       const forwardDistance =
         centerDx * direction.x + centerDy * direction.y + centerDz * direction.z;
-      if (forwardDistance < bestForwardDistance && this.hasMeleeLineOfSight(attacker, target, range)) {
+      if (forwardDistance < bestForwardDistance && this.hasMeleeLineOfSight(attacker, runtime, targetRadius, range)) {
         bestForwardDistance = forwardDistance;
-        bestTarget = target;
+        bestTargetEid = targetEid;
       }
-    }
+    });
 
-    return bestTarget;
+    return bestTargetEid;
   }
 
-  private hasMeleeLineOfSight(attacker: MeleeAttacker, target: CombatTarget, range: number): boolean {
-    const runtime = this.options.resolveTargetRuntime(target);
-    if (!runtime) {
-      return false;
-    }
-    const targetBody = runtime.body;
+  private hasMeleeLineOfSight(
+    attacker: MeleeAttacker,
+    targetRuntime: { body: RAPIER.RigidBody; collider: RAPIER.Collider },
+    targetRadius: number,
+    range: number
+  ): boolean {
+    const targetBody = targetRuntime.body;
     const start = attacker.body.translation();
     const end = targetBody.translation();
     const deltaX = end.x - start.x;
@@ -146,7 +151,7 @@ export class MeleeCombatSystem {
       return true;
     }
     const dir = { x: deltaX / distance, y: deltaY / distance, z: deltaZ / distance };
-    const castDistance = Math.min(range + this.getCombatTargetRadius(target), distance);
+    const castDistance = Math.min(range + targetRadius, distance);
     const hit = this.options.world.castRay(
       new RAPIER.Ray({ x: start.x, y: start.y, z: start.z }, dir),
       castDistance,
@@ -158,7 +163,7 @@ export class MeleeCombatSystem {
     if (!hit) {
       return true;
     }
-    return hit.collider.handle === runtime.collider.handle;
+    return hit.collider.handle === targetRuntime.collider.handle;
   }
 
   private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
@@ -176,16 +181,6 @@ export class MeleeCombatSystem {
       y: y * invMagnitude,
       z: z * invMagnitude
     };
-  }
-
-  private getCombatTargetRadius(target: CombatTarget): number {
-    return target.kind === "dummy" ? this.options.dummyRadius : this.options.playerCapsuleRadius;
-  }
-
-  private getCombatTargetHalfHeight(target: CombatTarget): number {
-    return target.kind === "dummy"
-      ? this.options.dummyHalfHeight
-      : this.options.playerCapsuleHalfHeight;
   }
 
   private segmentSegmentDistanceSq(

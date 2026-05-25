@@ -55,6 +55,7 @@ interface ProjectileFlightVisual {
   readonly glowMaterial: MeshBasicMaterial;
   kind: number;
   pulseTime: number;
+  patternSeed: number;
 }
 
 interface ProjectileBurstParticle {
@@ -98,6 +99,7 @@ export class ProjectileVisualSystem {
         visual = this.acquireProjectileVisual(projectile.modelId);
         this.projectileVisuals.set(projectile.nid, visual);
         visual.root.position.set(projectile.x, projectile.y, projectile.z);
+        visual.patternSeed = projectile.patternSeed >>> 0;
         this.scene.add(visual.root);
         this.emitProjectileSpawnBurst(projectile.modelId, projectile.x, projectile.y, projectile.z);
       } else if (visual.kind !== projectile.modelId) {
@@ -106,10 +108,11 @@ export class ProjectileVisualSystem {
         visual = this.acquireProjectileVisual(projectile.modelId);
         this.projectileVisuals.set(projectile.nid, visual);
         visual.root.position.set(projectile.x, projectile.y, projectile.z);
+        visual.patternSeed = projectile.patternSeed >>> 0;
         this.scene.add(visual.root);
       }
       visual.root.position.set(projectile.x, projectile.y, projectile.z);
-      this.updateProjectileVisualPulse(visual, dt);
+      this.updateProjectileVisualPulse(visual, projectile, dt);
     }
 
     for (const [nid, visual] of this.projectileVisuals) {
@@ -219,16 +222,26 @@ export class ProjectileVisualSystem {
       coreMaterial,
       glowMaterial,
       kind,
-      pulseTime: 0
+      pulseTime: 0,
+      patternSeed: 0
     };
   }
 
-  private updateProjectileVisualPulse(visual: ProjectileFlightVisual, dt: number): void {
-    visual.pulseTime += dt * 7.5;
+  private updateProjectileVisualPulse(visual: ProjectileFlightVisual, projectile: ProjectileState, dt: number): void {
+    const speed = Math.hypot(projectile.vx, projectile.vy, projectile.vz);
+    const speedScale = MathUtils.clamp(speed / 28, 0.65, 1.4);
+    const ttlAgeNorm =
+      projectile.initialTtlSeconds > 0
+        ? MathUtils.clamp((projectile.initialTtlSeconds - projectile.ttlSeconds) / projectile.initialTtlSeconds, 0, 1)
+        : 0;
+    const seedPhase = (visual.patternSeed & 0xffff) / 0xffff * Math.PI * 2;
+    visual.pulseTime += dt * 7.5 * speedScale;
     const oscillation = Math.sin(visual.pulseTime);
-    visual.coreMaterial.emissiveIntensity = 0.88 + oscillation * 0.14;
-    visual.glowMaterial.opacity = 0.26 + (oscillation + 1) * 0.06;
-    const glowScale = 1.1 + (oscillation + 1) * 0.06;
+    const patternBoost = projectile.patternKind > 0 ? 0.08 : 0;
+    const seededWave = Math.sin(seedPhase + ttlAgeNorm * Math.PI * 4);
+    visual.coreMaterial.emissiveIntensity = 0.84 + oscillation * 0.12 + patternBoost + seededWave * 0.05;
+    visual.glowMaterial.opacity = 0.24 + (oscillation + 1) * 0.055 + patternBoost * 0.5;
+    const glowScale = 1.08 + (oscillation + 1) * 0.055 + seededWave * 0.04;
     visual.root.children[0]?.scale.setScalar(glowScale);
   }
 

@@ -11,29 +11,6 @@ export interface ActionEffectAuditRecord {
 
 export type ActionEffect =
   | { type: "broadcast_ability_use"; ownerNid: number; abilityId: number; x: number; y: number; z: number }
-  | {
-      type: "spawn_projectile";
-      ownerNid: number;
-      kind: number;
-      x: number;
-      y: number;
-      z: number;
-      vx: number;
-      vy: number;
-      vz: number;
-      radius: number;
-      damage: number;
-      lifetimeSeconds: number;
-      maxRange: number;
-      gravity: number;
-      drag: number;
-      maxSpeed: number;
-      minSpeed: number;
-      pierceCount: number;
-      despawnOnDamageableHit: boolean;
-      despawnOnWorldHit: boolean;
-    }
-  | { type: "apply_melee_hit"; attackerEid: number; damage: number; range: number; radius: number; arcDegrees: number }
   | { type: "restore_health"; userId: number; amount: number }
   | { type: "equip_item_instance"; userId: number; itemInstanceId: number }
   | { type: "unequip_slot"; userId: number; slot: EquipmentSlot }
@@ -57,8 +34,6 @@ export type ActionEffect =
 
 export interface ActionEffectPipelineOptions {
   readonly broadcastAbilityUse: (ownerNid: number, abilityId: number, x: number, y: number, z: number) => void;
-  readonly spawnProjectile: (request: Extract<ActionEffect, { type: "spawn_projectile" }>) => void;
-  readonly applyMeleeHit: (request: Extract<ActionEffect, { type: "apply_melee_hit" }>) => void;
   readonly restoreHealth: (userId: number, amount: number) => boolean;
   readonly equipItemInstance: (userId: number, itemInstanceId: number) => boolean;
   readonly unequipSlot: (userId: number, slot: EquipmentSlot) => boolean;
@@ -100,14 +75,6 @@ export class ActionEffectPipeline {
         effect.y,
         effect.z
       );
-      return emit(true);
-    }
-    if (effect.type === "spawn_projectile") {
-      this.options.spawnProjectile(effect);
-      return emit(true);
-    }
-    if (effect.type === "apply_melee_hit") {
-      this.options.applyMeleeHit(effect);
       return emit(true);
     }
     if (effect.type === "restore_health") {

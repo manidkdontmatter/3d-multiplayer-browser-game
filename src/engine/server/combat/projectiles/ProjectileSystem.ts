@@ -6,28 +6,37 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { asBuffer, query } from "bitecs";
 import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";
-import type { CombatTarget } from "../damage/DamageSystem";
 
 const PROJECTILE_MIN_RADIUS = 0.005;
 const PROJECTILE_RADIUS_CACHE_SCALE = 1000;
 const PROJECTILE_SPEED_EPSILON = 1e-6;
 const PROJECTILE_DEFAULT_MAX_RANGE = 260;
 const PROJECTILE_CONTACT_EPSILON = 0.002;
+const TWO_PI = Math.PI * 2;
 
 export interface ProjectileSystemOptions {
   readonly world: RAPIER.World;
   readonly ecsWorld: WorldWithComponents;
-  readonly getOwnerColliderByNid: (ownerNid: number) => RAPIER.Collider | undefined;
-  readonly resolveTargetByColliderHandle: (colliderHandle: number) => CombatTarget | null;
-  readonly applyDamage: (target: CombatTarget, damage: number) => void;
+  readonly spiralFrequencyScale: number;
+  readonly getOwnerColliderByEid: (ownerEid: number) => RAPIER.Collider | undefined;
+  readonly resolveTargetEidByColliderHandle: (colliderHandle: number) => number | null;
+  readonly shouldProjectileHitTarget: (
+    ownerEid: number | undefined,
+    targetEid: number,
+    projectileEid: number
+  ) => boolean;
+  readonly applyDamage: (sourceEid: number | undefined, targetEid: number, damage: number) => void;
   readonly despawnProjectile: (eid: number) => void;
 }
 
 export class ProjectileSystem {
   private readonly projectileCastShapeCache = new Map<number, RAPIER.Ball>();
   private readonly identityRotation: RAPIER.Rotation = { x: 0, y: 0, z: 0, w: 1 };
+  private readonly spiralFrequencyScale: number;
 
-  public constructor(private readonly options: ProjectileSystemOptions) {}
+  public constructor(private readonly options: ProjectileSystemOptions) {
+    this.spiralFrequencyScale = Math.max(0, options.spiralFrequencyScale);
+  }
 
   public step(deltaSeconds: number): void {
     const w = this.options.ecsWorld;
@@ -52,11 +61,20 @@ export class ProjectileSystem {
       let vz = c.Velocity.z[eid] ?? 0;
       let remainingRange = c.ProjectileRemainingRange.value[eid] ?? 0;
       let remainingPierces = c.ProjectileRemainingPierces.value[eid] ?? 0;
+      const ownerEidValue = Math.max(0, Math.floor(c.ProjectileOwnerEid.value[eid] ?? 0));
+      const ownerEid = ownerEidValue > 0 ? ownerEidValue : undefined;
 
       const gravity = c.ProjectileGravity.value[eid] ?? 0;
       const drag = c.ProjectileDrag.value[eid] ?? 0;
       const maxSpeed = c.ProjectileMaxSpeed.value[eid] ?? Number.POSITIVE_INFINITY;
       const minSpeed = c.ProjectileMinSpeed.value[eid] ?? 0;
+      const patternKind = c.ProjectilePatternKind.value[eid] ?? 0;
+      const patternSeed = (c.ProjectilePatternSeed.value[eid] ?? 0) >>> 0;
+      const spiralFrequencyHz = c.ProjectilePatternSpiralFrequencyHz.value[eid] ?? 0;
+      const spiralStrength = c.ProjectilePatternSpiralStrength.value[eid] ?? 0;
+      const baseDirX = c.ProjectileBaseDirection.x[eid] ?? 0;
+      const baseDirY = c.ProjectileBaseDirection.y[eid] ?? 0;
+      const baseDirZ = c.ProjectileBaseDirection.z[eid] ?? -1;
 
       // Integrate motion (velocity only; position is advanced after collision cast).
       if (gravity !== 0) {
@@ -84,8 +102,24 @@ export class ProjectileSystem {
         continue;
       }
 
+      if ((patternKind === 1 || patternKind === 3) && spiralStrength > 0 && spiralFrequencyHz > 0) {
+        const initialTtl = c.ProjectileInitialTtl.value[eid] ?? ttlSeconds;
+        const ageSeconds = Math.max(0, initialTtl - ttlSeconds);
+        const loosenedSpiralFrequencyHz = spiralFrequencyHz * this.spiralFrequencyScale;
+        const spiralDirection = this.computeSpiralDirection(
+          { x: baseDirX, y: baseDirY, z: baseDirZ },
+          ageSeconds,
+          patternSeed,
+          loosenedSpiralFrequencyHz,
+          spiralStrength
+        );
+        vx = spiralDirection.x * speed;
+        vy = spiralDirection.y * speed;
+        vz = spiralDirection.z * speed;
+      }
+
       const maxTravelTime = this.resolveProjectileMaxTravelTime(deltaSeconds, remainingRange, speed);
-      const collision = this.castProjectileCollision(eid, x, y, z, vx, vy, vz, maxTravelTime);
+      const collision = this.castProjectileCollision(eid, ownerEid, x, y, z, vx, vy, vz, maxTravelTime);
       const traveledTime = collision ? collision.timeOfImpact : maxTravelTime;
       const traveledDistance = speed * traveledTime;
       remainingRange -= traveledDistance;
@@ -99,9 +133,16 @@ export class ProjectileSystem {
         y += vy * traveledTime;
         z += vz * traveledTime;
 
-        if (collision.target) {
+        if (collision.targetEid !== null) {
+          if (!this.options.shouldProjectileHitTarget(ownerEid, collision.targetEid, eid)) {
+            x += vx * PROJECTILE_CONTACT_EPSILON;
+            y += vy * PROJECTILE_CONTACT_EPSILON;
+            z += vz * PROJECTILE_CONTACT_EPSILON;
+            this.writeProjectileState(eid, { x, y, z, vx, vy, vz, ttlSeconds, remainingRange, remainingPierces });
+            continue;
+          }
           const damage = c.ProjectileDamage.value[eid] ?? 0;
-          this.options.applyDamage(collision.target, damage);
+          this.options.applyDamage(ownerEid, collision.targetEid, damage);
 
           const canPierceTarget = remainingPierces > 0;
           if (canPierceTarget) {
@@ -141,14 +182,23 @@ export class ProjectileSystem {
     }
   }
 
-  public removeByOwner(ownerNid: number): void {
-    const normalizedOwnerNid = Math.max(0, Math.floor(ownerNid));
+  public removeByOwner(owner: { eid: number; nid: number }): void {
+    const normalizedOwnerEid = Math.max(0, Math.floor(owner.eid));
+    const normalizedOwnerNid = Math.max(0, Math.floor(owner.nid));
+    if (normalizedOwnerEid <= 0 && normalizedOwnerNid <= 0) {
+      return;
+    }
     const w = this.options.ecsWorld;
     const c = w.components;
     const eids = query(w, [w.components.ProjectileTag], asBuffer);
     for (let i = 0; i < eids.length; i += 1) {
       const eid = eids[i]!;
-      if ((c.ProjectileOwnerNid.value[eid] ?? 0) === normalizedOwnerNid) {
+      const projectileOwnerEid = Math.max(0, Math.floor(c.ProjectileOwnerEid.value[eid] ?? 0));
+      const projectileOwnerNid = Math.max(0, Math.floor(c.ProjectileOwnerNid.value[eid] ?? 0));
+      if (
+        (normalizedOwnerEid > 0 && projectileOwnerEid === normalizedOwnerEid) ||
+        (normalizedOwnerNid > 0 && projectileOwnerNid === normalizedOwnerNid)
+      ) {
         this.options.despawnProjectile(eid);
       }
     }
@@ -191,6 +241,7 @@ export class ProjectileSystem {
 
   private castProjectileCollision(
     projectileEid: number,
+    ownerEid: number | undefined,
     x: number,
     y: number,
     z: number,
@@ -198,13 +249,14 @@ export class ProjectileSystem {
     vy: number,
     vz: number,
     maxTravelTime: number
-  ): { timeOfImpact: number; target: CombatTarget | null } | null {
+  ): { timeOfImpact: number; targetEid: number | null } | null {
     if (maxTravelTime <= 0) {
       return null;
     }
     const c = this.options.ecsWorld.components;
-    const ownerNid = c.ProjectileOwnerNid.value[projectileEid] ?? 0;
-    const ownerCollider = this.options.getOwnerColliderByNid(ownerNid);
+    const ownerCollider = typeof ownerEid === "number"
+      ? this.options.getOwnerColliderByEid(ownerEid)
+      : undefined;
     const radius = c.ProjectileRadius.value[projectileEid] ?? 0;
     const shape = this.getProjectileCastShape(radius);
     const hit = this.options.world.castShape(
@@ -223,8 +275,8 @@ export class ProjectileSystem {
       return null;
     }
     const timeOfImpact = Math.max(0, Math.min(maxTravelTime, hit.time_of_impact));
-    const hitTarget = this.options.resolveTargetByColliderHandle(hit.collider.handle);
-    return { timeOfImpact, target: hitTarget };
+    const hitTargetEid = this.options.resolveTargetEidByColliderHandle(hit.collider.handle);
+    return { timeOfImpact, targetEid: hitTargetEid };
   }
 
   private getProjectileCastShape(radius: number): RAPIER.Ball {
@@ -236,6 +288,58 @@ export class ProjectileSystem {
       this.projectileCastShapeCache.set(cacheKey, shape);
     }
     return shape;
+  }
+
+  private computeSpiralDirection(
+    baseDirection: { x: number; y: number; z: number },
+    ageSeconds: number,
+    seed: number,
+    frequencyHz: number,
+    strength: number
+  ): { x: number; y: number; z: number } {
+    const forward = this.normalize(baseDirection, { x: 0, y: 0, z: -1 });
+    const worldUp = Math.abs(forward.y) > 0.97 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+    const right = this.normalize(this.cross(worldUp, forward), { x: 1, y: 0, z: 0 });
+    const up = this.cross(forward, right);
+    const phase = ((seed & 0xffff) / 0xffff) * TWO_PI;
+    const angle = ageSeconds * frequencyHz * TWO_PI + phase;
+    const tangentX = Math.cos(angle) * strength;
+    const tangentY = Math.sin(angle) * strength;
+    return this.normalize(
+      {
+        x: forward.x + right.x * tangentX + up.x * tangentY,
+        y: forward.y + right.y * tangentX + up.y * tangentY,
+        z: forward.z + right.z * tangentX + up.z * tangentY
+      },
+      forward
+    );
+  }
+
+  private cross(
+    a: { x: number; y: number; z: number },
+    b: { x: number; y: number; z: number }
+  ): { x: number; y: number; z: number } {
+    return {
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x
+    };
+  }
+
+  private normalize(
+    value: { x: number; y: number; z: number },
+    fallback: { x: number; y: number; z: number }
+  ): { x: number; y: number; z: number } {
+    const magnitude = Math.hypot(value.x, value.y, value.z);
+    if (magnitude <= PROJECTILE_SPEED_EPSILON) {
+      return fallback;
+    }
+    const inv = 1 / magnitude;
+    return {
+      x: value.x * inv,
+      y: value.y * inv,
+      z: value.z * inv
+    };
   }
 
   public static resolveMaxRange(rawMaxRange: number | undefined): number {
@@ -252,4 +356,3 @@ export class ProjectileSystem {
     return rawValue;
   }
 }
-

@@ -66,16 +66,6 @@ export interface PickupSpawnDefinition {
   persistencePolicy: PickupPersistencePolicy;
 }
 
-export interface StationDefinition {
-  id: number;
-  key: string;
-  name: string;
-  x: number;
-  y: number;
-  z: number;
-  interactRadius: number;
-}
-
 export interface ItemInstance {
   itemInstanceId: number;
   definitionId: number;
@@ -161,7 +151,6 @@ export type ItemCatalogRaw = {
   items: unknown;
   starterPickupSpawns?: unknown;
   starterWorldItems?: unknown;
-  stations?: unknown;
 };
 
 let ITEM_DEFINITIONS: ReadonlyArray<ItemDefinition> = Object.freeze([]);
@@ -169,7 +158,6 @@ let ITEM_DEFINITIONS_BY_ID = new Map<number, ItemDefinition>();
 let ITEM_DEFINITIONS_BY_MODEL_ID = new Map<number, ItemDefinition>();
 export let INVENTORY_MAX_SLOTS = 160;
 export let STARTER_PICKUP_SPAWNS: ReadonlyArray<PickupSpawnDefinition> = Object.freeze([]);
-export let STATIONS: ReadonlyArray<StationDefinition> = Object.freeze([]);
 
 export function injectItemCatalog(raw: ItemCatalogRaw): void {
   const parsed = parseItemCatalog(raw);
@@ -178,7 +166,6 @@ export function injectItemCatalog(raw: ItemCatalogRaw): void {
   ITEM_DEFINITIONS_BY_MODEL_ID = new Map(parsed.items.map((item) => [item.modelId, item]));
   INVENTORY_MAX_SLOTS = parsed.maxSlots;
   STARTER_PICKUP_SPAWNS = Object.freeze(parsed.starterPickupSpawns);
-  STATIONS = Object.freeze(parsed.stations);
 }
 
 export function getAllItemDefinitions(): ReadonlyArray<ItemDefinition> {
@@ -220,32 +207,6 @@ export function upsertItemDefinition(raw: unknown): ItemDefinition | null {
   } catch {
     return null;
   }
-}
-
-export function getNearestStation(
-  x: number,
-  y: number,
-  z: number,
-  maxDistance: number
-): StationDefinition | null {
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(maxDistance) || maxDistance <= 0) {
-    return null;
-  }
-  const maxDistanceSq = maxDistance * maxDistance;
-  let best: StationDefinition | null = null;
-  let bestDistanceSq = Number.POSITIVE_INFINITY;
-  for (const station of STATIONS) {
-    const dx = station.x - x;
-    const dy = station.y - y;
-    const dz = station.z - z;
-    const distanceSq = dx * dx + dy * dy + dz * dz;
-    if (distanceSq > maxDistanceSq || distanceSq > bestDistanceSq) {
-      continue;
-    }
-    best = station;
-    bestDistanceSq = distanceSq;
-  }
-  return best;
 }
 
 export function equipmentSlotToWireValue(slot: EquipmentSlot | null | undefined): number {
@@ -374,7 +335,6 @@ function parseItemCatalog(raw: ItemCatalogRaw): {
   maxSlots: number;
   items: ItemDefinition[];
   starterPickupSpawns: PickupSpawnDefinition[];
-  stations: StationDefinition[];
 } {
   if (!raw || typeof raw !== "object") {
     throw new Error("item catalog must be an object.");
@@ -408,30 +368,10 @@ function parseItemCatalog(raw: ItemCatalogRaw): {
   const starterPickupSpawns = spawnSource.map((entry, index) =>
     parseStarterPickupSpawn(entry, ids, `item-catalog.starterPickupSpawns[${index}]`)
   );
-  const stations = Array.isArray(raw.stations)
-    ? raw.stations.map((entry, index) => parseStation(entry, `item-catalog.stations[${index}]`))
-    : [];
   return {
     maxSlots,
     items,
-    starterPickupSpawns,
-    stations
-  };
-}
-
-function parseStation(value: unknown, label: string): StationDefinition {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be an object.`);
-  }
-  const entry = value as Record<string, unknown>;
-  return {
-    id: parseFiniteInt(entry.id, `${label}.id`),
-    key: parseString(entry.key, `${label}.key`),
-    name: parseString(entry.name, `${label}.name`),
-    x: parseFiniteNumber(entry.x, `${label}.x`),
-    y: parseFiniteNumber(entry.y, `${label}.y`),
-    z: parseFiniteNumber(entry.z, `${label}.z`),
-    interactRadius: Math.max(0.5, parseFiniteNumber(entry.interactRadius ?? 4, `${label}.interactRadius`))
+    starterPickupSpawns
   };
 }
 

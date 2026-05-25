@@ -16,6 +16,7 @@ export const GameEvent = {
   INPUT_PROCESSED: "input.processed",
   DAMAGE_DEALT: "damage.dealt",
   HEALTH_CHANGED: "health.changed",
+  DAMAGE_PACKET_APPLIED: "damage.packetApplied",
   ENTITY_DESTROYED: "entity.destroyed",
   PROJECTILE_HIT: "projectile.hit",
   PROJECTILE_DESPAWNED: "projectile.despawned",
@@ -30,6 +31,8 @@ export const GameEvent = {
   ENTITY_CREATED: "entity.created",
   TICK_POST_MOVEMENT: "tick.postMovement",
   EFFECT_SPAWN_ENTITY: "effect.spawnEntity",
+  DEATH_POLICY_STARTED: "death.policyStarted",
+  DEATH_POLICY_COMPLETED: "death.policyCompleted",
 } as const;
 
 export type GameEventType = (typeof GameEvent)[keyof typeof GameEvent];
@@ -69,6 +72,13 @@ export interface InputProcessedPayload {
 }
 
 export interface DamageDealtPayload {
+  sourceEid: number | null;
+  targetEid: number;
+  amount: number;
+  kind: "melee" | "projectile" | "status" | "fall" | "environment";
+}
+
+export interface DamagePacketAppliedPayload {
   sourceEid: number | null;
   targetEid: number;
   amount: number;
@@ -164,5 +174,17 @@ export interface EffectSpawnEntityPayload {
   archetypeId: number;
   sourceEid: number | null;
   position: { x: number; y: number; z: number };
+}
+
+export interface DeathPolicyStartedPayload {
+  eid: number;
+  accountId: number;
+  policyId: string;
+}
+
+export interface DeathPolicyCompletedPayload {
+  eid: number;
+  accountId: number;
+  policyId: string;
 }
 

@@ -71,6 +71,7 @@ interface NpcBlackboard {
   nextThinkAtSeconds: number;
   nextPerceptionAtSeconds: number;
   nextPathAtSeconds: number;
+  respawnAtSeconds: number;
   consecutivePathFailures: number;
   lastPathProgressAtSeconds: number;
   lastPathDistance: number;
@@ -119,6 +120,7 @@ export interface NpcAiSystemOptions {
   readonly resolvePerceptionTargetByColliderHandle: (colliderHandle: number) => AiVisibleTarget | null;
   readonly usePrimaryAbilityByEid: (eid: number) => void;
   readonly applyEntityAppearanceByEid: (eid: number, patch: EntityAppearancePatch) => boolean;
+  readonly onNpcRespawned?: (eid: number) => void;
   readonly aiTickIntervalSeconds: number;
   readonly perceptionTickIntervalSeconds: number;
   readonly pathReplanIntervalSeconds: number;
@@ -195,6 +197,7 @@ export class NpcAiSystem {
           nextThinkAtSeconds: phase * this.options.aiTickIntervalSeconds,
           nextPerceptionAtSeconds: phase * this.options.perceptionTickIntervalSeconds,
           nextPathAtSeconds: 0,
+          respawnAtSeconds: 0,
           consecutivePathFailures: 0,
           lastPathProgressAtSeconds: 0,
           lastPathDistance: Number.POSITIVE_INFINITY
@@ -210,13 +213,16 @@ export class NpcAiSystem {
 
   public step(elapsedSeconds: number): void {
     for (const guard of this.npcs) {
-      if (elapsedSeconds >= guard.blackboard.nextLifecycleAtSeconds) {
-        const previous = guard.blackboard.lifecycleState;
-        this.updateLifecycle(guard, elapsedSeconds);
-        if (previous !== guard.blackboard.lifecycleState) {
-          this.lifecycleTransitions += 1;
-          this.realignScheduleForTier(guard, elapsedSeconds);
+      if (guard.blackboard.respawnAtSeconds > 0) {
+        if (elapsedSeconds >= guard.blackboard.respawnAtSeconds) {
+          this.respawnGuard(guard, elapsedSeconds);
+        } else {
+          this.stopCharacter(guard.character.eid);
+          continue;
         }
+      }
+      if (elapsedSeconds >= guard.blackboard.nextLifecycleAtSeconds) {
+        this.updateLifecycle(guard, elapsedSeconds);
         guard.blackboard.nextLifecycleAtSeconds = this.scheduleNext(
           guard.blackboard.nextLifecycleAtSeconds,
           elapsedSeconds,
@@ -277,12 +283,11 @@ export class NpcAiSystem {
     }
     runtime.blackboard.stimulus = stimulus;
     if (runtime.blackboard.lifecycleState === "hibernating") {
-      runtime.blackboard.lifecycleState =
+      const nextState =
         distanceSq <= runtime.archetype.activationRadius * runtime.archetype.activationRadius
-        ? "active"
-        : "inactive";
-      this.lifecycleTransitions += 1;
-      this.realignScheduleForTier(runtime, elapsedSeconds);
+          ? "active"
+          : "inactive";
+      this.transitionLifecycleState(runtime, nextState, elapsedSeconds);
     }
     this.stimuliReceived += 1;
     return true;
@@ -316,6 +321,25 @@ export class NpcAiSystem {
       lifecycleTransitions: this.lifecycleTransitions,
       stimuliReceived: this.stimuliReceived
     };
+  }
+
+  public queueRespawnForNpcEid(eid: number, elapsedSeconds: number, delaySeconds: number): boolean {
+    const guard = this.npcs.find((entry) => entry.character.eid === eid);
+    if (!guard) {
+      return false;
+    }
+    this.resetGuardRuntimeForRespawn(guard, "inactive");
+    guard.blackboard.respawnAtSeconds = elapsedSeconds + Math.max(0, delaySeconds);
+    const hiddenPosition = this.options.ecs.stageCharacterForDelayedRespawnByEid(eid, {
+      spawnX: guard.spawn.x,
+      spawnY: guard.spawn.y,
+      spawnZ: guard.spawn.z
+    });
+    guard.character.body.setTranslation(
+      { x: hiddenPosition.hiddenX, y: hiddenPosition.hiddenY, z: hiddenPosition.hiddenZ },
+      true
+    );
+    return true;
   }
 
   private tickBehaviorTree(
@@ -583,16 +607,16 @@ export class NpcAiSystem {
 
   private updateLifecycle(guard: NpcRuntime, elapsedSeconds: number): void {
     if (!this.options.hibernationEnabled) {
-      guard.blackboard.lifecycleState = "active";
+      this.transitionLifecycleState(guard, "active", elapsedSeconds);
       return;
     }
     const stimulusDistance = this.getStimulusTargetDistance(guard, elapsedSeconds);
     if (stimulusDistance <= guard.archetype.activationRadius) {
-      guard.blackboard.lifecycleState = "active";
+      this.transitionLifecycleState(guard, "active", elapsedSeconds);
       return;
     }
     if (stimulusDistance <= guard.archetype.deactivationRadius) {
-      guard.blackboard.lifecycleState = "inactive";
+      this.transitionLifecycleState(guard, "inactive", elapsedSeconds);
       return;
     }
     if (guard.blackboard.lifecycleState === "hibernating") {
@@ -600,17 +624,37 @@ export class NpcAiSystem {
     }
     const nearestDistance = this.getNearestTargetDistance(guard);
     if (nearestDistance <= guard.archetype.activationRadius) {
-      guard.blackboard.lifecycleState = "active";
+      this.transitionLifecycleState(guard, "active", elapsedSeconds);
       return;
     }
     if (nearestDistance >= guard.archetype.deactivationRadius) {
-      guard.blackboard.lifecycleState = "hibernating";
-      guard.blackboard.target = null;
-      guard.blackboard.path = [];
-      guard.blackboard.pathIndex = 0;
+      this.transitionLifecycleState(guard, "hibernating", elapsedSeconds);
       return;
     }
-    guard.blackboard.lifecycleState = "inactive";
+    this.transitionLifecycleState(guard, "inactive", elapsedSeconds);
+  }
+
+  private transitionLifecycleState(
+    guard: NpcRuntime,
+    nextState: NpcLifecycleState,
+    elapsedSeconds: number
+  ): void {
+    const previous = guard.blackboard.lifecycleState;
+    if (previous === nextState) {
+      return;
+    }
+    guard.blackboard.lifecycleState = nextState;
+    if (nextState === "hibernating") {
+      this.clearGuardCombatAndPathTargets(guard);
+    }
+    this.lifecycleTransitions += 1;
+    this.realignScheduleForTier(guard, elapsedSeconds);
+  }
+
+  private clearGuardCombatAndPathTargets(guard: NpcRuntime): void {
+    guard.blackboard.target = null;
+    guard.blackboard.path = [];
+    guard.blackboard.pathIndex = 0;
   }
 
   private resolveLifecycleProfile(state: NpcLifecycleState): LifecycleProfile {
@@ -947,7 +991,6 @@ export class NpcAiSystem {
       secondaryMouseSlot: 0,
       hotbarAbilityIds,
       unlockedAbilityIds: [ABILITY_ID_PUNCH],
-      lastPrimaryFireAtSeconds: Number.NEGATIVE_INFINITY,
       lastProcessedSequence: 0,
       primaryHeld: false,
       secondaryHeld: false
@@ -958,6 +1001,34 @@ export class NpcAiSystem {
     this.options.ecs.setEntityNidByEid(eid, nid);
 
     return { eid, body, collider };
+  }
+
+  private respawnGuard(guard: NpcRuntime, elapsedSeconds: number): void {
+    const eid = guard.character.eid;
+    guard.character.body.setTranslation({ x: guard.spawn.x, y: guard.spawn.y, z: guard.spawn.z }, true);
+    this.options.ecs.restoreNpcRespawnStateByEid(eid, {
+      health: guard.archetype.maxHealth,
+      maxHealth: guard.archetype.maxHealth,
+      x: guard.spawn.x,
+      y: guard.spawn.y,
+      z: guard.spawn.z,
+      yaw: guard.spawn.yaw,
+      pitch: 0
+    });
+    this.resetGuardRuntimeForRespawn(guard, "active");
+    guard.blackboard.respawnAtSeconds = 0;
+    this.realignScheduleForTier(guard, elapsedSeconds);
+    this.options.onNpcRespawned?.(eid);
+  }
+
+  private resetGuardRuntimeForRespawn(guard: NpcRuntime, lifecycleState: NpcLifecycleState): void {
+    guard.blackboard.target = null;
+    guard.blackboard.stimulus = null;
+    guard.blackboard.path = [];
+    guard.blackboard.pathIndex = 0;
+    guard.blackboard.wanderGoal = null;
+    guard.blackboard.behaviorState = "idle";
+    guard.blackboard.lifecycleState = lifecycleState;
   }
 
   private toNavPoint(eid: number): NavPoint {

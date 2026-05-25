@@ -3,165 +3,167 @@
  * Scope: It belongs to the engine authoritative server layer.
  * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
  */
-import RAPIER from "@dimforge/rapier3d-compat";
-import { MOVEMENT_MODE_GROUNDED, type MovementMode } from "../../../shared/index";
 import type { EventBus } from "../../events/EventBus";
-import { GameEvent, type DamageDealtPayload, type HealthChangedPayload } from "../../events/GameEvents";
+import {
+  GameEvent,
+  type DamageDealtPayload,
+  type DamagePacketAppliedPayload,
+  type HealthChangedPayload
+} from "../../events/GameEvents";
 
-export interface DamageableCharacterState {
+export interface DamageableEntityState {
+  health: number;
+  maxHealth: number;
   accountId: number;
-  nid: number;
-  health: number;
-  maxHealth: number;
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  grounded: boolean;
-  movementMode: MovementMode;
-  groundedPlatformPid: number | null;
-  carriedFramePid: number | null;
-  body: RAPIER.RigidBody;
 }
 
-export interface DamageableDummyState {
-  health: number;
-  maxHealth: number;
-}
-
-export type CombatTarget =
-  | { kind: "character"; eid: number }
-  | { kind: "player"; eid: number }
-  | { kind: "dummy"; eid: number };
+export type DamageKind = "melee" | "projectile" | "status" | "fall" | "environment";
 
 export interface DamageSystemOptions {
-  readonly maxPlayerHealth: number;
-  readonly playerBodyCenterHeight: number;
-  readonly playerCameraOffsetY: number;
-  readonly getSpawnPosition: () => { x: number; z: number };
-  readonly getSpawnBodyY: (x: number, z: number) => number;
   readonly markCharacterDirtyByAccountId: (
     accountId: number,
     options: { dirtyCharacter: boolean; dirtyAbilityState: boolean }
   ) => void;
-  readonly getCharacterStateByEid: (eid: number) => DamageableCharacterState | null;
-  readonly applyCharacterStateByEid: (eid: number, next: DamageableCharacterState) => void;
-  readonly getDummyStateByEid: (eid: number) => DamageableDummyState | null;
-  readonly applyDummyStateByEid: (eid: number, next: DamageableDummyState) => void;
+  readonly getDamageableStateByEid: (eid: number) => DamageableEntityState | null;
+  readonly applyDamageableStateByEid: (eid: number, next: DamageableEntityState) => void;
+  readonly onZeroHealth: (eid: number, accountId: number) => void;
   readonly events: EventBus;
 }
 
 export class DamageSystem {
-  private readonly targetsByColliderHandle = new Map<number, CombatTarget>();
+  private readonly targetEidByColliderHandle = new Map<number, number>();
 
   public constructor(private readonly options: DamageSystemOptions) {}
 
-  public registerPlayerCollider(colliderHandle: number, eid: number): void {
-    this.registerCharacterCollider(colliderHandle, eid);
-  }
-
-  public registerCharacterCollider(colliderHandle: number, eid: number): void {
-    this.targetsByColliderHandle.set(colliderHandle, { kind: "character", eid });
-  }
-
-  public registerDummyCollider(colliderHandle: number, eid: number): void {
-    this.targetsByColliderHandle.set(colliderHandle, { kind: "dummy", eid });
+  public registerCollider(colliderHandle: number, eid: number): void {
+    this.targetEidByColliderHandle.set(colliderHandle, eid);
   }
 
   public unregisterCollider(colliderHandle: number): void {
-    this.targetsByColliderHandle.delete(colliderHandle);
+    this.targetEidByColliderHandle.delete(colliderHandle);
   }
 
-  public resolveTargetByColliderHandle(colliderHandle: number): CombatTarget | null {
-    return this.targetsByColliderHandle.get(colliderHandle) ?? null;
+  public resolveTargetEidByColliderHandle(colliderHandle: number): number | null {
+    const eid = this.targetEidByColliderHandle.get(colliderHandle);
+    return typeof eid === "number" ? eid : null;
   }
 
-  public getTargets(): Iterable<CombatTarget> {
-    return this.targetsByColliderHandle.values();
+  public forEachTarget(visitor: (targetEid: number) => void): void {
+    for (const eid of this.targetEidByColliderHandle.values()) {
+      visitor(eid);
+    }
   }
 
-  public applyDamage(target: CombatTarget, damage: number, sourceEid: number | null = null): void {
-    this.applyDamageWithKind(target, damage, sourceEid, sourceEid !== null ? "melee" : "environment");
+  public applyMeleeDamageByEid(targetEid: number, damage: number, sourceEid: number): void {
+    this.applyDamageByEidWithKind(targetEid, damage, sourceEid, "melee");
   }
 
-  public applyFallDamageByCharacterEid(eid: number, damage: number): void {
-    this.applyDamageWithKind({ kind: "character", eid }, damage, null, "fall");
+  public applyProjectileDamageByEid(targetEid: number, damage: number, sourceEid: number | null): void {
+    this.applyDamageByEidWithKind(targetEid, damage, sourceEid, "projectile");
   }
 
-  private applyDamageWithKind(
-    target: CombatTarget,
+  public applyStatusDamageByEid(targetEid: number, damage: number, sourceEid: number | null): void {
+    this.applyDamageByEidWithKind(targetEid, damage, sourceEid, "status");
+  }
+
+  public applyHealingByEid(targetEid: number, healing: number): boolean {
+    const appliedHealing = Math.max(0, Math.floor(healing));
+    if (appliedHealing <= 0) return false;
+    const state = this.options.getDamageableStateByEid(targetEid);
+    if (!state) return false;
+    if (state.health <= 0) {
+      return false;
+    }
+    const previousHealth = state.health;
+    const nextHealth = Math.min(state.maxHealth, previousHealth + appliedHealing);
+    if (nextHealth === previousHealth) {
+      return false;
+    }
+    state.health = nextHealth;
+    if (state.accountId > 0) {
+      this.options.markCharacterDirtyByAccountId(state.accountId, {
+        dirtyCharacter: true,
+        dirtyAbilityState: false
+      });
+    }
+    this.options.applyDamageableStateByEid(targetEid, state);
+    this.options.events.emit<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, {
+      eid: targetEid,
+      previous: previousHealth,
+      current: nextHealth,
+      max: state.maxHealth
+    });
+    return true;
+  }
+
+  public restoreHealthToMaxByEid(targetEid: number): boolean {
+    const state = this.options.getDamageableStateByEid(targetEid);
+    if (!state) {
+      return false;
+    }
+    const previousHealth = state.health;
+    const nextHealth = Math.max(0, Math.floor(state.maxHealth));
+    if (previousHealth === nextHealth) {
+      return false;
+    }
+    state.health = nextHealth;
+    if (state.accountId > 0) {
+      this.options.markCharacterDirtyByAccountId(state.accountId, {
+        dirtyCharacter: true,
+        dirtyAbilityState: false
+      });
+    }
+    this.options.applyDamageableStateByEid(targetEid, state);
+    this.options.events.emit<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, {
+      eid: targetEid,
+      previous: previousHealth,
+      current: nextHealth,
+      max: state.maxHealth
+    });
+    return true;
+  }
+
+  public applyFallDamageByEid(eid: number, damage: number): void {
+    this.applyDamageByEidWithKind(eid, damage, null, "fall");
+  }
+
+  private applyDamageByEidWithKind(
+    targetEid: number,
     damage: number,
     sourceEid: number | null,
-    damageKind: "melee" | "projectile" | "status" | "fall" | "environment"
+    damageKind: DamageKind
   ): void {
     const appliedDamage = Math.max(0, Math.floor(damage));
     if (appliedDamage <= 0) return;
 
-    if (target.kind === "character" || target.kind === "player") {
-      const character = this.options.getCharacterStateByEid(target.eid);
-      if (!character) return;
-      const previousHealth = character.health;
-      character.health = Math.max(0, character.health - appliedDamage);
-      if (character.accountId > 0) {
-        this.options.markCharacterDirtyByAccountId(character.accountId, {
-          dirtyCharacter: true, dirtyAbilityState: false
-        });
-      }
-      this.options.events.emit<DamageDealtPayload>(GameEvent.DAMAGE_DEALT, {
-        sourceEid, targetEid: target.eid, amount: appliedDamage,
-        kind: damageKind
-      });
-      this.options.events.emit<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, {
-        eid: target.eid, previous: previousHealth,
-        current: character.health, max: character.maxHealth
-      });
-      if (character.health <= 0) {
-        this.resolveZeroHealth(character);
-      }
-      this.options.applyCharacterStateByEid(target.eid, character);
+    const state = this.options.getDamageableStateByEid(targetEid);
+    if (!state) return;
+    if (state.health <= 0) {
       return;
     }
-    const dummy = this.options.getDummyStateByEid(target.eid);
-    if (!dummy) return;
-    const prevDummyHp = dummy.health;
-    dummy.health = Math.max(0, dummy.health - appliedDamage);
-    if (dummy.health <= 0) {
-      dummy.health = dummy.maxHealth;
+    const previousHealth = state.health;
+    state.health = Math.max(0, state.health - appliedDamage);
+    if (state.accountId > 0) {
+      this.options.markCharacterDirtyByAccountId(state.accountId, {
+        dirtyCharacter: true, dirtyAbilityState: false
+      });
     }
+    this.options.applyDamageableStateByEid(targetEid, state);
+    this.options.events.emit<DamagePacketAppliedPayload>(GameEvent.DAMAGE_PACKET_APPLIED, {
+      sourceEid,
+      targetEid,
+      amount: appliedDamage,
+      kind: damageKind
+    });
+    this.options.events.emit<DamageDealtPayload>(GameEvent.DAMAGE_DEALT, {
+      sourceEid, targetEid, amount: appliedDamage,
+      kind: damageKind
+    });
     this.options.events.emit<HealthChangedPayload>(GameEvent.HEALTH_CHANGED, {
-      eid: target.eid, previous: prevDummyHp, current: dummy.health, max: dummy.maxHealth
+      eid: targetEid, previous: previousHealth, current: state.health, max: state.maxHealth
     });
-    this.options.applyDummyStateByEid(target.eid, dummy);
-  }
-
-  private resolveZeroHealth(character: DamageableCharacterState): void {
-    if (character.accountId <= 0) {
-      character.health = character.maxHealth;
-      return;
+    if (state.health <= 0) {
+      this.options.onZeroHealth(targetEid, state.accountId);
     }
-    const spawn = this.options.getSpawnPosition();
-    const spawnBodyY = this.options.getSpawnBodyY(spawn.x, spawn.z);
-    character.body.setTranslation(
-      { x: spawn.x, y: spawnBodyY, z: spawn.z },
-      true
-    );
-    character.vx = 0;
-    character.vy = 0;
-    character.vz = 0;
-    character.grounded = true;
-    character.movementMode = MOVEMENT_MODE_GROUNDED;
-    character.groundedPlatformPid = null;
-    character.carriedFramePid = null;
-    character.health = this.options.maxPlayerHealth;
-    character.maxHealth = this.options.maxPlayerHealth;
-    character.x = spawn.x;
-    character.y = spawnBodyY + this.options.playerCameraOffsetY;
-    character.z = spawn.z;
-    this.options.markCharacterDirtyByAccountId(character.accountId, {
-      dirtyCharacter: true,
-      dirtyAbilityState: false
-    });
   }
 }

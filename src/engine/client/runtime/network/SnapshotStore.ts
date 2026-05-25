@@ -295,7 +295,42 @@ export class SnapshotStore {
       modelId: projectileKind > 0 ? projectileKind : 1,
       x: position.x,
       y: position.y,
-      z: position.z
+      z: position.z,
+      vx: typeof raw.velocity === "object" && raw.velocity && typeof (raw.velocity as { x?: unknown }).x === "number"
+        ? ((raw.velocity as { x: number }).x)
+        : 0,
+      vy: typeof raw.velocity === "object" && raw.velocity && typeof (raw.velocity as { y?: unknown }).y === "number"
+        ? ((raw.velocity as { y: number }).y)
+        : 0,
+      vz: typeof raw.velocity === "object" && raw.velocity && typeof (raw.velocity as { z?: unknown }).z === "number"
+        ? ((raw.velocity as { z: number }).z)
+        : 0,
+      patternSeed: typeof raw.projectilePatternSeed === "number" ? (Math.floor(raw.projectilePatternSeed) >>> 0) : 0,
+      patternKind: typeof raw.projectilePatternKind === "number" ? Math.max(0, Math.floor(raw.projectilePatternKind)) : 0,
+      patternSpiralFrequencyHz:
+        typeof raw.projectilePatternSpiralFrequencyHz === "number" ? raw.projectilePatternSpiralFrequencyHz : 0,
+      patternSpiralStrength:
+        typeof raw.projectilePatternSpiralStrength === "number" ? raw.projectilePatternSpiralStrength : 0,
+      baseDirX:
+        typeof raw.projectileBaseDirection === "object" &&
+        raw.projectileBaseDirection &&
+        typeof (raw.projectileBaseDirection as { x?: unknown }).x === "number"
+          ? ((raw.projectileBaseDirection as { x: number }).x)
+          : 0,
+      baseDirY:
+        typeof raw.projectileBaseDirection === "object" &&
+        raw.projectileBaseDirection &&
+        typeof (raw.projectileBaseDirection as { y?: unknown }).y === "number"
+          ? ((raw.projectileBaseDirection as { y: number }).y)
+          : 0,
+      baseDirZ:
+        typeof raw.projectileBaseDirection === "object" &&
+        raw.projectileBaseDirection &&
+        typeof (raw.projectileBaseDirection as { z?: unknown }).z === "number"
+          ? ((raw.projectileBaseDirection as { z: number }).z)
+          : -1,
+      ttlSeconds: typeof raw.projectileTtl === "number" ? raw.projectileTtl : 0,
+      initialTtlSeconds: typeof raw.projectileInitialTtl === "number" ? raw.projectileInitialTtl : 0
     };
   }
 

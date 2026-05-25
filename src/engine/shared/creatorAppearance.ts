@@ -115,10 +115,6 @@ export function resolveReadyAppearanceTintColorByContext(
     : resolveReadyAppearanceRuntimeBinding(readyAppearanceId).equipped.tintColorRgb;
 }
 
-export function resolveActivationAppearanceProjectileKind(activationAppearanceId: string | null | undefined): number {
-  return resolveActivationAppearanceRuntimeBinding(activationAppearanceId).projectileKind;
-}
-
 export function resolveReadyAppearanceRuntimeBinding(
   readyAppearanceId: string | null | undefined
 ): ReadyAppearanceRuntimeBinding {

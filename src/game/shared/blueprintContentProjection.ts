@@ -201,17 +201,6 @@ function buildItemCatalogFromRuntime(entries: readonly BlueprintRuntimeEntry[]):
       { definitionId: 200, quantity: 5, x: -4.15, y: 34.05, z: 2.2 },
       { definitionId: 201, quantity: 5, x: -3.45, y: 34.05, z: 2.55 },
       { definitionId: 202, quantity: 5, x: -2.75, y: 34.05, z: 2.85 }
-    ],
-    stations: [
-      {
-        id: 1,
-        key: "starter-station",
-        name: "Starter Station",
-        x: 0.5,
-        y: 34,
-        z: 3.5,
-        interactRadius: 3.25
-      }
     ]
   };
 }

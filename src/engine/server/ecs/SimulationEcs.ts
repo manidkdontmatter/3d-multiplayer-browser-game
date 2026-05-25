@@ -33,6 +33,7 @@ import type {
 } from "./SimulationEcsTypes";
 
 export class SimulationEcs {
+  private static readonly DELAYED_RESPAWN_HIDE_Y_OFFSET = 5000;
   private readonly store = new SimulationEcsStore();
   private readonly indexes = new SimulationEcsIndexRegistry();
 
@@ -66,6 +67,28 @@ export class SimulationEcs {
     return this.indexes.getEidByNid(nid);
   }
 
+  public getEntityNidByEid(eid: number): number {
+    return Math.max(0, Math.floor(this.world.components.NetworkId.value[eid] ?? 0));
+  }
+
+  public resolveCombatOwnerIdentityByEid(eid: number): { eid: number; nid: number } | null {
+    const normalizedEid = Math.max(0, Math.floor(eid));
+    if (normalizedEid <= 0) {
+      return null;
+    }
+    if ((this.world.components.ReplicatedTag[normalizedEid] ?? 0) === 0) {
+      return null;
+    }
+    const nid = this.getEntityNidByEid(normalizedEid);
+    if (nid <= 0) {
+      return null;
+    }
+    return {
+      eid: normalizedEid,
+      nid
+    };
+  }
+
   // ── Player index management ───────────────────────────────────────────────
 
   public bindPlayerIndexes(userId: number, eid: number): void {
@@ -84,8 +107,8 @@ export class SimulationEcs {
     return this.indexes.getPlayerEidByUserId(userId);
   }
 
-  public getCharacterEidByNid(nid: number): number | undefined {
-    return this.indexes.getCharacterEidByNid(nid);
+  public getPlayerUserIdByEid(eid: number): number | undefined {
+    return this.indexes.getPlayerUserIdByEid(eid);
   }
 
   public getPlayerAccountIdByUserId(userId: number): number | null {
@@ -124,12 +147,6 @@ export class SimulationEcs {
     return this.indexes.getCharacterCollider(eid);
   }
 
-  public getCharacterColliderByNid(nid: number): RAPIER.Collider | undefined {
-    const eid = this.indexes.getCharacterEidByNid(nid);
-    if (typeof eid !== "number") return undefined;
-    return this.indexes.getCharacterCollider(eid);
-  }
-
   public getCharacterBody(eid: number): RAPIER.RigidBody | undefined {
     return this.indexes.getCharacterBody(eid);
   }
@@ -144,22 +161,60 @@ export class SimulationEcs {
     return this.indexes.getCharacterCollider(eid);
   }
 
-  public resolveCombatTargetRuntime(target: { kind: "character" | "player" | "dummy"; eid: number }): {
-    nid: number;
+  public resolveCombatTargetRuntimeByEid(targetEid: number): {
     body: RAPIER.RigidBody;
     collider: RAPIER.Collider;
   } | null {
-    const c = this.world.components;
-    if (target.kind === "character" || target.kind === "player") {
-      const body = this.indexes.getCharacterBody(target.eid);
-      const collider = this.indexes.getCharacterCollider(target.eid);
-      if (!body || !collider) return null;
-      return { nid: c.NetworkId.value[target.eid] ?? 0, body, collider };
+    const characterBody = this.indexes.getCharacterBody(targetEid);
+    const characterCollider = this.indexes.getCharacterCollider(targetEid);
+    if (characterBody && characterCollider) {
+      return { body: characterBody, collider: characterCollider };
     }
-    const body = this.indexes.getDummyBody(target.eid);
-    const collider = this.indexes.getDummyCollider(target.eid);
-    if (!body || !collider) return null;
-    return { nid: c.NetworkId.value[target.eid] ?? 0, body, collider };
+    const dummyBody = this.indexes.getDummyBody(targetEid);
+    const dummyCollider = this.indexes.getDummyCollider(targetEid);
+    if (dummyBody && dummyCollider) {
+      return { body: dummyBody, collider: dummyCollider };
+    }
+    return null;
+  }
+
+  public resolveCombatCollisionBoundsByEid(targetEid: number): {
+    radius: number;
+    halfHeight: number;
+  } | null {
+    const runtime = this.resolveCombatTargetRuntimeByEid(targetEid);
+    if (!runtime) {
+      return null;
+    }
+    const shape = runtime.collider.shape as {
+      radius?: number;
+      halfHeight?: number;
+      halfExtents?: { x: number; y: number; z: number };
+      borderRadius?: number;
+    };
+    const halfExtents = shape.halfExtents;
+    if (halfExtents) {
+      const borderRadius = Math.max(0, shape.borderRadius ?? 0);
+      return {
+        radius: Math.max(0, Math.max(halfExtents.x, halfExtents.z) + borderRadius),
+        halfHeight: Math.max(0, halfExtents.y + borderRadius)
+      };
+    }
+    if (typeof shape.radius === "number" && typeof shape.halfHeight === "number") {
+      const borderRadius = Math.max(0, shape.borderRadius ?? 0);
+      return {
+        radius: Math.max(0, shape.radius + borderRadius),
+        halfHeight: Math.max(0, shape.halfHeight + borderRadius)
+      };
+    }
+    if (typeof shape.radius === "number") {
+      const radius = Math.max(0, shape.radius);
+      return {
+        radius,
+        halfHeight: radius
+      };
+    }
+    return null;
   }
 
   // ── Player runtime state (snapshot from components) ───────────────────────
@@ -194,7 +249,6 @@ export class SimulationEcs {
       groundedPlatformPid: gp < 0 ? null : gp,
       carriedFramePid: cf < 0 ? null : cf,
       lastProcessedSequence: c.LastProcessedSequence.value[eid] ?? 0,
-      lastPrimaryFireAtSeconds: c.LastPrimaryFireAtSeconds.value[eid] ?? Number.NEGATIVE_INFINITY,
       primaryHeld: (c.PrimaryHeld.value[eid] ?? 0) !== 0,
       secondaryHeld: (c.SecondaryHeld.value[eid] ?? 0) !== 0,
       health: c.Health.value[eid] ?? 0,
@@ -313,21 +367,41 @@ export class SimulationEcs {
     return changed;
   }
 
-  public setPlayerHealthByUserId(userId: number, health: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") return false;
-    const c = this.world.components;
-    const maxH = Math.max(0, Math.floor(c.Health.max[eid] ?? 0));
-    const next = Math.max(0, Math.min(maxH, Math.floor(Number.isFinite(health) ? health : 0)));
-    const prev = Math.max(0, Math.floor(c.Health.value[eid] ?? 0));
-    c.Health.value[eid] = next;
-    return prev !== next;
-  }
-
   // ── Damage state ──────────────────────────────────────────────────────────
 
-  public getPlayerDamageStateByEid(eid: number): DamageState | null {
-    return this.getCharacterDamageStateByEid(eid);
+  public isPlayerEntity(eid: number): boolean {
+    return (this.world.components.PlayerTag[eid] ?? 0) !== 0;
+  }
+
+  public isNpcEntity(eid: number): boolean {
+    return (this.world.components.NpcTag[eid] ?? 0) !== 0;
+  }
+
+  public isDummyEntity(eid: number): boolean {
+    return (this.world.components.DummyTag[eid] ?? 0) !== 0;
+  }
+
+  public getDamageableStateByEid(eid: number): { health: number; maxHealth: number; accountId: number } | null {
+    const c = this.world.components;
+    const maxHealth = c.Health.max[eid];
+    const health = c.Health.value[eid];
+    if (typeof maxHealth !== "number" || typeof health !== "number") {
+      return null;
+    }
+    return {
+      health,
+      maxHealth,
+      accountId: Math.max(0, Math.floor(c.AccountId.value[eid] ?? 0))
+    };
+  }
+
+  public applyDamageableStateByEid(
+    eid: number,
+    state: { health: number; maxHealth: number; accountId: number }
+  ): void {
+    const c = this.world.components;
+    c.Health.value[eid] = Math.max(0, Math.floor(state.health));
+    c.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
   }
 
   public getCharacterDamageStateByEid(eid: number): DamageState | null {
@@ -379,59 +453,55 @@ export class SimulationEcs {
     c.CarriedFramePid.value[eid] = state.carriedFramePid === null ? -1 : state.carriedFramePid;
   }
 
-  public getDummyDamageStateByEid(eid: number): { health: number; maxHealth: number } | null {
-    if (!this.indexes.getDummyBody(eid)) return null;
+  public stageCharacterForDelayedRespawnByEid(
+    eid: number,
+    state: {
+      spawnX: number;
+      spawnY: number;
+      spawnZ: number;
+    }
+  ): { hiddenX: number; hiddenY: number; hiddenZ: number } {
     const c = this.world.components;
-    return { health: c.Health.value[eid] ?? 0, maxHealth: c.Health.max[eid] ?? 0 };
+    const hiddenX = state.spawnX;
+    const hiddenY = state.spawnY - SimulationEcs.DELAYED_RESPAWN_HIDE_Y_OFFSET;
+    const hiddenZ = state.spawnZ;
+    c.Health.value[eid] = 0;
+    c.Velocity.x[eid] = 0;
+    c.Velocity.y[eid] = 0;
+    c.Velocity.z[eid] = 0;
+    c.Position.x[eid] = hiddenX;
+    c.Position.y[eid] = hiddenY;
+    c.Position.z[eid] = hiddenZ;
+    return { hiddenX, hiddenY, hiddenZ };
   }
 
-  public applyDummyDamageStateByEid(eid: number, state: { health: number; maxHealth: number }): void {
-    const c = this.world.components;
-    c.Health.value[eid] = Math.max(0, Math.floor(state.health));
-    c.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
-  }
-
-  // ── Movement state write-back ─────────────────────────────────────────────
-
-  public applyPlayerMovementState(eid: number, state: {
-    x: number; y: number; z: number;
-    yaw: number; pitch: number;
-    vx: number; vy: number; vz: number;
-    grounded: boolean;
-    movementMode: MovementMode;
-    groundedPlatformPid: number | null;
-    carriedFramePid: number | null;
-    lastProcessedSequence: number;
-    lastPrimaryFireAtSeconds: number;
-    primaryHeld: boolean;
-    secondaryHeld: boolean;
-    primaryMouseSlot: number;
-    secondaryMouseSlot: number;
-    rotation: { x: number; y: number; z: number; w: number };
-  }): void {
+  public restoreNpcRespawnStateByEid(
+    eid: number,
+    state: {
+      health: number;
+      maxHealth: number;
+      x: number;
+      y: number;
+      z: number;
+      yaw: number;
+      pitch: number;
+    }
+  ): void {
     const c = this.world.components;
     c.Position.x[eid] = state.x;
     c.Position.y[eid] = state.y;
     c.Position.z[eid] = state.z;
+    c.Velocity.x[eid] = 0;
+    c.Velocity.y[eid] = 0;
+    c.Velocity.z[eid] = 0;
     c.Yaw.value[eid] = state.yaw;
     c.Pitch.value[eid] = state.pitch;
-    c.Velocity.x[eid] = state.vx;
-    c.Velocity.y[eid] = state.vy;
-    c.Velocity.z[eid] = state.vz;
-    c.Grounded.value[eid] = state.grounded ? 1 : 0;
-    c.MovementMode.value[eid] = state.movementMode;
-    c.GroundedPlatformPid.value[eid] = state.groundedPlatformPid === null ? -1 : state.groundedPlatformPid;
-    c.CarriedFramePid.value[eid] = state.carriedFramePid === null ? -1 : state.carriedFramePid;
-    c.LastProcessedSequence.value[eid] = state.lastProcessedSequence;
-    c.LastPrimaryFireAtSeconds.value[eid] = state.lastPrimaryFireAtSeconds;
-    c.PrimaryHeld.value[eid] = state.primaryHeld ? 1 : 0;
-    c.SecondaryHeld.value[eid] = state.secondaryHeld ? 1 : 0;
-    c.PrimaryMouseSlot.value[eid] = clampHotbarSlotIndex(state.primaryMouseSlot);
-    c.SecondaryMouseSlot.value[eid] = clampHotbarSlotIndex(state.secondaryMouseSlot);
-    c.Rotation.x[eid] = state.rotation.x;
-    c.Rotation.y[eid] = state.rotation.y;
-    c.Rotation.z[eid] = state.rotation.z;
-    c.Rotation.w[eid] = state.rotation.w;
+    c.Grounded.value[eid] = 0;
+    c.MovementMode.value[eid] = MOVEMENT_MODE_GROUNDED;
+    c.GroundedPlatformPid.value[eid] = -1;
+    c.CarriedFramePid.value[eid] = -1;
+    c.Health.value[eid] = Math.max(0, Math.floor(state.health));
+    c.Health.max[eid] = Math.max(0, Math.floor(state.maxHealth));
   }
 
   // ── Persistence ───────────────────────────────────────────────────────────
@@ -461,6 +531,10 @@ export class SimulationEcs {
 
   public getReplicatedEids(): number[] {
     return this.store.getReplicatedTagEids();
+  }
+
+  public getWorldItemEids(): number[] {
+    return this.store.getWorldItemTagEids();
   }
 
   public setEntityRenderAppearanceByEid(

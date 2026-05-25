@@ -9,12 +9,40 @@ export type WorldInteractionActionId =
   | "station_open_creator"
   | "pilot_console_toggle";
 
+export type WorldInteractionTargetType = WorldInteractionKind;
+
+export const INTERACTION_SLOT_PRIMARY = 0;
+export const INTERACTION_SLOT_SECONDARY = 1;
+export const INTERACTION_SLOT_TERTIARY = 2;
+
 export interface WorldInteractionAction {
   id: WorldInteractionActionId;
   slot: number;
   label: string;
   enabled: boolean;
   disabledReason?: string;
+  priority?: number;
+}
+
+export interface WorldInteractionTargetDescriptor {
+  targetId: string;
+  targetType: WorldInteractionTargetType;
+  label: string;
+  distanceMeters: number;
+  priority: number;
+  actions: readonly WorldInteractionAction[];
+}
+
+export interface WorldInteractionPromptViewState {
+  kind: "world_interaction";
+  target: WorldInteractionTargetDescriptor | null;
+}
+
+export interface WorldInteractionActivateIntent {
+  kind: "interaction_activate";
+  targetId: string;
+  actionId: WorldInteractionActionId;
+  slot: number;
 }
 
 export interface WorldInteractionPickupContext {
@@ -26,14 +54,14 @@ const WORLD_INTERACTION_ACTIONS_BY_KIND: Readonly<Record<"station" | "pilot_cons
   station: Object.freeze([
     {
       id: "station_open_creator" as const,
-      slot: 0,
+      slot: INTERACTION_SLOT_PRIMARY,
       label: "Open Creator Station",
       enabled: true
     }
   ]),
   pilot_console: Object.freeze([{
     id: "pilot_console_toggle" as const,
-    slot: 0,
+    slot: INTERACTION_SLOT_PRIMARY,
     label: "Toggle Pilot Console",
     enabled: true
   }])
@@ -52,7 +80,7 @@ export function getWorldInteractionActions(
       : 0;
     return Object.freeze([{
       id: "pickup_collect",
-      slot: 0,
+      slot: INTERACTION_SLOT_PRIMARY,
       label: `Pick up ${name}${quantity > 1 ? ` x${quantity}` : ""}`,
       enabled: true
     }]);

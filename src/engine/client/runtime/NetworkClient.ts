@@ -14,11 +14,11 @@ import {
   INVENTORY_OP_ASSIGN_HOTBAR_SLOT,
   INVENTORY_OP_CLEAR_HOTBAR_SLOT,
   INVENTORY_OP_MOVE_HOTBAR_SLOT,
-  INVENTORY_OP_PICKUP,
   INVENTORY_OP_UNEQUIP,
   INVENTORY_OP_USE,
   hotbarPayloadKindToWireValue,
   equipmentSlotToWireValue,
+  type WorldInteractionPromptViewState,
   type RuntimeMapConfig,
   type AbilityDefinition,
   type EquipmentSlot
@@ -55,6 +55,7 @@ import { InterpolationController } from "./network/InterpolationController";
 import { InboundMessageRouter } from "./network/InboundMessageRouter";
 import { NetTransportClient } from "./network/NetTransportClient";
 import { SnapshotStore } from "./network/SnapshotStore";
+import { WorldInteractionStateStore } from "./network/WorldInteractionStateStore";
 import type {
   AbilityEventBatch,
   AbilityState,
@@ -76,6 +77,7 @@ export class NetworkClient {
   private readonly abilities = new AbilityStateStore();
   private readonly creatorBridge = new CreatorNetworkBridge();
   private readonly inventory = new InventoryStateStore();
+  private readonly worldInteraction = new WorldInteractionStateStore();
   private readonly interpolation = new InterpolationController();
   private readonly ackBuffer: AckReconciliationBuffer;
   private readonly inboundMessageRouter = new InboundMessageRouter();
@@ -102,6 +104,7 @@ export class NetworkClient {
         this.abilities.reset();
         this.creatorBridge.reset();
         this.inventory.reset();
+        this.worldInteraction.reset();
         this.interpolation.reset();
         this.ackBuffer.reset();
         this.queuedAbilityCommand = null;
@@ -264,20 +267,6 @@ export class NetworkClient {
       settingsJson
     } satisfies PlayerSettingsCommand);
     this.transport.flush();
-  }
-
-  public queuePickupWorldItem(pickupNid: number, interactSlot = 0): void {
-    this.queueInventoryUiIntent({
-      action: INVENTORY_OP_PICKUP,
-      pickupNid,
-      itemInstanceId: 0,
-      quantity: 0,
-      equipmentSlot: 0,
-      sourceSlot: 0,
-      targetSlot: 0,
-      activationChannel: 0,
-      payloadKind: Math.max(0, Math.floor(interactSlot))
-    });
   }
 
   public queueDropInventoryItem(itemInstanceId: number, quantity = 0): void {
@@ -459,6 +448,10 @@ export class NetworkClient {
     return this.inventory.consumeState();
   }
 
+  public consumeWorldInteractionState(): WorldInteractionPromptViewState | null {
+    return this.worldInteraction.consumeState();
+  }
+
   public getInventoryState(): InventoryState {
     return this.inventory.getState();
   }
@@ -499,6 +492,16 @@ export class NetworkClient {
       intentJson
     } satisfies UiIntentWireCommand);
     this.transport.flush();
+  }
+
+  public queueWorldInteractionActivate(targetId: string, actionId: string, slot: number): void {
+    const viewId = this.worldInteraction.getCurrentViewId();
+    this.queueUiIntentForView(viewId, JSON.stringify({
+      kind: "interaction_activate",
+      targetId,
+      actionId,
+      slot: this.clampUnsignedInt(slot, 0xff)
+    }));
   }
 
   public getRemotePlayers(): RemotePlayerState[] {
@@ -698,14 +701,17 @@ export class NetworkClient {
       onUiViewOpenMessage: (message) => {
         this.creatorBridge.getStateStore().processUiViewOpen(message.viewId, message.stateJson);
         this.inventory.processUiViewOpen(message.viewId, message.stateJson);
+        this.worldInteraction.processUiViewOpen(message.viewId, message.stateJson);
       },
       onUiViewPatchMessage: (message) => {
         this.creatorBridge.getStateStore().processUiViewPatch(message.viewId, message.patchJson);
         this.inventory.processUiViewPatch(message.viewId, message.patchJson);
+        this.worldInteraction.processUiViewPatch(message.viewId, message.patchJson);
       },
       onUiViewCloseMessage: (message) => {
         this.creatorBridge.getStateStore().processUiViewClose(message.viewId);
         this.inventory.processUiViewClose(message.viewId);
+        this.worldInteraction.processUiViewClose(message.viewId);
       },
       onUiIntentResultMessage: (message) => {
         this.pendingUiIntentResults.push(message);

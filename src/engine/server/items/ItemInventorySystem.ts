@@ -75,6 +75,18 @@ export interface ItemInventoryCommandResult {
   reason: string;
 }
 
+export interface PickupWorldItemResult {
+  ok: boolean;
+  reason: string;
+}
+
+export interface PickupInteractionCandidate {
+  pickupNid: number;
+  itemName: string;
+  itemQuantity: number;
+  distanceMeters: number;
+}
+
 export interface ItemInventorySystemOptions<TUser> {
   readonly world: RAPIER.World;
   readonly ecs: SimulationEcs;
@@ -103,6 +115,7 @@ export interface ItemInventorySystemOptions<TUser> {
     pickups: ReadonlyArray<PersistedPickupState>
   ) => void;
   readonly executeHotbarAbility: (userId: number, abilityId: number, activationChannel: number) => boolean;
+  readonly canAssignHotbarAbility?: (userId: number, abilityId: number) => boolean;
   readonly applyEntityRenderAppearanceByEid?: (
     eid: number,
     patch: Partial<{ renderArchetypeId: number; materialVariantId: number; tintColorRgb: number; uniformScalePct: number }>
@@ -215,12 +228,15 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     let changed = false;
     let failureReason = "rejected";
     if (action === INVENTORY_OP_PICKUP) {
-      changed = this.options.actionEffects.execute({
-        type: "pickup_world_item",
+      const pickupResult = this.executePickupWorldItemForUser(
         userId,
-        pickupNid: this.normalizeUInt(command.pickupNid, 0xffff)
-      });
-      if (!changed) failureReason = "pickup_failed";
+        this.normalizeUInt(command.pickupNid, 0xffff)
+      );
+      return {
+        ok: pickupResult.ok,
+        action,
+        reason: pickupResult.ok ? "ok" : pickupResult.reason
+      };
     } else if (action === INVENTORY_OP_DROP) {
       changed = this.options.actionEffects.execute({
         type: "drop_item_instance",
@@ -292,6 +308,56 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     this.persistInventory(player.accountId, inventory, action);
     this.queueInventoryStateForUser(userId);
     return { ok: true, action, reason: "ok" };
+  }
+
+  public findBestPickupInteractionForUser(userId: number): PickupInteractionCandidate | null {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) {
+      return null;
+    }
+    const direction = this.computeViewDirection(player.yaw, player.pitch);
+    const worldItemEids = this.options.ecs.getWorldItemEids();
+    let bestScore = Number.NEGATIVE_INFINITY;
+    let best: PickupInteractionCandidate | null = null;
+    const c = this.options.ecs.world.components;
+    for (const eid of worldItemEids) {
+      if (!this.isPickupEntity(eid)) {
+        continue;
+      }
+      const definitionId = Math.max(0, Math.floor(c.ItemArchetypeId.value[eid] ?? 0));
+      if (definitionId <= 0) {
+        continue;
+      }
+      const definition = this.resolveItemDefinitionById(definitionId);
+      if (!definition) {
+        continue;
+      }
+      const itemQuantity = Math.max(0, Math.floor(c.ItemQuantity.value[eid] ?? 0));
+      if (itemQuantity <= 0 || !this.canPlayerInteractWithWorldItem(player, eid)) {
+        continue;
+      }
+      const target = this.getWorldItemInteractionPoint(eid);
+      const dx = target.x - player.x;
+      const dy = target.y - player.y;
+      const dz = target.z - player.z;
+      const distance = Math.sqrt(Math.max(1e-8, dx * dx + dy * dy + dz * dz));
+      const dot = (dx * direction.x + dy * direction.y + dz * direction.z) / distance;
+      if (dot < 0.42) {
+        continue;
+      }
+      const score = dot * 2 - distance * 0.22;
+      if (score <= bestScore) {
+        continue;
+      }
+      bestScore = score;
+      best = {
+        pickupNid: Math.max(0, Math.floor(c.NetworkId.value[eid] ?? 0)),
+        itemName: definition.name,
+        itemQuantity,
+        distanceMeters: distance
+      };
+    }
+    return best;
   }
 
   public instantiateBlueprintItemForUser(
@@ -573,30 +639,34 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
   }
 
   private tryPickupWorldItem(player: ItemInventoryPlayerState, rawWorldItemNid: unknown): boolean {
+    return this.tryPickupWorldItemResult(player, rawWorldItemNid).ok;
+  }
+
+  private tryPickupWorldItemResult(player: ItemInventoryPlayerState, rawWorldItemNid: unknown): PickupWorldItemResult {
     const pickupNid = this.normalizeUInt(rawWorldItemNid, 0xffff);
     const eid = this.options.ecs.getAnyEidByNid(pickupNid);
     if (typeof eid !== "number") {
-      return false;
+      return { ok: false, reason: "pickup_missing" };
     }
     if (!this.isPickupEntity(eid)) {
-      return false;
+      return { ok: false, reason: "pickup_invalid" };
     }
 
     const c = this.options.ecs.world.components;
     const quantity = Math.max(0, Math.floor(c.ItemQuantity.value[eid] ?? 0));
     if (quantity <= 0 || !this.canPlayerInteractWithWorldItem(player, eid)) {
-      return false;
+      return { ok: false, reason: "pickup_unavailable" };
     }
 
     const definitionId = Math.max(0, Math.floor(c.ItemArchetypeId.value[eid] ?? 0));
     const definition = this.resolveItemDefinitionById(definitionId);
     if (!definition) {
-      return false;
+      return { ok: false, reason: "pickup_definition_missing" };
     }
     const inventory = this.ensureMutableInventory(player.accountId);
     const acceptedQuantity = this.addItemToInventory(inventory, definition, quantity);
     if (acceptedQuantity <= 0) {
-      return false;
+      return { ok: false, reason: "inventory_full" };
     }
 
     const pickupRuntime = this.pickupRuntimeByEid.get(eid) ?? null;
@@ -614,7 +684,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     if (pickupWasPersistent) {
       this.persistPersistentPickups();
     }
-    return true;
+    return { ok: true, reason: "ok" };
   }
 
   private tryDropInventoryItem(
@@ -778,6 +848,23 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     return this.tryPickupWorldItem(player, pickupNid);
   }
 
+  public executePickupWorldItemForUser(userId: number, pickupNid: number): PickupWorldItemResult {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) {
+      this.queueInventoryStateForUser(userId);
+      return { ok: false, reason: "player_missing" };
+    }
+    const result = this.tryPickupWorldItemResult(player, pickupNid);
+    if (!result.ok) {
+      this.queueInventoryStateForUser(userId);
+      return result;
+    }
+    const inventory = this.ensureMutableInventory(player.accountId);
+    this.persistInventory(player.accountId, inventory, INVENTORY_OP_PICKUP);
+    this.queueInventoryStateForUser(userId);
+    return result;
+  }
+
   public applyDropItemEffectByUserId(userId: number, rawItemInstanceId: number, rawQuantity: number): boolean {
     const player = this.getPlayerStateByUserId(userId);
     if (!player) return false;
@@ -792,7 +879,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
   ): boolean {
     const player = this.getPlayerStateByUserId(userId);
     if (!player) return false;
-    return this.tryAssignHotbarSlot(player, rawItemInstanceId, rawTargetSlot, rawPayloadKind);
+    return this.tryAssignHotbarSlot(userId, player, rawItemInstanceId, rawTargetSlot, rawPayloadKind);
   }
 
   public applyClearHotbarSlotEffectByUserId(userId: number, rawSourceSlot: number): boolean {
@@ -1366,6 +1453,7 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
   }
 
   private tryAssignHotbarSlot(
+    userId: number,
     player: ItemInventoryPlayerState,
     rawItemInstanceId: unknown,
     rawTargetSlot: unknown,
@@ -1381,6 +1469,12 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     if (payloadKind === "item_instance") {
       const hasItem = inventory.itemInstances.some((entry) => entry.itemInstanceId === itemInstanceId);
       if (!hasItem) {
+        return false;
+      }
+    }
+    if (payloadKind === "ability") {
+      const canAssign = this.options.canAssignHotbarAbility?.(userId, itemInstanceId) ?? false;
+      if (!canAssign) {
         return false;
       }
     }

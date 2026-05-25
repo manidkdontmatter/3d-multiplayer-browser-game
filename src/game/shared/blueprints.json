@@ -25,7 +25,7 @@
         "ability_creator": {
           "statBudget": 20,
           "attributeBudget": 2,
-          "availableAttributeIds": ["homing-lite", "wide-impact", "quick-cast", "long-reach", "clumsy"],
+          "availableAttributeIds": ["homing-lite", "wide-impact", "quick-cast", "long-reach", "pattern-spread", "pattern-spiral", "clumsy"],
           "draftStats": { "power": 6, "velocity": 6, "efficiency": 4, "control": 4 },
           "draftAttributes": { "quick-cast": 1 }
         }
@@ -54,6 +54,105 @@
           "attributeBudget": 2,
           "availableAttributeIds": ["quick-cast", "wide-impact", "long-reach", "clumsy"],
           "draftStats": { "power": 7, "velocity": 4, "efficiency": 5, "control": 4 },
+          "draftAttributes": { "quick-cast": 1 }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "key": "spiral-bolt",
+      "name": "Spiral Bolt",
+      "description": "Projectile that corkscrews while traveling.",
+      "metadata": { "authoredViaProfile": "ability_creator" },
+      "components": {
+        "AbilityStats": { "power": 5, "velocity": 6, "efficiency": 4, "control": 5 },
+        "ProjectileEmitter": {
+          "patternType": "spiral",
+          "spiralFrequencyHz": 9.5,
+          "spiralStrength": 0.35,
+          "kind": 2,
+          "speed": 21,
+          "damage": 19,
+          "radius": 0.2,
+          "cooldownSeconds": 0.24,
+          "lifetimeSeconds": 2.4,
+          "spawnForwardOffset": 0.75,
+          "spawnVerticalOffset": -0.1
+        },
+        "AbilityAttributes": { "stacks": { "quick-cast": 1 } }
+      },
+      "templateProfiles": {
+        "ability_creator": {
+          "statBudget": 20,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["homing-lite", "wide-impact", "quick-cast", "long-reach", "pattern-spread", "pattern-spiral", "clumsy"],
+          "draftStats": { "power": 5, "velocity": 6, "efficiency": 4, "control": 5 },
+          "draftAttributes": { "quick-cast": 1 }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "key": "scatter-bolt",
+      "name": "Scatter Bolt",
+      "description": "Projectile that applies deterministic spread per shot.",
+      "metadata": { "authoredViaProfile": "ability_creator" },
+      "components": {
+        "AbilityStats": { "power": 5, "velocity": 5, "efficiency": 5, "control": 5 },
+        "ProjectileEmitter": {
+          "patternType": "spread",
+          "spreadAngleDegrees": 11,
+          "kind": 3,
+          "speed": 23,
+          "damage": 20,
+          "radius": 0.2,
+          "cooldownSeconds": 0.22,
+          "lifetimeSeconds": 2.2,
+          "spawnForwardOffset": 0.75,
+          "spawnVerticalOffset": -0.1
+        },
+        "AbilityAttributes": { "stacks": { "quick-cast": 1 } }
+      },
+      "templateProfiles": {
+        "ability_creator": {
+          "statBudget": 20,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["homing-lite", "wide-impact", "quick-cast", "long-reach", "pattern-spread", "pattern-spiral", "clumsy"],
+          "draftStats": { "power": 5, "velocity": 5, "efficiency": 5, "control": 5 },
+          "draftAttributes": { "quick-cast": 1 }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "key": "helix-scatter",
+      "name": "Helix Scatter",
+      "description": "Projectile that combines spread and spiral motion.",
+      "metadata": { "authoredViaProfile": "ability_creator" },
+      "components": {
+        "AbilityStats": { "power": 5, "velocity": 6, "efficiency": 5, "control": 4 },
+        "ProjectileEmitter": {
+          "patternType": "spread_spiral",
+          "spreadAngleDegrees": 8,
+          "spiralFrequencyHz": 11.5,
+          "spiralStrength": 0.42,
+          "kind": 1,
+          "speed": 22,
+          "damage": 21,
+          "radius": 0.2,
+          "cooldownSeconds": 0.2,
+          "lifetimeSeconds": 2.4,
+          "spawnForwardOffset": 0.75,
+          "spawnVerticalOffset": -0.1
+        },
+        "AbilityAttributes": { "stacks": { "quick-cast": 1 } }
+      },
+      "templateProfiles": {
+        "ability_creator": {
+          "statBudget": 20,
+          "attributeBudget": 2,
+          "availableAttributeIds": ["homing-lite", "wide-impact", "quick-cast", "long-reach", "pattern-spread", "pattern-spiral", "clumsy"],
+          "draftStats": { "power": 5, "velocity": 6, "efficiency": 5, "control": 4 },
           "draftAttributes": { "quick-cast": 1 }
         }
       }

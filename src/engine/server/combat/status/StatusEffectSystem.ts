@@ -3,7 +3,6 @@
  * Scope: It belongs to the engine authoritative server layer.
  * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
  */
-import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";
 import type { EventBus } from "../../events/EventBus";
 import { GameEvent, type HealthChangedPayload } from "../../events/GameEvents";
 
@@ -40,8 +39,9 @@ export class StatusEffectSystem {
   private readonly active = new Map<number, ActiveStatus[]>(); // eid -> statuses
 
   public constructor(
-    private readonly components: WorldWithComponents["components"],
-    private readonly events: EventBus
+    private readonly events: EventBus,
+    private readonly applyStatusDamageTick: (targetEid: number, damage: number, sourceEid: number | null) => void,
+    private readonly applyStatusHealTick: (targetEid: number, heal: number, sourceEid: number | null) => void
   ) {
     this.subscribeEvents();
   }
@@ -165,21 +165,24 @@ export class StatusEffectSystem {
 
         status.nextTickAtMs = elapsedMs + def.tickIntervalMs;
 
-        // Apply tick effects via ECS components
-        const hp = this.components.Health;
+        // Apply tick effects via authoritative simulation callbacks.
         if (def.damagePerTick !== undefined) {
           const damage = def.damagePerTick * status.stacks;
-          const currentHp = hp.value[eid] ?? 0;
-          hp.value[eid] = Math.max(0, currentHp - damage);
-          this.events.emit(GameEvent.HEALTH_CHANGED, {
-            eid, previous: currentHp, current: hp.value[eid]!, max: hp.max[eid] ?? 0
-          });
+          this.applyStatusDamageTick(eid, damage, status.sourceEid);
+          // Damage may kill and clear statuses via event callbacks.
+          if (!this.active.has(eid)) {
+            break;
+          }
         }
         if (def.healPerTick !== undefined) {
           const heal = def.healPerTick * status.stacks;
-          const currentHp = hp.value[eid] ?? 0;
-          const maxHp = hp.max[eid] ?? 0;
-          hp.value[eid] = Math.min(maxHp, currentHp + heal);
+          this.applyStatusHealTick(eid, heal, status.sourceEid);
+        }
+
+        // A damage/heal callback may emit events that clear this entity's statuses.
+        // If that happened, stop processing stale entries for this eid this frame.
+        if (!this.active.has(eid)) {
+          break;
         }
       }
 

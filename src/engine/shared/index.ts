@@ -9,6 +9,7 @@ export * from "./blueprint";
 export * from "./blueprintRuntimeCapabilities";
 export * from "./clientLocalSettings";
 export * from "./config";
+export * from "./combat";
 export * from "./creator";
 export * from "./creatorAppearance";
 export * from "./controller/characterControllerConfig";

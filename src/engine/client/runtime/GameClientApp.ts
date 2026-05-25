@@ -20,28 +20,16 @@ import {
   NET_DIAGNOSTICS_WARNING_P95_OUT_MESSAGES,
   coerceClientLocalSettings,
   getAbilityDefinitionById,
-  getLocationStationSockets,
-  getLocationStationCreatorProfile,
-  getLocationStationInteractionLabel,
-  getLocationStationAllowedTemplateBlueprintIds,
   getLocationDefinitionByPid,
-  getLocationPilotConsoleSockets,
   getItemDefinitionById,
-  getBlueprintDefinitionsForProfile,
-  filterCreatorTemplateBlueprintIdsForStation,
-  buildWorldInteractionSocketCandidates,
-  findNearestInteractionSocket,
-  getWorldInteractionActions,
-  resolveWorldInteractionActionBySlot,
   getCreatorAppearanceOptions,
   resolveReadyAppearanceRuntimeBinding,
   resolveActivationAppearanceRuntimeBinding,
-  type WorldInteractionAction,
+  type WorldInteractionPromptViewState,
   worldInteractionSlotToKeyLabel,
   movementModeToLabel,
   type ClientLocalSettings,
   INVENTORY_MAX_SLOTS,
-  type CreatorProfileId,
   type PlayerSettings,
   coercePlayerSettings,
   normalizeYaw,
@@ -91,15 +79,6 @@ interface TransferBootstrapPayload {
 }
 
 export type ClientCreatePhase = "physics" | "network" | "ready";
-type WorldInteractTarget =
-  | {
-      kind: "pickup";
-      pickupNid: number;
-      pickupContext: { itemName: string; itemQuantity: number };
-      actions: readonly WorldInteractionAction[];
-    }
-  | { kind: "station"; actions: readonly WorldInteractionAction[] }
-  | { kind: "pilot_console"; actions: readonly WorldInteractionAction[] };
 
 export class GameClientApp {
   private readonly input: InputController;
@@ -141,7 +120,7 @@ export class GameClientApp {
   private testSecondaryHeld = false;
   private activeAccountKey: string | null = null;
   private transferInProgress = false;
-  private currentWorldInteractTarget: WorldInteractTarget | null = null;
+  private interactionPromptState: WorldInteractionPromptViewState = { kind: "world_interaction", target: null };
   private playerSettings = coercePlayerSettings(null);
   private clientLocalSettings = coerceClientLocalSettings(null);
   private readonly settingsSaveScheduler = new SettingsSaveScheduler(SETTINGS_SAVE_DEBOUNCE_MS);
@@ -351,31 +330,25 @@ export class GameClientApp {
       }
     }
 
-    this.currentWorldInteractTarget = this.resolveWorldInteractTarget();
+    this.applyWorldInteractionEvents();
     const queuedInteractSlot = this.input.consumeInteractSlotTrigger();
     const queuedTestInteractSlot = this.consumeTestInteractTriggerSlot();
     const interactSlot = queuedInteractSlot ?? queuedTestInteractSlot;
     if (!this.ui.isMainMenuOpen() && interactSlot !== null) {
-      const target = this.currentWorldInteractTarget;
+      const target = this.interactionPromptState.target;
       if (target) {
-        const resolvedAction = this.resolveTargetActionBySlot(target, interactSlot);
+        const resolvedAction = target.actions.find((action) => action.slot === interactSlot) ?? null;
         if (!resolvedAction) {
           this.ui.showAlert("That interaction key is not available for this target.", "warning");
-          return;
-        }
-        if (!resolvedAction.enabled) {
+        } else if (!resolvedAction.enabled) {
           this.ui.showAlert(
             resolvedAction.disabledReason && resolvedAction.disabledReason.trim().length > 0
               ? resolvedAction.disabledReason
               : "That interaction is currently unavailable.",
             "warning"
           );
-          return;
-        }
-        if (resolvedAction.id === "pickup_collect" && target.kind === "pickup") {
-          this.network.queuePickupWorldItem(target.pickupNid, interactSlot);
         } else {
-          if (target.kind === "station" && resolvedAction.id === "station_open_creator") {
+          if (target.targetType === "station" && resolvedAction.id === "station_open_creator") {
             this.pendingStationCreatorOpenUntilMs = performance.now() + 1500;
             this.ui.setCreatorState(null);
             this.ui.openCreatorSection();
@@ -384,11 +357,10 @@ export class GameClientApp {
               void document.exitPointerLock();
             }
           }
-          // Authoritative world interact fallback (station session / pilot console toggle).
-          this.network.queuePickupWorldItem(0, interactSlot);
+          this.network.queueWorldInteractionActivate(target.targetId, resolvedAction.id, interactSlot);
         }
       } else {
-        this.network.queuePickupWorldItem(0, interactSlot);
+        this.ui.showAlert("No interaction is currently available here.", "warning");
       }
     }
 
@@ -600,6 +572,14 @@ export class GameClientApp {
         this.ui.showAlert(text, result.ok ? "success" : "warning");
       }
     }
+  }
+
+  private applyWorldInteractionEvents(): void {
+    const state = this.network.consumeWorldInteractionState();
+    if (!state) {
+      return;
+    }
+    this.interactionPromptState = state;
   }
 
   private applyServerAlertEvents(): void {
@@ -891,10 +871,12 @@ export class GameClientApp {
         })),
         equipment: this.inventoryState.equipment
       },
-      worldInteraction: this.currentWorldInteractTarget
+      worldInteraction: this.interactionPromptState.target
         ? {
-            kind: this.currentWorldInteractTarget.kind,
-            actions: this.currentWorldInteractTarget.actions.map((action) => ({
+            targetId: this.interactionPromptState.target.targetId,
+            targetType: this.interactionPromptState.target.targetType,
+            label: this.interactionPromptState.target.label,
+            actions: this.interactionPromptState.target.actions.map((action) => ({
               slot: action.slot,
               label: action.label,
               enabled: action.enabled,
@@ -1381,45 +1363,19 @@ export class GameClientApp {
     return this.queuedTestInteractSlot;
   }
 
-  private resolveInteractionTargetNid(): number | null {
-    const pose = this.getRenderPose();
-    const direction = this.computeViewDirection(pose.yaw, pose.pitch);
-    let bestNid: number | null = null;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    for (const entity of this.network.getWorldEntities().filter(e => e.pickupDefinitionId > 0)) {
-      const dx = entity.x - pose.x;
-      const dy = entity.y + 0.85 - pose.y;
-      const dz = entity.z - pose.z;
-      const distance = Math.hypot(dx, dy, dz);
-      if (distance > 3.35 || distance <= 0.001) {
-        continue;
-      }
-      const dot = (dx * direction.x + dy * direction.y + dz * direction.z) / distance;
-      if (dot < 0.42) {
-        continue;
-      }
-      const score = dot * 2 - distance * 0.22;
-      if (score > bestScore) {
-        bestScore = score;
-        bestNid = entity.nid;
-      }
-    }
-    return bestNid;
-  }
-
   private updateInteractPrompt(): void {
     if (this.ui.isMainMenuOpen()) {
       this.ui.clearInteractPrompt();
       return;
     }
-    if (!this.currentWorldInteractTarget) {
+    if (!this.interactionPromptState.target) {
       this.ui.clearInteractPrompt();
       return;
     }
     this.ui.showInteractPromptActions(
       Array.from(
         new Map(
-          this.currentWorldInteractTarget.actions.map((action) => [
+          this.interactionPromptState.target.actions.map((action) => [
             `${action.id}:${action.slot}`,
             {
               keyLabel: this.getInteractKeyLabel(action.slot),
@@ -1433,128 +1389,8 @@ export class GameClientApp {
     );
   }
 
-  private resolveWorldInteractTarget(): WorldInteractTarget | null {
-    const pickupNid = this.resolveInteractionTargetNid();
-    if (pickupNid !== null) {
-      const item = this.network.getWorldEntities().find((entry) => entry.nid === pickupNid && entry.pickupDefinitionId > 0);
-      const definition = item ? getItemDefinitionById(item.pickupDefinitionId) : null;
-      if (item) {
-        const itemName = definition?.name ?? `Item #${item.pickupDefinitionId}`;
-        return {
-          kind: "pickup",
-          pickupNid,
-          pickupContext: { itemName, itemQuantity: item.itemQuantity },
-          actions: getWorldInteractionActions("pickup", {
-            itemName,
-            itemQuantity: item.itemQuantity
-          })
-        };
-      }
-    }
-    const pose = this.getRenderPose();
-    const nearbyStationPrompt = this.findNearbyStationPrompt(pose);
-    if (nearbyStationPrompt) {
-      const profileTemplateIds = getBlueprintDefinitionsForProfile(nearbyStationPrompt.creatorProfileId).map((blueprint) => blueprint.id);
-      const filteredTemplateIds = filterCreatorTemplateBlueprintIdsForStation(
-        profileTemplateIds,
-        nearbyStationPrompt.allowedTemplateBlueprintIds
-      );
-      const templateCount = filteredTemplateIds.length;
-      const actions = getWorldInteractionActions("station").map((action) => ({
-        ...action,
-        label: nearbyStationPrompt.label,
-        enabled: templateCount > 0,
-        disabledReason: templateCount > 0
-          ? undefined
-          : `No creator templates are configured for profile ${nearbyStationPrompt.creatorProfileId} on this station.`
-      }));
-      return { kind: "station", actions };
-    }
-    const referenceFrames = this.network.getActiveCarrierFramePids();
-    if (referenceFrames.length > 0 && this.findNearbyPilotConsolePrompt(pose)) {
-      return { kind: "pilot_console", actions: getWorldInteractionActions("pilot_console") };
-    }
-    return null;
-  }
-
-  private resolveTargetActionBySlot(target: WorldInteractTarget, slot: number): WorldInteractionAction | null {
-    if (target.kind === "pickup") {
-      return resolveWorldInteractionActionBySlot("pickup", slot, {
-        itemName: target.pickupContext.itemName,
-        itemQuantity: target.pickupContext.itemQuantity
-      }) ?? target.actions.find((action) => action.slot === slot) ?? null;
-    }
-    return resolveWorldInteractionActionBySlot(target.kind, slot) ?? target.actions.find((action) => action.slot === slot) ?? null;
-  }
-
   private getInteractKeyLabel(slot: number): string {
     return worldInteractionSlotToKeyLabel(slot);
-  }
-
-  private findNearbyStationPrompt(pose: { x: number; y: number; z: number }): {
-    label: string;
-    creatorProfileId: CreatorProfileId;
-    allowedTemplateBlueprintIds: readonly number[];
-  } | null {
-    const roots = this.network.getLocationRoots();
-    let best: {
-      label: string;
-      creatorProfileId: CreatorProfileId;
-      allowedTemplateBlueprintIds: readonly number[];
-    } | null = null;
-    let bestDistanceSq = Number.POSITIVE_INFINITY;
-    for (const root of roots) {
-      const definition = getLocationDefinitionByPid(root.worldAnchorId);
-      if (!definition) {
-        continue;
-      }
-      const sockets = getLocationStationSockets(definition);
-      if (sockets.length <= 0) {
-        continue;
-      }
-      const rendered = this.resolveRenderedLocationRootByCarrierFramePid(root.worldAnchorId);
-      const rootX = rendered?.x ?? root.x;
-      const rootY = rendered?.y ?? root.y;
-      const rootZ = rendered?.z ?? root.z;
-      const yaw = rendered
-        ? this.extractYawFromRotationQuaternion(rendered.rotation)
-        : this.extractYawFromRotationQuaternion(root.rotation);
-      const candidates = buildWorldInteractionSocketCandidates(
-        { x: rootX, y: rootY, z: rootZ, yaw },
-        sockets,
-        (socket) => ({
-          label: getLocationStationInteractionLabel(socket),
-          creatorProfileId: getLocationStationCreatorProfile(socket),
-          allowedTemplateBlueprintIds: getLocationStationAllowedTemplateBlueprintIds(socket)
-        })
-      );
-      const nearest = findNearestInteractionSocket(
-        { x: pose.x, y: pose.y, z: pose.z },
-        candidates,
-        { maxDistance: Number.POSITIVE_INFINITY, extraSlack: 0.75 }
-      );
-      if (nearest && nearest.distanceSq < bestDistanceSq) {
-        best = nearest.payload;
-        bestDistanceSq = nearest.distanceSq;
-      }
-    }
-    return best;
-  }
-
-  private computeViewDirection(yaw: number, pitch: number): { x: number; y: number; z: number } {
-    const cosPitch = Math.cos(pitch);
-    const x = -Math.sin(yaw) * cosPitch;
-    const y = Math.sin(pitch);
-    const z = -Math.cos(yaw) * cosPitch;
-    const magnitude = Math.hypot(x, y, z);
-    if (magnitude <= 1e-6) {
-      return { x: 0, y: 0, z: -1 };
-    }
-    return {
-      x: x / magnitude,
-      y: y / magnitude,
-      z: z / magnitude
-    };
   }
 
   private sampleGroundingDiagnostics(): void {
@@ -1919,43 +1755,6 @@ export class GameClientApp {
     return Math.atan2(sinYawCosPitch, cosYawCosPitch);
   }
 
-  private findNearbyPilotConsolePrompt(pose: { x: number; y: number; z: number }): boolean {
-    const candidates: Array<{
-      payload: boolean;
-      socketPoint: { x: number; y: number; z: number };
-      interactRadius: number;
-    }> = [];
-    const roots = this.network.getLocationRoots();
-    for (const root of roots) {
-      const definition = getLocationDefinitionByPid(root.worldAnchorId);
-      if (!definition || definition.motion === "static") {
-        continue;
-      }
-      const sockets = getLocationPilotConsoleSockets(definition);
-      if (sockets.length <= 0) {
-        continue;
-      }
-      const rendered = this.resolveRenderedLocationRootByCarrierFramePid(root.worldAnchorId);
-      const rootX = rendered?.x ?? root.x;
-      const rootY = rendered?.y ?? root.y;
-      const rootZ = rendered?.z ?? root.z;
-      const yaw = rendered
-        ? this.extractYawFromRotationQuaternion(rendered.rotation)
-        : this.extractYawFromRotationQuaternion(root.rotation);
-      candidates.push(
-        ...buildWorldInteractionSocketCandidates(
-          { x: rootX, y: rootY, z: rootZ, yaw },
-          sockets,
-          () => true
-        )
-      );
-    }
-    return Boolean(findNearestInteractionSocket(
-      { x: pose.x, y: pose.y, z: pose.z },
-      candidates,
-      { maxDistance: 4, extraSlack: 0 }
-    ));
-  }
 }
 
 

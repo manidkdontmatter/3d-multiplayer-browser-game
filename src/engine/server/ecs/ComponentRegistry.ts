@@ -50,7 +50,7 @@ export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
   // Character components (added on top of base)
   character: [
     "Velocity", "GroundedPlatformPid", "CarriedFramePid",
-    "Yaw", "Pitch", "LastProcessedSequence", "LastPrimaryFireAtSeconds",
+    "Yaw", "Pitch", "LastProcessedSequence",
     "PrimaryHeld", "SecondaryHeld", "PrimaryMouseSlot", "SecondaryMouseSlot",
     "Hotbar", "UnlockedAbilityIds", "CharacterTag"
   ],
@@ -60,10 +60,14 @@ export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
   npc: ["NpcTag", "ReplicatedTag"],
   // Projectile
   projectile: [
-    "Velocity", "ProjectileOwnerNid", "ProjectileKind",
+    "Velocity", "ProjectileOwnerEid", "ProjectileOwnerNid", "ProjectileKind",
     "ProjectileRadius", "ProjectileDamage", "ProjectileTtl",
+    "ProjectileInitialTtl",
     "ProjectileRemainingRange", "ProjectileGravity", "ProjectileDrag",
     "ProjectileMaxSpeed", "ProjectileMinSpeed", "ProjectileRemainingPierces",
+    "ProjectilePatternSeed", "ProjectilePatternKind", "ProjectilePatternSpiralFrequencyHz",
+    "ProjectilePatternSpiralStrength", "ProjectileBaseDirection",
+    "ProjectileTargetAllowSelf", "ProjectileTargetAllowPlayers", "ProjectileTargetAllowNpcs", "ProjectileTargetAllowDummies",
     "ProjectileDespawnOnDamageableHit", "ProjectileDespawnOnWorldHit",
     "ProjectileTag", "ReplicatedTag"
   ],

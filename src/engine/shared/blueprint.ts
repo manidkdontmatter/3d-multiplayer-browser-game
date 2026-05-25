@@ -15,7 +15,6 @@ import type { ItemCategory, EquipmentSlot, ItemDefinition, ItemUseProfile } from
 import type { PlatformArchetypeCatalog, PlatformDefinition } from "./platforms";
 import {
   resolveActivationAppearanceRuntimeBinding,
-  resolveActivationAppearanceProjectileKind,
   resolveReadyAppearanceRuntimeBinding,
   type CreatorAppearanceProfile
 } from "./creatorAppearance";
@@ -221,8 +220,8 @@ export function buildAbilityDefinitionFromBlueprint(blueprint: BlueprintDefiniti
   const activationAppearanceBinding = resolveActivationAppearanceRuntimeBinding(
     creatorAppearanceProfile?.activationAppearanceId
   );
-  if (projectile && creatorAppearanceProfile?.activationAppearanceId) {
-    projectile.kind = resolveActivationAppearanceProjectileKind(creatorAppearanceProfile.activationAppearanceId);
+  if (projectile) {
+    projectile.kind = activationAppearanceBinding.projectileKind;
   }
   const melee = readMeleeAttack(blueprint.components.MeleeAttack);
 
@@ -335,6 +334,17 @@ function readAttributeStacks(payload: BlueprintComponentPayload | undefined): Re
 function readProjectileEmitter(payload: BlueprintComponentPayload | undefined): ProjectileAbilityProfile | undefined {
   if (!isRecord(payload)) return undefined;
   return {
+    targetPolicy: readTargetPolicy(payload.targetPolicy),
+    patternType:
+      payload.patternType === "straight" ||
+      payload.patternType === "spiral" ||
+      payload.patternType === "spread" ||
+      payload.patternType === "spread_spiral"
+        ? payload.patternType
+        : undefined,
+    spreadAngleDegrees: readOptionalFiniteNumber(payload.spreadAngleDegrees),
+    spiralFrequencyHz: readOptionalFiniteNumber(payload.spiralFrequencyHz),
+    spiralStrength: readOptionalFiniteNumber(payload.spiralStrength),
     kind: readFiniteNumber(payload.kind, 0),
     speed: readFiniteNumber(payload.speed, 0),
     damage: readFiniteNumber(payload.damage, 0),
@@ -357,12 +367,25 @@ function readProjectileEmitter(payload: BlueprintComponentPayload | undefined): 
 function readMeleeAttack(payload: BlueprintComponentPayload | undefined): MeleeAbilityProfile | undefined {
   if (!isRecord(payload)) return undefined;
   return {
+    targetPolicy: readTargetPolicy(payload.targetPolicy),
     damage: readFiniteNumber(payload.damage, 0),
     range: readFiniteNumber(payload.range, 0),
     radius: readFiniteNumber(payload.radius, 0),
     cooldownSeconds: readFiniteNumber(payload.cooldownSeconds, 0),
     arcDegrees: readFiniteNumber(payload.arcDegrees, 0)
   };
+}
+
+function readTargetPolicy(
+  payload: unknown
+): Partial<import("./abilities").CombatTargetPolicyProfile> | undefined {
+  if (!isRecord(payload)) return undefined;
+  const policy: Partial<import("./abilities").CombatTargetPolicyProfile> = {};
+  if (typeof payload.allowSelf === "boolean") policy.allowSelf = payload.allowSelf;
+  if (typeof payload.allowPlayers === "boolean") policy.allowPlayers = payload.allowPlayers;
+  if (typeof payload.allowNpcs === "boolean") policy.allowNpcs = payload.allowNpcs;
+  if (typeof payload.allowDummies === "boolean") policy.allowDummies = payload.allowDummies;
+  return policy;
 }
 
 function readInventoryItem(payload: BlueprintComponentPayload | undefined): {
