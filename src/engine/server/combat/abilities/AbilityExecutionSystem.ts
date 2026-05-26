@@ -3,11 +3,9 @@
  * Scope: It belongs to the engine authoritative server layer.
  * Human Summary: Runs on the authoritative server and owns truth for gameplay state changes.
  */
-import { clampHotbarSlotIndex } from "../../../shared/index";
 import type { AbilityDefinition } from "../../../shared/index";
 import type { RuntimeActivationSpec } from "../../../shared/index";
 import type { WorldWithComponents } from "../../ecs/SimulationEcsTypes";
-import { getHotbarSlot } from "../../ecs/HotbarComponents";
 import type { ActionEffectPipeline } from "../actions/ActionEffectPipeline";
 import type { ActionEffect } from "../actions/ActionEffectPipeline";
 import { AttackRuntimeSystem } from "../attack/AttackRuntimeSystem";
@@ -34,28 +32,6 @@ export class AbilityExecutionSystem {
     this.lastFiredByEidAndAbility.delete(normalizedEid);
   }
 
-  public tryUsePrimaryMouseAbilityByEid(eid: number): void {
-    const c = this.options.ecsComponents;
-    const slot = c.PrimaryMouseSlot.value[eid] ?? 0;
-    this.tryUseAbilityBySlotByEid(eid, slot);
-  }
-
-  public tryUseSecondaryMouseAbilityByEid(eid: number): void {
-    const c = this.options.ecsComponents;
-    const slot = c.SecondaryMouseSlot.value[eid] ?? 1;
-    this.tryUseAbilityBySlotByEid(eid, slot);
-  }
-
-  public tryUseAbilityBySlotByEid(eid: number, rawSlot: number): void {
-    const c = this.options.ecsComponents;
-    const slot = clampHotbarSlotIndex(rawSlot);
-    const abilityId = getHotbarSlot(c, eid, slot);
-    const unlocked = c.UnlockedAbilityIds.value[eid] ?? [];
-    const ability = this.options.resolveAbilityById(unlocked, abilityId);
-    if (!ability) return;
-    this.executeAbilityByEid(eid, ability);
-  }
-
   public tryUseAbilityByIdByEid(eid: number, abilityId: number): boolean {
     const c = this.options.ecsComponents;
     const unlocked = c.UnlockedAbilityIds.value[eid] ?? [];
@@ -72,7 +48,7 @@ export class AbilityExecutionSystem {
 
   private executeAbilityByEid(eid: number, ability: AbilityDefinition): boolean {
     const c = this.options.ecsComponents;
-    const runtimeSpec = this.options.resolveAbilityActivationSpec?.(ability.id) ?? null;
+    const runtimeSpec = this.resolveRuntimeActivationSpec(ability);
     if (!runtimeSpec) return false;
     const cooldown = runtimeSpec.cooldownSeconds;
 
@@ -140,6 +116,34 @@ export class AbilityExecutionSystem {
     });
 
     return true;
+  }
+
+  private resolveRuntimeActivationSpec(ability: AbilityDefinition): RuntimeActivationSpec | null {
+    const resolved = this.options.resolveAbilityActivationSpec?.(ability.id) ?? null;
+    if (resolved) {
+      return resolved;
+    }
+    const effects: RuntimeActivationSpec["effects"][number][] = [];
+    let cooldownSeconds = 0;
+    if (ability.projectile) {
+      effects.push({ type: "spawn_projectile", projectile: ability.projectile });
+      cooldownSeconds = Math.max(cooldownSeconds, Math.max(0, ability.projectile.cooldownSeconds));
+    }
+    if (ability.melee) {
+      effects.push({ type: "apply_melee_hit", melee: ability.melee });
+      cooldownSeconds = Math.max(cooldownSeconds, Math.max(0, ability.melee.cooldownSeconds));
+    }
+    if (effects.length === 0) {
+      return null;
+    }
+    return {
+      activationId: `ability:${Math.max(0, Math.floor(ability.id))}:fallback`,
+      source: "ability",
+      channel: 0,
+      cooldownSeconds,
+      consumeQuantity: 0,
+      effects
+    };
   }
 
   private getLastFiredSeconds(eid: number, abilityId: number): number {

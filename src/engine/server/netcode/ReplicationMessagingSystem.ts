@@ -5,7 +5,6 @@
  */
 import {
   ABILITY_ID_NONE,
-  HOTBAR_SLOT_COUNT,
   MOVEMENT_MODE_GROUNDED,
   abilityCategoryToWireValue,
   encodeAbilityAttributeMask,
@@ -35,7 +34,6 @@ export interface InputAckStateSnapshot {
 export interface AbilityStateSnapshot {
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
   unlockedAbilityIds: number[];
 }
 
@@ -102,25 +100,10 @@ export class ReplicationMessagingSystem<TUser extends ReplicationUser> {
   }
 
   public queueAbilityStateMessageFromSnapshot(user: TUser, snapshot: AbilityStateSnapshot): void {
-    const ids: number[] = new Array(HOTBAR_SLOT_COUNT).fill(ABILITY_ID_NONE);
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-      ids[slot] = snapshot.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE;
-    }
-
     user.queueMessage({
       ntype: NType.AbilityStateMessage,
       primaryMouseSlot: this.options.sanitizeHotbarSlot(snapshot.primaryMouseSlot, 0),
-      secondaryMouseSlot: this.options.sanitizeHotbarSlot(snapshot.secondaryMouseSlot, 1),
-      slot0AbilityId: ids[0],
-      slot1AbilityId: ids[1],
-      slot2AbilityId: ids[2],
-      slot3AbilityId: ids[3],
-      slot4AbilityId: ids[4],
-      slot5AbilityId: ids[5],
-      slot6AbilityId: ids[6],
-      slot7AbilityId: ids[7],
-      slot8AbilityId: ids[8],
-      slot9AbilityId: ids[9]
+      secondaryMouseSlot: this.options.sanitizeHotbarSlot(snapshot.secondaryMouseSlot, 1)
     });
   }
 

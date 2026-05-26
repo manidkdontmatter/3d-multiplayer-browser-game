@@ -52,7 +52,7 @@ export const KIND_COMPONENT_SETS: Record<string, readonly string[]> = {
     "Velocity", "GroundedPlatformPid", "CarriedFramePid",
     "Yaw", "Pitch", "LastProcessedSequence",
     "PrimaryHeld", "SecondaryHeld", "PrimaryMouseSlot", "SecondaryMouseSlot",
-    "Hotbar", "UnlockedAbilityIds", "CharacterTag"
+    "UnlockedAbilityIds", "CharacterTag"
   ],
   // Player extras (added on top of character)
   player: ["PlayerTag", "ReplicatedTag", "AccountId"],

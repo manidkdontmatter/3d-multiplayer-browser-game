@@ -21,6 +21,7 @@ This repository is a production quality first-person authoritative server multip
 
 ## Architecture Rules
 
+- anti-patterns are unacceptable. not only must you not use anti-patterns you must fix anti-patterns that already exist when you notice them.
 - do not let existing code hold us back from creating the most correct end result. we are not interested in compatibility if if stops us from having the most correct systems and code.
 - do not let legacy systems hold back progress and correctness, only have one canonical system. you may unify them, get rid of the legacy one, or whatever else results in the most correct and best end result. do not patch bad systems, correct them. no hacky solutions.
 - always name things with clarity in mind. it really sucks to look at something with an obscure or hard to understand name that makes its purpose hard to understand. if you notice something is named not as well as it could be, pick a better name.

@@ -20,7 +20,6 @@ export interface PersistedPlayerSnapshot {
   health: number;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
 }
 
 export interface ValidateJoinTicketRequest {

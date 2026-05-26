@@ -7,7 +7,7 @@ import { Clock } from "three";
 import {
   ABILITY_ID_NONE,
   ALERT_SEVERITIES,
-  DEFAULT_HOTBAR_ABILITY_IDS,
+  HOTBAR_SLOT_COUNT,
   DEFAULT_PRIMARY_MOUSE_SLOT,
   DEFAULT_SECONDARY_MOUSE_SLOT,
   NET_DIAGNOSTICS_WARNING_AVG_IN_BYTES,
@@ -109,7 +109,7 @@ export class GameClientApp {
   private totalUngroundedEntries = 0;
   private groundingSampleInitialized = false;
   private groundedLastFixedTick = true;
-  private hotbarAbilityIds = [...DEFAULT_HOTBAR_ABILITY_IDS];
+  private hotbarAbilityIds = new Array<number>(HOTBAR_SLOT_COUNT).fill(ABILITY_ID_NONE);
   private primaryMouseSlot = DEFAULT_PRIMARY_MOUSE_SLOT;
   private secondaryMouseSlot = DEFAULT_SECONDARY_MOUSE_SLOT;
   private queuedTestPrimaryActionCount = 0;

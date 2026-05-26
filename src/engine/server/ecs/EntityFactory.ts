@@ -24,7 +24,6 @@ import {
   KIND_COMPONENT_SETS,
   type EntityPresetId
 } from "./ComponentRegistry";
-import { setHotbarArray } from "./HotbarComponents";
 import type { WorldWithComponents } from "./SimulationEcsTypes";
 
 export interface EntityFactoryOverrides {
@@ -62,7 +61,6 @@ export interface EntityFactoryOverrides {
   secondaryHeld?: boolean;
   primaryMouseSlot?: number;
   secondaryMouseSlot?: number;
-  hotbarAbilityIds?: number[];
   unlockedAbilityIds?: number[];
   // Item
   pickupDefinitionId?: number;
@@ -207,11 +205,6 @@ export class EntityFactory {
     }
     if (overrides?.carriedFramePid !== undefined) {
       c.CarriedFramePid.value[eid] = overrides.carriedFramePid === null ? -1 : overrides.carriedFramePid;
-    }
-
-    // Hotbar
-    if (overrides?.hotbarAbilityIds) {
-      setHotbarArray(c, eid, overrides.hotbarAbilityIds);
     }
 
     // Unlocked abilities

@@ -38,8 +38,7 @@ export class OrchestratorPersistenceBridge {
         vx: 0, vy: 0, vz: 0,
         health: 0,
         primaryMouseSlot: 0,
-        secondaryMouseSlot: 1,
-        hotbarAbilityIds: []
+        secondaryMouseSlot: 1
       },
       saveCharacter: false,
       saveAbilityState: false,

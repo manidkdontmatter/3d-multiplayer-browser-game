@@ -43,7 +43,7 @@ export interface AttackRuntimeSystemOptions {
     baseDirX: number;
     baseDirY: number;
     baseDirZ: number;
-  }) => void;
+  }) => boolean;
   readonly executeMeleeHit: (request: {
     attackerEid: number;
     damage: number;
@@ -56,7 +56,7 @@ export interface AttackRuntimeSystemOptions {
       allowNpcs: boolean;
       allowDummies: boolean;
     };
-  }) => void;
+  }) => boolean;
 }
 
 interface ActiveAttackInstance {
@@ -111,18 +111,18 @@ export class AttackRuntimeSystem {
       for (const effect of effects) {
         if (effect.type === "spawn_projectile") {
           const effectSeed = this.deriveEffectSeed(shotSeed, effectSequence);
-          this.executeProjectileEffect(
+          const executed = this.executeProjectileEffect(
             normalizedIntent,
             origin,
             effect.projectile,
             effectSeed
           );
-          executedAny = true;
+          executedAny = executedAny || executed;
           effectSequence += 1;
           continue;
         }
         if (effect.type === "apply_melee_hit") {
-          this.options.executeMeleeHit({
+          const executed = this.options.executeMeleeHit({
             attackerEid: normalizedIntent.attackerEid,
             damage: effect.melee.damage,
             range: effect.melee.range,
@@ -130,7 +130,7 @@ export class AttackRuntimeSystem {
             arcDegrees: effect.melee.arcDegrees,
             targetPolicy: this.specResolver.resolveMeleeTargetPolicy(effect.melee)
           });
-          executedAny = true;
+          executedAny = executedAny || executed;
           effectSequence += 1;
         }
       }
@@ -157,14 +157,14 @@ export class AttackRuntimeSystem {
     origin: { x: number; y: number; z: number },
     projectile: ProjectileAbilityProfile,
     shotSeed: number
-  ): void {
+  ): boolean {
     const spawn = this.specResolver.resolveProjectileSpawn(
       intent,
       origin,
       projectile,
       shotSeed
     );
-    this.options.executeProjectile(spawn);
+    return this.options.executeProjectile(spawn);
   }
 
   private allocateShotSequence(attackerEid: number, activationId: number): number {

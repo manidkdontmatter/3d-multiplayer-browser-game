@@ -288,8 +288,9 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
       });
       if (!changed) failureReason = "move_hotbar_failed";
     } else if (action === INVENTORY_OP_EXECUTE_HOTBAR_SLOT) {
-      changed = this.tryExecuteHotbarSlot(userId, player, command.sourceSlot, command.activationChannel);
-      if (!changed) failureReason = "execute_hotbar_failed";
+      const executeResult = this.tryExecuteHotbarSlotDetailed(userId, player, command.sourceSlot, command.activationChannel);
+      changed = executeResult.ok;
+      if (!changed) failureReason = executeResult.reason;
     } else if (action === INVENTORY_OP_DROP_HOTBAR_SLOT) {
       changed = this.options.actionEffects.execute({
         type: "drop_hotbar_slot",
@@ -898,6 +899,38 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     const player = this.getPlayerStateByUserId(userId);
     if (!player) return false;
     return this.tryDropHotbarSlot(player, rawSourceSlot);
+  }
+
+  public executeHotbarSlotByUserId(userId: number, rawSourceSlot: number, rawActivationChannel: number): boolean {
+    return this.executeHotbarSlotDetailedByUserId(userId, rawSourceSlot, rawActivationChannel).ok;
+  }
+
+  public executeHotbarSlotDetailedByUserId(
+    userId: number,
+    rawSourceSlot: number,
+    rawActivationChannel: number
+  ): { ok: boolean; reason: string } {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return { ok: false, reason: "player_missing" };
+    return this.tryExecuteHotbarSlotDetailed(userId, player, rawSourceSlot, rawActivationChannel);
+  }
+
+  public clearAbilityFromHotbarByUserId(userId: number, abilityId: number): boolean {
+    const player = this.getPlayerStateByUserId(userId);
+    if (!player) return false;
+    const normalizedAbilityId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
+    if (normalizedAbilityId <= 0) return false;
+    const inventory = this.ensureMutableInventory(player.accountId);
+    let changed = false;
+    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
+      const payload = inventory.hotbarSlots[slot];
+      if (!payload || payload.kind !== "ability" || payload.refId !== normalizedAbilityId) {
+        continue;
+      }
+      inventory.hotbarSlots[slot] = null;
+      changed = true;
+    }
+    return changed;
   }
 
   private tryEquipInventoryItem(player: ItemInventoryPlayerState, rawItemInstanceId: unknown): boolean {
@@ -1512,28 +1545,36 @@ export class ItemInventorySystem<TUser extends { queueMessage: (message: unknown
     return true;
   }
 
-  private tryExecuteHotbarSlot(
+  private tryExecuteHotbarSlotDetailed(
     userId: number,
     player: ItemInventoryPlayerState,
     rawSourceSlot: unknown,
     rawActivationChannel: unknown
-  ): boolean {
+  ): { ok: boolean; reason: string } {
     const sourceSlot = this.normalizeHotbarSlot(rawSourceSlot);
     if (sourceSlot === null) {
-      return false;
+      return { ok: false, reason: "execute_hotbar_invalid_slot" };
     }
     const inventory = this.ensureMutableInventory(player.accountId);
     const payload = inventory.hotbarSlots[sourceSlot] ?? null;
     if (!payload) {
-      return false;
+      return { ok: false, reason: "execute_hotbar_empty_slot" };
     }
     if (payload.kind === "item_instance") {
-      return this.tryUseInventoryItem(userId, player, payload.refId, rawActivationChannel);
+      return this.tryUseInventoryItem(userId, player, payload.refId, rawActivationChannel)
+        ? { ok: true, reason: "ok" }
+        : { ok: false, reason: "execute_hotbar_item_use_failed" };
     }
     if (payload.kind === "ability") {
-      return this.options.executeHotbarAbility(userId, payload.refId, this.normalizeActivationChannel(this.normalizeUInt(rawActivationChannel, 0xff)));
+      return this.options.executeHotbarAbility(
+        userId,
+        payload.refId,
+        this.normalizeActivationChannel(this.normalizeUInt(rawActivationChannel, 0xff))
+      )
+        ? { ok: true, reason: "ok" }
+        : { ok: false, reason: "execute_hotbar_ability_execute_failed" };
     }
-    return false;
+    return { ok: false, reason: "execute_hotbar_unsupported_payload" };
   }
 
   private tryDropHotbarSlot(player: ItemInventoryPlayerState, rawSourceSlot: unknown): boolean {

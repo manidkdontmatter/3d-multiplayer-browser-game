@@ -7,7 +7,6 @@ import {
   ABILITY_CREATOR_EXAMPLE_DOWNSIDE_KEY,
   ABILITY_CREATOR_EXAMPLE_UPSIDE_KEY,
   abilityCategoryToCreatorType,
-  DEFAULT_HOTBAR_ABILITY_IDS,
   DEFAULT_PRIMARY_MOUSE_SLOT,
   DEFAULT_SECONDARY_MOUSE_SLOT,
   abilityCategoryFromWireValue,
@@ -215,19 +214,7 @@ export class AbilityStateStore {
   private toAbilityState(message: AbilityStateMessage): AbilityState {
     return {
       primaryMouseSlot: clampHotbarSlotIndex(message.primaryMouseSlot ?? DEFAULT_PRIMARY_MOUSE_SLOT),
-      secondaryMouseSlot: clampHotbarSlotIndex(message.secondaryMouseSlot ?? DEFAULT_SECONDARY_MOUSE_SLOT),
-      hotbarAbilityIds: [
-        message.slot0AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[0],
-        message.slot1AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[1],
-        message.slot2AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[2],
-        message.slot3AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[3],
-        message.slot4AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[4],
-        message.slot5AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[5],
-        message.slot6AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[6],
-        message.slot7AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[7],
-        message.slot8AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[8],
-        message.slot9AbilityId ?? DEFAULT_HOTBAR_ABILITY_IDS[9]
-      ]
+      secondaryMouseSlot: clampHotbarSlotIndex(message.secondaryMouseSlot ?? DEFAULT_SECONDARY_MOUSE_SLOT)
     };
   }
 

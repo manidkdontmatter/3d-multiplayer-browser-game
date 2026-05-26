@@ -55,9 +55,6 @@ export const inputCommandSchema = defineSchema({
 });
 
 export const abilityCommandSchema = defineSchema({
-  applyAssignment: Binary.Boolean,
-  assignTargetSlot: Binary.UInt8,
-  assignAbilityId: Binary.UInt16,
   applyPrimaryMouseSlot: Binary.Boolean,
   primaryMouseSlot: Binary.UInt8,
   applySecondaryMouseSlot: Binary.Boolean,
@@ -162,17 +159,7 @@ export const abilityDefinitionMessageSchema = defineSchema({
 
 export const abilityStateMessageSchema = defineSchema({
   primaryMouseSlot: Binary.UInt8,
-  secondaryMouseSlot: Binary.UInt8,
-  slot0AbilityId: Binary.UInt16,
-  slot1AbilityId: Binary.UInt16,
-  slot2AbilityId: Binary.UInt16,
-  slot3AbilityId: Binary.UInt16,
-  slot4AbilityId: Binary.UInt16,
-  slot5AbilityId: Binary.UInt16,
-  slot6AbilityId: Binary.UInt16,
-  slot7AbilityId: Binary.UInt16,
-  slot8AbilityId: Binary.UInt16,
-  slot9AbilityId: Binary.UInt16
+  secondaryMouseSlot: Binary.UInt8
 });
 
 export const abilityUseMessageSchema = defineSchema({
@@ -319,9 +306,6 @@ export interface InputCommand {
 
 export interface AbilityCommand {
   ntype: NType.AbilityCommand;
-  applyAssignment: boolean;
-  assignTargetSlot: number;
-  assignAbilityId: number;
   applyPrimaryMouseSlot: boolean;
   primaryMouseSlot: number;
   applySecondaryMouseSlot: boolean;
@@ -435,16 +419,6 @@ export interface AbilityStateMessage {
   ntype: NType.AbilityStateMessage;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  slot0AbilityId: number;
-  slot1AbilityId: number;
-  slot2AbilityId: number;
-  slot3AbilityId: number;
-  slot4AbilityId: number;
-  slot5AbilityId: number;
-  slot6AbilityId: number;
-  slot7AbilityId: number;
-  slot8AbilityId: number;
-  slot9AbilityId: number;
 }
 
 export interface AbilityUseMessage {

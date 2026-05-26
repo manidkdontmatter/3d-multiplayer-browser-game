@@ -229,7 +229,8 @@ export type AbilityArchetypeCatalogRaw = {
   version: unknown;
   baseAbilities: unknown;
   defaults: {
-    hotbarAbilityIds: unknown;
+    initialAbilitySlotIds?: unknown;
+    hotbarAbilityIds?: unknown;
     unlockedAbilityIds: unknown;
     primaryMouseSlot?: unknown;
     secondaryMouseSlot?: unknown;
@@ -239,7 +240,7 @@ export type AbilityArchetypeCatalogRaw = {
 // Mutable catalog — populated by injectAbilityCatalog() which the game layer calls at startup.
 let ABILITY_DEFINITIONS: ReadonlyArray<AbilityDefinition> = Object.freeze([]);
 let ABILITY_DEFINITIONS_BY_ID = new Map<number, AbilityDefinition>();
-export let DEFAULT_HOTBAR_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([]);
+export let DEFAULT_INITIAL_ABILITY_SLOT_IDS: ReadonlyArray<number> = Object.freeze([]);
 export let DEFAULT_UNLOCKED_ABILITY_IDS: ReadonlyArray<number> = Object.freeze([]);
 export let DEFAULT_PRIMARY_MOUSE_SLOT = 0;
 export let DEFAULT_SECONDARY_MOUSE_SLOT = 1;
@@ -248,7 +249,7 @@ export function injectAbilityCatalog(raw: AbilityArchetypeCatalogRaw): void {
   const parsed = parseAbilityArchetypes(raw);
   ABILITY_DEFINITIONS = Object.freeze(parsed.baseAbilities);
   ABILITY_DEFINITIONS_BY_ID = new Map(parsed.baseAbilities.map((a) => [a.id, a]));
-  DEFAULT_HOTBAR_ABILITY_IDS = Object.freeze(parsed.defaults.hotbarAbilityIds);
+  DEFAULT_INITIAL_ABILITY_SLOT_IDS = Object.freeze(parsed.defaults.initialAbilitySlotIds);
   DEFAULT_UNLOCKED_ABILITY_IDS = Object.freeze(parsed.defaults.unlockedAbilityIds);
   DEFAULT_PRIMARY_MOUSE_SLOT = clampHotbarSlotIndex(parsed.defaults.primaryMouseSlot);
   DEFAULT_SECONDARY_MOUSE_SLOT = clampHotbarSlotIndex(parsed.defaults.secondaryMouseSlot);
@@ -684,7 +685,7 @@ function clampNumber(value: number, min: number, max: number): number {
 function parseAbilityArchetypes(raw: AbilityArchetypeCatalogRaw): {
   baseAbilities: AbilityDefinition[];
   defaults: {
-    hotbarAbilityIds: number[];
+    initialAbilitySlotIds: number[];
     unlockedAbilityIds: number[];
     primaryMouseSlot: number;
     secondaryMouseSlot: number;
@@ -716,12 +717,15 @@ function parseAbilityArchetypes(raw: AbilityArchetypeCatalogRaw): {
   if (!raw.defaults || typeof raw.defaults !== "object") {
     throw new Error("ability-archetypes.defaults must be an object.");
   }
-  const hotbarAbilityIds = parseAbilityIdList(raw.defaults.hotbarAbilityIds, "ability-archetypes.defaults.hotbarAbilityIds");
+  const initialAbilitySlotIds = parseAbilityIdList(
+    raw.defaults.initialAbilitySlotIds ?? raw.defaults.hotbarAbilityIds,
+    "ability-archetypes.defaults.initialAbilitySlotIds"
+  );
   const unlockedAbilityIds = parseAbilityIdList(raw.defaults.unlockedAbilityIds, "ability-archetypes.defaults.unlockedAbilityIds");
-  if (hotbarAbilityIds.length !== HOTBAR_SLOT_COUNT) {
-    throw new Error(`ability-archetypes.defaults.hotbarAbilityIds must contain exactly ${HOTBAR_SLOT_COUNT} ids.`);
+  if (initialAbilitySlotIds.length !== HOTBAR_SLOT_COUNT) {
+    throw new Error(`ability-archetypes.defaults.initialAbilitySlotIds must contain exactly ${HOTBAR_SLOT_COUNT} ids.`);
   }
-  for (const abilityId of [...hotbarAbilityIds, ...unlockedAbilityIds]) {
+  for (const abilityId of [...initialAbilitySlotIds, ...unlockedAbilityIds]) {
     if (abilityId !== ABILITY_ID_NONE && !ids.has(abilityId)) {
       throw new Error(`ability-archetypes defaults reference unknown ability id ${abilityId}.`);
     }
@@ -729,7 +733,7 @@ function parseAbilityArchetypes(raw: AbilityArchetypeCatalogRaw): {
   return {
     baseAbilities,
     defaults: {
-      hotbarAbilityIds,
+      initialAbilitySlotIds,
       unlockedAbilityIds,
       primaryMouseSlot: parseOptionalHotbarSlot(raw.defaults.primaryMouseSlot, 0),
       secondaryMouseSlot: parseOptionalHotbarSlot(raw.defaults.secondaryMouseSlot, 1)

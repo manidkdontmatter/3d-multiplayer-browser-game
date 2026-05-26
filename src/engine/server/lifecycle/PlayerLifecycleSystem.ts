@@ -24,7 +24,6 @@ export interface PlayerSpawnContext {
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
   health: number;
-  hotbarAbilityIds: number[];
   unlockedAbilityIds: number[];
   yaw: number;
   pitch: number;
@@ -49,7 +48,6 @@ export interface PlayerLifecycleSystemOptions<TUser extends LifecycleUser> {
   readonly maxPlayerHealth: number;
   readonly defaultUnlockedAbilityIds: readonly number[];
   readonly resolveInitialUnlockedAbilityIds: (accountId: number, defaultIds: readonly number[]) => number[];
-  readonly createInitialHotbar: (savedHotbar?: number[]) => number[];
   readonly clampHealth: (value: number) => number;
   // Called after ECS entity is created. Returns void — all wiring is done here.
   readonly spawnPlayer: (user: TUser, ctx: PlayerSpawnContext) => number;
@@ -110,7 +108,6 @@ export class PlayerLifecycleSystem<TUser extends LifecycleUser> {
       body,
       collider,
       health: this.options.clampHealth(loaded?.health ?? this.options.maxPlayerHealth),
-      hotbarAbilityIds: this.options.createInitialHotbar(loaded?.hotbarAbilityIds),
       unlockedAbilityIds: this.options.resolveInitialUnlockedAbilityIds(accountId, this.options.defaultUnlockedAbilityIds),
       yaw: loaded?.yaw ?? 0,
       pitch: loaded?.pitch ?? 0,

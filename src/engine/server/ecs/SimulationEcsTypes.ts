@@ -74,18 +74,6 @@ export type WorldWithComponents = {
     ProjectileTargetAllowDummies: { value: number[] };
     ProjectileDespawnOnDamageableHit: { value: number[] };
     ProjectileDespawnOnWorldHit: { value: number[] };
-    Hotbar: {
-      slot0: number[];
-      slot1: number[];
-      slot2: number[];
-      slot3: number[];
-      slot4: number[];
-      slot5: number[];
-      slot6: number[];
-      slot7: number[];
-      slot8: number[];
-      slot9: number[];
-    };
     UnlockedAbilityIds: { value: number[][] };
     ReplicatedTag: number[];
     PlayerTag: number[];
@@ -122,7 +110,6 @@ export interface PlayerStateSnapshot {
   maxHealth: number;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
   unlockedAbilityIds: readonly number[];
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
@@ -166,12 +153,10 @@ export type PersistenceState = {
   health: number;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
 };
 
 export type AbilityState = {
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
   unlockedAbilityIds: number[];
 };

@@ -47,7 +47,6 @@ export interface ReconciliationFrame {
 export interface AbilityState {
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
 }
 
 export interface AbilityEventBatch {
@@ -64,9 +63,6 @@ export interface NetSimulationConfig {
 }
 
 export interface QueuedAbilityCommand {
-  applyAssignment: boolean;
-  assignTargetSlot: number;
-  assignAbilityId: number;
   applyPrimaryMouseSlot: boolean;
   primaryMouseSlot: number;
   applySecondaryMouseSlot: boolean;

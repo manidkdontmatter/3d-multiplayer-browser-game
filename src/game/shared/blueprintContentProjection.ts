@@ -142,9 +142,9 @@ function buildAbilityCatalogFromRuntime(entries: readonly BlueprintRuntimeEntry[
     .map((entry) => entry.blueprintId)
     .sort((a, b) => a - b);
   const unlockedAbilityIds = activationAbilityIds;
-  const hotbarAbilityIds = new Array<number>(HOTBAR_SLOT_COUNT).fill(ABILITY_ID_NONE);
+  const initialAbilitySlotIds = new Array<number>(HOTBAR_SLOT_COUNT).fill(ABILITY_ID_NONE);
   for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-    hotbarAbilityIds[slot] = unlockedAbilityIds[slot] ?? ABILITY_ID_NONE;
+    initialAbilitySlotIds[slot] = unlockedAbilityIds[slot] ?? ABILITY_ID_NONE;
   }
   return {
     version: 1,
@@ -162,7 +162,7 @@ function buildAbilityCatalogFromRuntime(entries: readonly BlueprintRuntimeEntry[
       melee: ability.melee ?? undefined
     })),
     defaults: {
-      hotbarAbilityIds,
+      initialAbilitySlotIds,
       unlockedAbilityIds,
       primaryMouseSlot: 0,
       secondaryMouseSlot: 1

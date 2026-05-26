@@ -6,7 +6,6 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import {
   ABILITY_ID_PUNCH,
-  HOTBAR_SLOT_COUNT,
   MOVEMENT_MODE_FLYING,
   MOVEMENT_MODE_GROUNDED,
   PHYSICS_GROUP_CHARACTER,
@@ -118,7 +117,7 @@ export interface NpcAiSystemOptions {
   readonly onNpcSpawned: (eid: number, colliderHandle: number) => void;
   readonly hasPerceptionTargets: () => boolean;
   readonly resolvePerceptionTargetByColliderHandle: (colliderHandle: number) => AiVisibleTarget | null;
-  readonly usePrimaryAbilityByEid: (eid: number) => void;
+  readonly useAbilityByIdByEid: (eid: number, abilityId: number) => boolean;
   readonly applyEntityAppearanceByEid: (eid: number, patch: EntityAppearancePatch) => boolean;
   readonly onNpcRespawned?: (eid: number) => void;
   readonly aiTickIntervalSeconds: number;
@@ -405,7 +404,7 @@ export class NpcAiSystem {
       guard.blackboard.behaviorState = "attack";
       this.stopCharacter(eid);
       c.Pitch.value[eid] = ATTACK_FACE_PITCH;
-      this.options.usePrimaryAbilityByEid(eid);
+      this.options.useAbilityByIdByEid(eid, ABILITY_ID_PUNCH);
       return;
     }
 
@@ -968,8 +967,6 @@ export class NpcAiSystem {
       body
     );
 
-    const hotbarAbilityIds = new Array<number>(HOTBAR_SLOT_COUNT).fill(0);
-    hotbarAbilityIds[0] = ABILITY_ID_PUNCH;
     const rotation = quaternionFromYawPitchRoll(spawn.yaw, 0);
 
     const eid = this.options.ecs.createEntityFromPreset("npc", {
@@ -989,7 +986,6 @@ export class NpcAiSystem {
       controllerKind: this.options.controllerKindAi,
       primaryMouseSlot: 0,
       secondaryMouseSlot: 0,
-      hotbarAbilityIds,
       unlockedAbilityIds: [ABILITY_ID_PUNCH],
       lastProcessedSequence: 0,
       primaryHeld: false,

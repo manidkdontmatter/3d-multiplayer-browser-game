@@ -1129,12 +1129,7 @@ function toPlayerSnapshot(snapshot: PersistedPlayerSnapshot): PlayerSnapshot {
     vz: Number(snapshot.vz) || 0,
     health: Math.max(0, Math.floor(Number(snapshot.health) || 0)),
     primaryMouseSlot: Math.max(0, Math.floor(Number(snapshot.primaryMouseSlot) || 0)),
-    secondaryMouseSlot: Math.max(0, Math.floor(Number(snapshot.secondaryMouseSlot) || 0)),
-    hotbarAbilityIds: Array.isArray(snapshot.hotbarAbilityIds)
-      ? snapshot.hotbarAbilityIds.map((abilityId) =>
-          Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0))
-        )
-      : []
+    secondaryMouseSlot: Math.max(0, Math.floor(Number(snapshot.secondaryMouseSlot) || 0))
   };
 }
 

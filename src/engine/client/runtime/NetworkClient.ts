@@ -156,9 +156,6 @@ export class NetworkClient {
     if (abilityCommand) {
       this.transport.addCommand({
         ntype: NType.AbilityCommand,
-        applyAssignment: abilityCommand.applyAssignment,
-        assignTargetSlot: this.clampUnsignedInt(abilityCommand.assignTargetSlot, 0xff),
-        assignAbilityId: this.clampUnsignedInt(abilityCommand.assignAbilityId, 0xffff),
         applyPrimaryMouseSlot: abilityCommand.applyPrimaryMouseSlot,
         primaryMouseSlot: this.clampUnsignedInt(abilityCommand.primaryMouseSlot, 0xff),
         applySecondaryMouseSlot: abilityCommand.applySecondaryMouseSlot,
@@ -212,14 +209,6 @@ export class NetworkClient {
     if (appliedChanges > 0) {
       this.interpolation.observeSnapshotArrival(performance.now());
     }
-  }
-
-  public queueHotbarAssignment(slot: number, abilityId: number): void {
-    const queued = this.getOrCreateQueuedAbilityCommand();
-    queued.applyAssignment = true;
-    queued.assignTargetSlot = slot;
-    queued.assignAbilityId = abilityId;
-    this.queuedAbilityCommand = queued;
   }
 
   public queuePrimaryMouseSlot(slot: number): void {
@@ -811,9 +800,6 @@ export class NetworkClient {
   private getOrCreateQueuedAbilityCommand(): QueuedAbilityCommand {
     return (
       this.queuedAbilityCommand ?? {
-        applyAssignment: false,
-        assignTargetSlot: 0,
-        assignAbilityId: 0,
         applyPrimaryMouseSlot: false,
         primaryMouseSlot: 0,
         applySecondaryMouseSlot: false,

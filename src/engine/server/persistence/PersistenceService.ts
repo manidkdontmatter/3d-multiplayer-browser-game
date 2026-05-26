@@ -9,7 +9,7 @@ import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
 import {
   ABILITY_ID_NONE,
-  DEFAULT_HOTBAR_ABILITY_IDS,
+  DEFAULT_INITIAL_ABILITY_SLOT_IDS,
   HOTBAR_SLOT_COUNT,
   INVENTORY_MAX_SLOTS,
   PLAYER_MAX_HEALTH,
@@ -67,7 +67,6 @@ export interface PersistedPlayerState {
   health: number;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
 }
 
 export interface PlayerSnapshot {
@@ -83,7 +82,6 @@ export interface PlayerSnapshot {
   health: number;
   primaryMouseSlot: number;
   secondaryMouseSlot: number;
-  hotbarAbilityIds: number[];
 }
 
 export interface CriticalEventRecord {
@@ -313,24 +311,8 @@ export class PersistenceService {
         }
       | undefined;
 
-    const slots = this.db
-      .prepare(
-        `SELECT slot_index AS slotIndex, ability_id AS abilityId
-         FROM player_loadout_slots
-         WHERE player_id = ?`
-      )
-      .all(accountId) as Array<{ slotIndex: number; abilityId: number }>;
-
-    if (!character && slots.length === 0) {
+    if (!character) {
       return null;
-    }
-
-    const hotbar = [...DEFAULT_HOTBAR_ABILITY_IDS];
-    for (const slot of slots) {
-      if (!Number.isInteger(slot.slotIndex) || slot.slotIndex < 0 || slot.slotIndex >= HOTBAR_SLOT_COUNT) {
-        continue;
-      }
-      hotbar[slot.slotIndex] = Math.max(ABILITY_ID_NONE, Math.floor(slot.abilityId));
     }
 
     return {
@@ -349,8 +331,7 @@ export class PersistenceService {
         character?.secondaryMouseSlot ?? 1,
         0,
         HOTBAR_SLOT_COUNT - 1
-      ),
-      hotbarAbilityIds: hotbar
+      )
     };
   }
 
@@ -579,7 +560,7 @@ export class PersistenceService {
         maxSlots: INVENTORY_MAX_SLOTS,
         itemInstances: [],
         equipment: {},
-        hotbarSlots: []
+        hotbarSlots: this.buildDefaultAbilityHotbarSlots()
       };
     }
 
@@ -653,6 +634,11 @@ export class PersistenceService {
       hotbarSlots[slotIndex] = { kind, refId };
     }
 
+    const normalizedHotbarSlots =
+      hotbarRows.length > 0
+        ? hotbarSlots
+        : this.buildDefaultAbilityHotbarSlots();
+
     return {
       maxSlots: INVENTORY_MAX_SLOTS,
       itemInstances: itemRows
@@ -664,8 +650,19 @@ export class PersistenceService {
         }))
         .filter((item) => item.itemInstanceId > 0 && item.definitionId > 0 && item.quantity > 0),
       equipment,
-      hotbarSlots
+      hotbarSlots: normalizedHotbarSlots
     };
+  }
+
+  private buildDefaultAbilityHotbarSlots(): InventorySnapshot["hotbarSlots"] {
+    const slots: InventorySnapshot["hotbarSlots"] = new Array(HOTBAR_SLOT_COUNT).fill(null);
+    for (let slotIndex = 0; slotIndex < HOTBAR_SLOT_COUNT; slotIndex += 1) {
+      const abilityId = this.clampInteger(DEFAULT_INITIAL_ABILITY_SLOT_IDS[slotIndex] ?? ABILITY_ID_NONE, 0, 0xffff);
+      if (abilityId > ABILITY_ID_NONE) {
+        slots[slotIndex] = { kind: "ability", refId: abilityId };
+      }
+    }
+    return slots;
   }
 
   public loadPlayerSettings(accountId: number): PersistedPlayerSettings {
@@ -965,8 +962,8 @@ export class PersistenceService {
       const upsertCharacter = this.db.prepare(
         `INSERT INTO characters (
             player_id, x, y, z, yaw, pitch, vx, vy, vz, health,
-            active_hotbar_slot, primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(player_id) DO UPDATE SET
            x=excluded.x,
            y=excluded.y,
@@ -977,16 +974,10 @@ export class PersistenceService {
            vy=excluded.vy,
            vz=excluded.vz,
            health=excluded.health,
-           active_hotbar_slot=excluded.active_hotbar_slot,
            primary_mouse_slot=excluded.primary_mouse_slot,
            secondary_mouse_slot=excluded.secondary_mouse_slot,
            updated_at=excluded.updated_at,
            schema_version=excluded.schema_version`
-      );
-      const deleteLoadoutSlots = this.db.prepare("DELETE FROM player_loadout_slots WHERE player_id = ?");
-      const insertLoadoutSlot = this.db.prepare(
-        `INSERT INTO player_loadout_slots (player_id, slot_index, ability_id)
-         VALUES (?, ?, ?)`
       );
       const upsertSettings = this.db.prepare(
         `INSERT INTO player_settings (player_id, settings_json, updated_at)
@@ -1010,22 +1001,13 @@ export class PersistenceService {
             snapshot.vz,
             this.clampInteger(snapshot.health, 0, PLAYER_MAX_HEALTH),
             this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
-            this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             this.clampInteger(snapshot.secondaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
             now,
             CHARACTER_SCHEMA_VERSION
           );
         }
         if (entry.saveAbilityState) {
-          deleteLoadoutSlots.run(snapshot.accountId);
-          for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-            const abilityId = snapshot.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE;
-            insertLoadoutSlot.run(
-              snapshot.accountId,
-              slot,
-              Math.max(ABILITY_ID_NONE, Math.floor(abilityId))
-            );
-          }
+          // Ability state persistence is now represented by character-level mouse slot bindings only.
         }
         if (entry.saveSettings) {
           const settings = coercePlayerSettings(entry.settings);
@@ -1045,8 +1027,8 @@ export class PersistenceService {
       .prepare(
         `INSERT INTO characters (
             player_id, x, y, z, yaw, pitch, vx, vy, vz, health,
-            active_hotbar_slot, primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            primary_mouse_slot, secondary_mouse_slot, updated_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(player_id) DO UPDATE SET
            x=excluded.x,
            y=excluded.y,
@@ -1057,7 +1039,6 @@ export class PersistenceService {
            vy=excluded.vy,
            vz=excluded.vz,
            health=excluded.health,
-           active_hotbar_slot=excluded.active_hotbar_slot,
            primary_mouse_slot=excluded.primary_mouse_slot,
            secondary_mouse_slot=excluded.secondary_mouse_slot,
            updated_at=excluded.updated_at,
@@ -1075,7 +1056,6 @@ export class PersistenceService {
         snapshot.vz,
         this.clampInteger(snapshot.health, 0, PLAYER_MAX_HEALTH),
         this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
-        this.clampInteger(snapshot.primaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         this.clampInteger(snapshot.secondaryMouseSlot, 0, HOTBAR_SLOT_COUNT - 1),
         now,
         CHARACTER_SCHEMA_VERSION
@@ -1086,21 +1066,7 @@ export class PersistenceService {
     if (this.disablePersistenceWrites) {
       return;
     }
-    const tx = this.db.transaction((state: PlayerSnapshot) => {
-      this.db
-        .prepare("DELETE FROM player_loadout_slots WHERE player_id = ?")
-        .run(state.accountId);
-      const insertSlot = this.db.prepare(
-        `INSERT INTO player_loadout_slots (player_id, slot_index, ability_id)
-         VALUES (?, ?, ?)`
-      );
-      for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot += 1) {
-        const abilityId = state.hotbarAbilityIds[slot] ?? ABILITY_ID_NONE;
-        insertSlot.run(state.accountId, slot, Math.max(ABILITY_ID_NONE, Math.floor(abilityId)));
-      }
-    });
-
-    tx(snapshot);
+    void snapshot;
   }
 
   public saveCriticalEvent(record: CriticalEventRecord): void {
@@ -1145,19 +1111,10 @@ export class PersistenceService {
         vy REAL NOT NULL,
         vz REAL NOT NULL,
         health INTEGER NOT NULL,
-        active_hotbar_slot INTEGER NOT NULL DEFAULT 0,
         primary_mouse_slot INTEGER NOT NULL DEFAULT 0,
         secondary_mouse_slot INTEGER NOT NULL DEFAULT 1,
         updated_at INTEGER NOT NULL,
         schema_version INTEGER NOT NULL,
-        FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS player_loadout_slots (
-        player_id INTEGER NOT NULL,
-        slot_index INTEGER NOT NULL,
-        ability_id INTEGER NOT NULL,
-        PRIMARY KEY (player_id, slot_index),
         FOREIGN KEY(player_id) REFERENCES players(account_id) ON DELETE CASCADE
       );
 
@@ -1290,7 +1247,6 @@ export class PersistenceService {
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_world_pickups_instance_id ON world_pickups(instance_id)"
     );
-    this.ensureCharacterColumn("active_hotbar_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("primary_mouse_slot", "INTEGER NOT NULL DEFAULT 0");
     this.ensureCharacterColumn("secondary_mouse_slot", "INTEGER NOT NULL DEFAULT 1");
     this.ensureBlueprintColumn("runtime_capability_json", "TEXT");

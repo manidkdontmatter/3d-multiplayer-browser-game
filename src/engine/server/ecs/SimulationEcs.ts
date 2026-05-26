@@ -6,7 +6,6 @@
 import type RAPIER from "@dimforge/rapier3d-compat";
 import { query } from "bitecs";
 import {
-  HOTBAR_SLOT_COUNT,
   MOVEMENT_MODE_GROUNDED,
   clampHotbarSlotIndex,
   sanitizeMovementMode
@@ -21,7 +20,6 @@ import {
 import type { MovementMode } from "../../shared/index";
 import type { EntityFactoryOverrides } from "./EntityFactory";
 import type { EntityPresetId } from "./ComponentRegistry";
-import { getHotbarArray } from "./HotbarComponents";
 import { SimulationEcsIndexRegistry } from "./SimulationEcsIndexRegistry";
 import { SimulationEcsStore } from "./SimulationEcsStore";
 import type {
@@ -76,16 +74,12 @@ export class SimulationEcs {
     if (normalizedEid <= 0) {
       return null;
     }
-    if ((this.world.components.ReplicatedTag[normalizedEid] ?? 0) === 0) {
-      return null;
-    }
-    const nid = this.getEntityNidByEid(normalizedEid);
-    if (nid <= 0) {
+    if (!this.resolveCombatTargetRuntimeByEid(normalizedEid)) {
       return null;
     }
     return {
       eid: normalizedEid,
-      nid
+      nid: this.getEntityNidByEid(normalizedEid)
     };
   }
 
@@ -255,7 +249,6 @@ export class SimulationEcs {
       maxHealth: c.Health.max[eid] ?? 0,
       primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
       secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
-      hotbarAbilityIds: getHotbarArray(c, eid),
       unlockedAbilityIds: this.store.getUnlockedAbilityIds(eid),
       position: { x, y, z },
       rotation: {
@@ -303,15 +296,8 @@ export class SimulationEcs {
     return {
       primaryMouseSlot: Math.max(0, Math.floor(this.world.components.PrimaryMouseSlot.value[eid] ?? 0)),
       secondaryMouseSlot: Math.max(0, Math.floor(this.world.components.SecondaryMouseSlot.value[eid] ?? 1)),
-      hotbarAbilityIds: getHotbarArray(this.world.components, eid),
       unlockedAbilityIds: [...this.store.getUnlockedAbilityIds(eid)]
     };
-  }
-
-  public setPlayerHotbarAbilityByUserId(userId: number, slot: number, abilityId: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") return false;
-    return this.store.setHotbarAbilityBySlot(eid, slot, abilityId);
   }
 
   public setPlayerPrimaryMouseSlotByUserId(userId: number, slot: number): boolean {
@@ -338,33 +324,6 @@ export class SimulationEcs {
     const eid = this.indexes.getPlayerEidByUserId(userId);
     if (typeof eid !== "number") return false;
     return this.store.setUnlockedAbilityIdsFromList(eid, ids);
-  }
-
-  public replacePlayerAbilityOnHotbarByUserId(userId: number, oldId: number, newId: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") return false;
-    const nOld = Math.max(0, Math.floor(Number.isFinite(oldId) ? oldId : 0));
-    const nNew = Math.max(0, Math.floor(Number.isFinite(newId) ? newId : 0));
-    if (nOld <= 0 || nNew <= 0) return false;
-    let changed = false;
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot++) {
-      if (this.store.getHotbarSlot(eid, slot) !== nOld) continue;
-      changed = this.store.setHotbarAbilityBySlot(eid, slot, nNew) || changed;
-    }
-    return changed;
-  }
-
-  public clearPlayerAbilityOnHotbarByUserId(userId: number, abilityId: number): boolean {
-    const eid = this.indexes.getPlayerEidByUserId(userId);
-    if (typeof eid !== "number") return false;
-    const nId = Math.max(0, Math.floor(Number.isFinite(abilityId) ? abilityId : 0));
-    if (nId <= 0) return false;
-    let changed = false;
-    for (let slot = 0; slot < HOTBAR_SLOT_COUNT; slot++) {
-      if (this.store.getHotbarSlot(eid, slot) !== nId) continue;
-      changed = this.store.setHotbarAbilityBySlot(eid, slot, 0) || changed;
-    }
-    return changed;
   }
 
   // ── Damage state ──────────────────────────────────────────────────────────
@@ -522,8 +481,7 @@ export class SimulationEcs {
       vz: c.Velocity.z[eid] ?? 0,
       health: Math.max(0, Math.floor(c.Health.value[eid] ?? 0)),
       primaryMouseSlot: Math.max(0, Math.floor(c.PrimaryMouseSlot.value[eid] ?? 0)),
-      secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1)),
-      hotbarAbilityIds: getHotbarArray(c, eid)
+      secondaryMouseSlot: Math.max(0, Math.floor(c.SecondaryMouseSlot.value[eid] ?? 1))
     };
   }
 

@@ -9,7 +9,6 @@ import { ComponentRegistry } from "./ComponentRegistry";
 import type { EntityPresetId } from "./ComponentRegistry";
 import { EntityFactory } from "./EntityFactory";
 import type { EntityFactoryOverrides } from "./EntityFactory";
-import { getHotbarSlot, setHotbarSlot } from "./HotbarComponents";
 import { normalizeSortedUniqueUInt, sortedUniqueEquals } from "../../shared/sortedNumberList";
 
 export class SimulationEcsStore {
@@ -82,18 +81,6 @@ export class SimulationEcsStore {
       ProjectileTargetAllowDummies: { value: [] as number[] },
       ProjectileDespawnOnDamageableHit: { value: [] as number[] },
       ProjectileDespawnOnWorldHit: { value: [] as number[] },
-      Hotbar: {
-        slot0: [] as number[],
-        slot1: [] as number[],
-        slot2: [] as number[],
-        slot3: [] as number[],
-        slot4: [] as number[],
-        slot5: [] as number[],
-        slot6: [] as number[],
-        slot7: [] as number[],
-        slot8: [] as number[],
-        slot9: [] as number[]
-      },
       UnlockedAbilityIds: { value: [] as number[][] },
       ReplicatedTag: [] as number[],
       PlayerTag: [] as number[],
@@ -180,16 +167,6 @@ export class SimulationEcsStore {
 
   public setCarriedFramePid(eid: number, pid: number | null): void {
     this.world.components.CarriedFramePid.value[eid] = pid === null ? -1 : Math.floor(pid);
-  }
-
-  // ── Hotbar ────────────────────────────────────────────────────────────────
-
-  public getHotbarSlot(eid: number, slot: number): number {
-    return getHotbarSlot(this.world.components, eid, slot);
-  }
-
-  public setHotbarAbilityBySlot(eid: number, slot: number, abilityId: number): boolean {
-    return setHotbarSlot(this.world.components, eid, slot, abilityId);
   }
 
   // ── Unlocked abilities ────────────────────────────────────────────────────

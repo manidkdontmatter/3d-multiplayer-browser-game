@@ -266,10 +266,6 @@ export class ServerNetworkEventRouter {
       const v = value[key];
       return typeof v === "number" && Number.isFinite(v) ? v : fallback;
     };
-    const hotbarRaw = Array.isArray(value.hotbarAbilityIds) ? value.hotbarAbilityIds : [];
-    const hotbarAbilityIds = hotbarRaw.map((entry) =>
-      typeof entry === "number" && Number.isFinite(entry) ? Math.max(0, Math.floor(entry)) : 0
-    );
     return {
       accountId:
         typeof value.accountId === "number" && Number.isFinite(value.accountId)
@@ -285,8 +281,7 @@ export class ServerNetworkEventRouter {
       vz: readNumber("vz"),
       health: Math.max(0, Math.floor(readNumber("health", 100))),
       primaryMouseSlot: Math.max(0, Math.floor(readNumber("primaryMouseSlot", 0))),
-      secondaryMouseSlot: Math.max(0, Math.floor(readNumber("secondaryMouseSlot", 1))),
-      hotbarAbilityIds
+      secondaryMouseSlot: Math.max(0, Math.floor(readNumber("secondaryMouseSlot", 1)))
     };
   }
 
